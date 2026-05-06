@@ -1,0 +1,22 @@
+{
+  "emp1st_prefixes": [
+    "emp1st-api-gateway",
+    "emp1st-admin-portal-service",
+    "emp1st-assets-service",
+    "emp1st-attendance-service",
+    "emp1st-auth-service",
+    "emp1st-chatbot",
+    "emp1st-config-service",
+    "emp1st-emp-service",
+    "emp1st-expenditure",
+    "emp1st-leave-service",
+    "emp1st-org-service",
+    "emp1st-pmgm-service",
+    "emp1st-roles-responsibility-service",
+    "emp1st-timesheet",
+    "emp1st-travel-service",
+    "emp1st-Custom-reports-service"
+  ],
+  "ingxt_prefixes": ["ingxt-employee-first"]
+}
+

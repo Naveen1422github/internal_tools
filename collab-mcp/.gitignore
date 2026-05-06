@@ -1,0 +1,13 @@
+# Local DB — never commit
+collab.db
+collab.db-journal
+collab.db-wal
+collab.db-shm
+
+# Exports — gitignored by default; promote to git if you want team sharing
+export/
+
+# Build artifacts
+node_modules/
+dist/
+*.tsbuildinfo

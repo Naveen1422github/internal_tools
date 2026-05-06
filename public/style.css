@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+[x-cloak] { display: none !important; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #0d1117; }
+::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #484f58; }
+
+.font-mono { 
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; 
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #30363d;
+    border-radius: 10px;
+}
+
+.glass-panel {
+    background: rgba(22, 27, 34, 0.8);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(48, 54, 61, 0.5);
+}
+
+.tab-active {
+    color: #58a6ff;
+    background: linear-gradient(to bottom, transparent, rgba(88, 166, 255, 0.05));
+    border-bottom: 2px solid #58a6ff;
+}
+
+@keyframes pulse-soft {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+.animate-pulse-soft { animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+.prose pre {
+    background-color: #0d1117 !important;
+    border: 1px solid #30363d;
+}
+
+/* Status Colors */
+.status-pending { color: #8b949e; background: rgba(139, 148, 158, 0.1); border-color: rgba(139, 148, 158, 0.2); }
+.status-assigned { color: #58a6ff; background: rgba(88, 166, 255, 0.1); border-color: rgba(88, 166, 255, 0.2); }
+.status-in-progress { color: #d29922; background: rgba(210, 153, 34, 0.1); border-color: rgba(210, 153, 34, 0.2); }
+.status-review { color: #bc8cff; background: rgba(188, 140, 255, 0.1); border-color: rgba(188, 140, 255, 0.2); }
+.status-done { color: #3fb950; background: rgba(63, 185, 80, 0.1); border-color: rgba(63, 185, 80, 0.2); }
+
+.priority-critical { color: #f85149; }
+.priority-high { color: #fa7a70; }
+.priority-medium { color: #d29922; }
+.priority-low { color: #8b949e; }

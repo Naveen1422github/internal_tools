@@ -1,0 +1,23 @@
+{
+  "name": "@emp1st/gemini-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Gemini MCP server (read-side skim/locate tools)",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node tests/run-tests.js",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "~5.3.3"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  }
+}

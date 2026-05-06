@@ -1,0 +1,13 @@
+{
+  "name": "internal-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local dashboard for internal tooling (codex profile manager, etc).",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.9.0"
+  }
+}
