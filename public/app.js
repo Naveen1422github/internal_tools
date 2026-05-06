@@ -5,6 +5,26 @@ function consoleApp() {
         loading: false,
         state: null,
         
+        // Console Data
+        sessions: [],
+        activeSessionId: null,
+        splitWith: null,
+        tasks: [],
+        selectedTaskId: 'T-001',
+        taskQuery: '',
+        filterStatus: null,
+        filterModule: null,
+        filterAgent: null,
+        filterPriority: null,
+        showTaskDetail: false,
+        activeFile: 'app.js',
+        cmdkOpen: false,
+        dragTask: null,
+        dragTargetTab: null,
+        consoleTheme: 'warp',
+        consoleDensity: 'cozy',
+        consoleAccent: 'purple',
+
         // Collab Data
         collabSearch: '',
         collabResults: [],
@@ -16,13 +36,15 @@ function consoleApp() {
         activeTask: {},
         activeModuleSlug: null,
         activeModule: {},
-        activeModuleCard: null, // { module, active_tasks, top_gotchas, recent_decisions, recent_handoffs }
-        activeModuleTab: 'tasks', // tasks | gotchas | decisions | handoffs
+        activeModuleCard: null, 
+        activeModuleTab: 'tasks',
+        
         // Filters for entries list
         filterType: '',
         filterModule: '',
         filterAgent: '',
         filterKind: 'any',
+        
         // Doctor result
         doctorResult: null,
         showDoctor: false,
@@ -34,15 +56,41 @@ function consoleApp() {
         
         // Forms
         formData: { name: '', label: '', resetAt: '' },
-        // kind is derived server-side from type — do not set it here.
         entryForm: { id: null, type: 'handoff', title: '', summary: '', description: '', agent: 'User', module: '', task_id: '', refs: [] },
         taskForm: { id: null, title: '', summary: '', description: '', status: 'pending', assignee: null, priority: 'medium', module: '' },
         moduleForm: { slug: '', name: '', summary: '', description: '', current_goal: '', status: 'active' },
 
-        init() {
-            this.loadState();
+        async init() {
+            await this.loadState();
+            await this.loadConsoleSessions();
+            await this.loadConsoleTasks();
+            
             // Polling for profiles
             setInterval(() => { if (this.tab === 'profiles') this.loadState(true); }, 15000);
+            
+            // Apply console theme
+            this.applyConsoleTheme();
+
+            // Cmd-K hotkey
+            window.addEventListener('keydown', e => {
+                if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+                    e.preventDefault(); this.cmdkOpen = true;
+                }
+            });
+        },
+
+        applyConsoleTheme() {
+            const root = document.documentElement;
+            root.dataset.theme = this.consoleTheme;
+            root.dataset.density = this.consoleDensity;
+            const accents = {
+                purple: { '--accent': '#8b6dff', '--accent-2': '#5fa8ff' },
+                cyan:   { '--accent': '#22d3ee', '--accent-2': '#a78bfa' },
+                amber:  { '--accent': '#fbbf24', '--accent-2': '#f472b6' },
+                green:  { '--accent': '#4ade80', '--accent-2': '#22d3ee' },
+            };
+            const accent = accents[this.consoleAccent] || accents.purple;
+            Object.entries(accent).forEach(([k, v]) => root.style.setProperty(k, v));
         },
 
         async api(method, path, body) {
@@ -89,12 +137,78 @@ function consoleApp() {
         switchTab(t) {
             this.tab = t;
             if (t === 'collab') this.refreshCollabData();
+            if (t === 'console') {
+                this.loadConsoleSessions();
+                this.loadConsoleTasks();
+            }
         },
 
         async refreshCollabData() {
             if (this.subTab === 'entries') await this.searchCollab();
             if (this.subTab === 'tasks') await this.loadTasks();
             if (this.subTab === 'modules') await this.loadModules();
+        },
+
+        // --- CONSOLE ---
+        async loadConsoleSessions() {
+            const data = await this.api('GET', '/api/console/sessions');
+            this.sessions = data.sessions || [];
+            if (this.sessions.length && !this.activeSessionId) {
+                this.activeSessionId = this.sessions[0].id;
+            }
+        },
+        async loadConsoleTasks() {
+            const data = await this.api('GET', '/api/collab/tasks');
+            this.tasks = data.results || [];
+        },
+        async spawnSession(agent, opts = {}) {
+            const data = await this.api('POST', '/api/console/session/spawn', { agent, opts });
+            if (data.ok) {
+                this.sessions.push(data.session);
+                this.activeSessionId = data.session.id;
+            }
+        },
+        async closeSession(id) {
+            await this.api('POST', '/api/console/session/close', { id });
+            this.sessions = this.sessions.filter(s => s.id !== id);
+            if (this.activeSessionId === id && this.sessions.length) {
+                this.activeSessionId = this.sessions[0].id;
+            }
+            if (this.splitWith === id) this.splitWith = null;
+        },
+        async submitCommand(sessionId, text) {
+            if (!text.trim()) return;
+            const data = await this.api('POST', '/api/console/command/run', { sessionId, text });
+            if (data.ok) {
+                const session = this.sessions.find(s => s.id === sessionId);
+                if (session) {
+                    session.blocks.push(data.block);
+                    // Scroll terminal to bottom after next tick
+                    setTimeout(() => {
+                        const el = document.querySelector(`[data-session-id="${sessionId}"] .tp-body`);
+                        if (el) el.scrollTop = el.scrollHeight;
+                    }, 50);
+                }
+            }
+        },
+        get filteredConsoleTasks() {
+            return this.tasks.filter(t => {
+                if (this.taskQuery && !(t.id.toLowerCase().includes(this.taskQuery.toLowerCase()) || t.title.toLowerCase().includes(this.taskQuery.toLowerCase()))) return false;
+                if (this.filterStatus && t.status !== this.filterStatus) return false;
+                if (this.filterModule && t.module !== this.filterModule) return false;
+                if (this.filterAgent && t.assignee !== this.filterAgent) return false;
+                if (this.filterPriority && t.priority !== this.filterPriority) return false;
+                return true;
+            });
+        },
+        get activeSession() {
+            return this.sessions.find(s => s.id === this.activeSessionId);
+        },
+        get splitSession() {
+            return this.sessions.find(s => s.id === this.splitWith);
+        },
+        get selectedTask() {
+            return this.tasks.find(t => t.id === this.selectedTaskId);
         },
 
         // --- PROFILES ---
@@ -227,17 +341,20 @@ function consoleApp() {
             this.editMode = null;
             this.showToast('Task Updated');
             await this.loadTasks();
+            await this.loadConsoleTasks();
         },
         async transitionTask(id, status) {
             await this.api('POST', '/api/collab/task/transition', { id, status });
             this.showToast(`${id} → ${status}`);
             await this.loadTasks();
+            await this.loadConsoleTasks();
             if (this.activeTask?.id === id) this.activeTask = { ...this.activeTask, status };
         },
         async assignTaskTo(id, assignee) {
             await this.api('POST', '/api/collab/task/assign', { id, assignee: assignee || null });
             this.showToast(`${id} assigned to ${assignee || '(unassigned)'}`);
             await this.loadTasks();
+            await this.loadConsoleTasks();
             if (this.activeTask?.id === id) this.activeTask = { ...this.activeTask, assignee: assignee || null };
         },
         async deleteTask(id) {
@@ -245,6 +362,7 @@ function consoleApp() {
             await this.api('POST', '/api/collab/task/delete', { id });
             this.activeTaskId = null; this.activeTask = {};
             await this.loadTasks();
+            await this.loadConsoleTasks();
             this.showToast(`${id} purged`);
         },
         // status transitions allowed from current status (forward + done shortcut)

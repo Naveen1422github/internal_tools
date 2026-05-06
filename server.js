@@ -4,6 +4,7 @@ const path = require('path');
 
 const codex = require('./tools/codex');
 const collab = require('./tools/collab');
+const consoleTool = require('./tools/console');
 
 const PORT = Number(process.env.PORT || 7473);
 const HOST = '127.0.0.1';
@@ -13,6 +14,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const routes = {
   ...codex.routes,
   ...collab.routes,
+  ...consoleTool.routes,
 };
 
 const MIME = {

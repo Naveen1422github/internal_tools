@@ -234,10 +234,10 @@ module.exports.routes = {
 
   'POST /api/collab/task/assign': async (req, res, send, body) => {
     const { id, assignee } = body;
-    const allowed = ['Claude', 'Codex', 'Gemini', 'User', null, ''];
+    const allowed = ['Claude', 'Codex', 'Gemini', 'Jules', 'User', null, ''];
     if (!id) return send(400, { error: 'id required' });
-    if (assignee !== null && assignee !== '' && !['Claude', 'Codex', 'Gemini', 'User'].includes(assignee)) {
-      return send(400, { error: `assignee must be Claude|Codex|Gemini|User or empty` });
+    if (assignee !== null && assignee !== '' && !['Claude', 'Codex', 'Gemini', 'Jules', 'User'].includes(assignee)) {
+      return send(400, { error: `assignee must be Claude|Codex|Gemini|Jules|User or empty` });
     }
     try {
       const r = db.prepare('UPDATE tasks SET assignee=? WHERE id=?').run(assignee || null, id);
