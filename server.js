@@ -72,10 +72,18 @@ const server = http.createServer(async (req, res) => {
   if (handler) {
     try {
       const body = req.method === 'GET' ? null : await readBody(req);
-      await handler(req, res, send, body);
+      const result = await handler(req, res, send, body);
+      // If a handler returns '__sse__', it manages the response entirely itself.
+      if (result === '__sse__') {
+        return;
+      }
     } catch (err) {
       console.error('[error]', key, err);
-      send(500, { error: err.message });
+      if (!res.headersSent) {
+        send(500, { error: err.message });
+      } else {
+        res.end();
+      }
     }
     return;
   }
