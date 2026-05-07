@@ -131,29 +131,11 @@ function groupEntries(
 }
 
 // ------------------------------------------------------------
-// TODO — USER CONTRIBUTES THIS
+// formatRollupBody
 //
 // Build the summary + description body stored on the new rollup entry.
 //   - summary:     <= 200 chars, one line, used in the search list view
 //   - description: full body, stored on the entry and searchable via FTS5
-//
-// Design philosophy (D7=B): summary concatenation. No LLM calls.
-// The rollup exists to REDUCE token surface. The description should:
-//   - be grouped in a way that a future agent can skim
-//   - preserve each original entry's own summary line (it's the only lossless
-//     thing we have now that originals are about to be deprecated)
-//   - include the E-NNNNN id of each original so collab_get(id) still works
-//
-// Signature, inputs, and constraints:
-//   group.key           -> module slug or task id
-//   group.kind          -> "module" | "task"
-//   group.entry_ids     -> number[] (same ids referenced in refs below)
-//   group.type_counts   -> partial map like { handoff: 8, decision: 3 }
-//   group.window_start  -> earliest created_at in the group
-//   group.window_end    -> latest created_at in the group
-//   group.entries       -> full rows; .id .type .title .summary .agent etc.
-//
-// Return value is spread directly into addEntry({type:'rollup', ...result}).
 // ------------------------------------------------------------
 function formatRollupBody(group: RollupGroup): { summary: string; description: string } {
   const counts = Object.entries(group.type_counts)
@@ -169,9 +151,12 @@ function formatRollupBody(group: RollupGroup): { summary: string; description: s
     byType.get(e.type)!.push(e);
   }
   const sections = Array.from(byType.entries()).map(([t, es]) => {
-    const lines = es.map((e) =>
-      `- [E-${String(e.id).padStart(5, "0")}]${e.agent ? ` ${e.agent}:` : ""} ${e.summary}`,
-    );
+    const lines = es.map((e) => {
+      const id = `[E-${String(e.id).padStart(5, "0")}]`;
+      const date = e.created_at.slice(0, 10);
+      const agent = e.agent ? `${e.agent}: ` : "";
+      return `- ${id} ${date} | ${agent}${e.title} — ${e.summary}`;
+    });
     return `## ${t} (${es.length})\n${lines.join("\n")}`;
   });
   const header = `Rollup for ${group.kind}=${group.key} | ${group.window_start} → ${group.window_end}`;
@@ -220,10 +205,6 @@ export function rollup(db: DB, args: RollupArgs): RollupResult {
       'active', @agent, @module, @task_id, @rollup_of_task, @tokens_estimate
     )
   `);
-  const insertRef = db.prepare(
-    `INSERT OR IGNORE INTO refs (entry_id, ref_type, ref_value) VALUES (?, ?, ?)`,
-  );
-  const deprecateStmt = db.prepare("UPDATE entries SET deprecated = 1 WHERE id = ?");
 
   // Wrap each group's (insert rollup + refs + deprecate originals) in a transaction
   // so a mid-write failure can't leave originals deprecated without a rollup entry.
@@ -246,12 +227,26 @@ export function rollup(db: DB, args: RollupArgs): RollupResult {
       tokens_estimate: estimateTokens(description),
     });
     const newId = Number(result.lastInsertRowid);
-    const refs: RefInput[] = group.entry_ids.map((id) => ({
-      ref_type: "entry",
-      ref_value: String(id),
-    }));
-    for (const r of refs) insertRef.run(newId, r.ref_type, r.ref_value);
-    for (const id of group.entry_ids) deprecateStmt.run(id);
+
+    // 1. Batch insert refs to original entries
+    const REF_CHUNK_SIZE = 400; // each row uses 2 params
+    for (let i = 0; i < group.entry_ids.length; i += REF_CHUNK_SIZE) {
+      const chunk = group.entry_ids.slice(i, i + REF_CHUNK_SIZE);
+      const placeholders = chunk.map(() => "(?, 'entry', ?)").join(", ");
+      const params = chunk.flatMap((id) => [newId, String(id)]);
+      db.prepare(`INSERT OR IGNORE INTO refs (entry_id, ref_type, ref_value) VALUES ${placeholders}`).run(
+        ...params,
+      );
+    }
+
+    // 2. Batch deprecate original entries
+    const DEPRECATE_CHUNK_SIZE = 900; // each row uses 1 param
+    for (let i = 0; i < group.entry_ids.length; i += DEPRECATE_CHUNK_SIZE) {
+      const chunk = group.entry_ids.slice(i, i + DEPRECATE_CHUNK_SIZE);
+      const placeholders = chunk.map(() => "?").join(", ");
+      db.prepare(`UPDATE entries SET deprecated = 1 WHERE id IN (${placeholders})`).run(...chunk);
+    }
+
     return newId;
   });
 

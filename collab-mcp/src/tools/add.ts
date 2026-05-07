@@ -77,9 +77,6 @@ export function addEntry(db: DB, args: AddEntryArgs): { id: number } {
       @status, @agent, @module, @task_id, @tokens_estimate
     )
   `);
-  const insertRef = db.prepare(`
-    INSERT OR IGNORE INTO refs (entry_id, ref_type, ref_value) VALUES (?, ?, ?)
-  `);
 
   const tx = db.transaction((a: AddEntryArgs) => {
     const result = insertEntry.run({
@@ -96,8 +93,16 @@ export function addEntry(db: DB, args: AddEntryArgs): { id: number } {
     });
     const id = Number(result.lastInsertRowid);
     if (a.refs && a.refs.length > 0) {
-      for (const r of a.refs) {
-        insertRef.run(id, r.ref_type, r.ref_value);
+      // Chunking to respect SQLite's parameter limit (default 999).
+      // Each ref has 3 params (entry_id, ref_type, ref_value).
+      const CHUNK_SIZE = 300;
+      for (let i = 0; i < a.refs.length; i += CHUNK_SIZE) {
+        const chunk = a.refs.slice(i, i + CHUNK_SIZE);
+        const placeholders = chunk.map(() => "(?, ?, ?)").join(", ");
+        const params = chunk.flatMap((r) => [id, r.ref_type, r.ref_value]);
+        db.prepare(
+          `INSERT OR IGNORE INTO refs (entry_id, ref_type, ref_value) VALUES ${placeholders}`,
+        ).run(...params);
       }
     }
     return id;

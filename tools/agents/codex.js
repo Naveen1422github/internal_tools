@@ -78,8 +78,8 @@ module.exports = {
     if (profile) {
        const bash = resolveBash();
        try {
-         const { execFileSync } = require('child_process');
-         execFileSync(bash, ['codex-profile.sh', 'switch', profile], { cwd: PROFILES_DIR, stdio: 'ignore' });
+         const { execSync } = require('child_process');
+         execSync(`"${bash}" codex-profile.sh switch "${profile}"`, { cwd: PROFILES_DIR, stdio: 'ignore' });
        } catch (e) {
          // ignore
        }
@@ -90,18 +90,12 @@ module.exports = {
       args.push('--no-auto-confirm');
     }
 
-    const { formatEnvelope } = require('./envelope');
-    let initialStdin = undefined;
-    if (opts.task) {
-      initialStdin = formatEnvelope(opts.task, opts);
-    }
-
     return {
       file: 'codex',
       args,
       env: opts.env || process.env,
       cwd: opts.cwd || process.cwd(),
-      initialStdin,
+      initialStdin: undefined, // codex doesn't support task envelope via stdin like claude yet
     };
   },
 

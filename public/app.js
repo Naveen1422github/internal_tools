@@ -436,6 +436,19 @@ function consoleApp() {
         // --- HELPERS ---
         formatDate(iso) { return iso ? new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '---'; },
         formatDateLong(iso) { return iso ? new Date(iso).toLocaleString([], { dateStyle: 'long', timeStyle: 'short' }) : '---'; },
-        formatDateShort(iso) { return iso ? new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '---'; }
+        formatDateShort(iso) { return iso ? new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '---'; },
+
+        // Security: escape HTML and then restore markers
+        safeHighlight(text) {
+            if (!text) return '';
+            // Escape HTML
+            const div = document.createElement('div');
+            div.textContent = text;
+            let escaped = div.innerHTML;
+            // Restore highlight markers
+            return escaped
+                .replaceAll('[[HL]]', '<mark class="bg-accent/30 text-accent px-1 rounded">')
+                .replaceAll('[[/HL]]', '</mark>');
+        }
     };
 }
