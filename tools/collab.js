@@ -47,7 +47,7 @@ module.exports.routes = {
     try {
       let query = `
         SELECT e.rowid as id, e.type, e.kind, e.title, e.summary, e.module, e.agent, e.created_at,
-               snippet(entries_fts, -1, '<mark class="bg-accent/30 text-accent px-1 rounded">', '</mark>', '...', 10) as snippet
+               snippet(entries_fts, -1, '[[HL]]', '[[/HL]]', '...', 10) as snippet
         FROM entries e
         JOIN entries_fts f ON e.rowid = f.rowid
         WHERE e.deprecated = 0
