@@ -205,10 +205,6 @@ export function rollup(db: DB, args: RollupArgs): RollupResult {
       'active', @agent, @module, @task_id, @rollup_of_task, @tokens_estimate
     )
   `);
-  const insertRef = db.prepare(
-    `INSERT OR IGNORE INTO refs (entry_id, ref_type, ref_value) VALUES (?, ?, ?)`,
-  );
-  const deprecateStmt = db.prepare("UPDATE entries SET deprecated = 1 WHERE id = ?");
 
   // Wrap each group's (insert rollup + refs + deprecate originals) in a transaction
   // so a mid-write failure can't leave originals deprecated without a rollup entry.
@@ -231,12 +227,26 @@ export function rollup(db: DB, args: RollupArgs): RollupResult {
       tokens_estimate: estimateTokens(description),
     });
     const newId = Number(result.lastInsertRowid);
-    const refs: RefInput[] = group.entry_ids.map((id) => ({
-      ref_type: "entry",
-      ref_value: String(id),
-    }));
-    for (const r of refs) insertRef.run(newId, r.ref_type, r.ref_value);
-    for (const id of group.entry_ids) deprecateStmt.run(id);
+
+    // 1. Batch insert refs to original entries
+    const REF_CHUNK_SIZE = 400; // each row uses 2 params
+    for (let i = 0; i < group.entry_ids.length; i += REF_CHUNK_SIZE) {
+      const chunk = group.entry_ids.slice(i, i + REF_CHUNK_SIZE);
+      const placeholders = chunk.map(() => "(?, 'entry', ?)").join(", ");
+      const params = chunk.flatMap((id) => [newId, String(id)]);
+      db.prepare(`INSERT OR IGNORE INTO refs (entry_id, ref_type, ref_value) VALUES ${placeholders}`).run(
+        ...params,
+      );
+    }
+
+    // 2. Batch deprecate original entries
+    const DEPRECATE_CHUNK_SIZE = 900; // each row uses 1 param
+    for (let i = 0; i < group.entry_ids.length; i += DEPRECATE_CHUNK_SIZE) {
+      const chunk = group.entry_ids.slice(i, i + DEPRECATE_CHUNK_SIZE);
+      const placeholders = chunk.map(() => "?").join(", ");
+      db.prepare(`UPDATE entries SET deprecated = 1 WHERE id IN (${placeholders})`).run(...chunk);
+    }
+
     return newId;
   });
 
