@@ -2,12 +2,20 @@
 
 This folder is the source of truth for tasks dispatched to Jules (jules.google).
 
-## Snapshot
-| ID | Title | Branch | PR |
-|----|-------|--------|----|
-| T1 | Real PTY backend (Phase 1) | `jules/t1-pty-backend` | _opened by Jules_ |
-| T2 | Frontend visual parity + designer C-borrows (Phase 2) | `jules/t2-frontend-parity` | _opened by Jules_ |
-| T3 | Agent CLI adapter scaffolds (Phase 3, scaffold only) | `jules/t3-agent-adapters` | _opened by Jules_ |
+## Snapshot — dispatched 2026-05-07
+| ID | Brief | Jules session | Branch | PR |
+|----|-------|---------------|--------|----|
+| T1 | Real PTY backend (Phase 1) | [`914015218592810080`](https://jules.google.com/session/914015218592810080) | `jules/t1-pty-backend` | _opened by Jules_ |
+| T2 | Frontend visual parity + designer C-borrows (Phase 2) | [`16199082272528256280`](https://jules.google.com/session/16199082272528256280) | `jules/t2-frontend-parity` | _opened by Jules_ |
+| T3 | Agent CLI adapter scaffolds (Phase 3, scaffold only) | [`9674402969344807321`](https://jules.google.com/session/9674402969344807321) | `jules/t3-agent-adapters` | _opened by Jules_ |
+
+## Pull results (morning)
+```bash
+jules remote pull --session 914015218592810080         # view T1 result
+jules remote pull --session 914015218592810080 --apply # or apply patch locally
+# repeat for T2 (16199082272528256280) and T3 (9674402969344807321)
+```
+Or just review the PRs Jules opens against `main`.
 
 ## File-boundary discipline
 Each brief lists exactly which files Jules may touch and which are off-limits. The three tasks are designed to run **in parallel without merge conflict**:
