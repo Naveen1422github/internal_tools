@@ -204,7 +204,7 @@
                                 <div @click="viewEntry(r.id)" class="p-6 cursor-pointer transition-all border-l-4 border-transparent"
                                      :class="activeEntryId === r.id ? 'bg-accent/5 border-accent' : 'hover:bg-panel-light/30'">
                                     <h4 class="text-sm font-black text-white truncate" x-text="r.title"></h4>
-                                    <div class="text-[11px] text-gray-500 line-clamp-2 mt-2" x-html="r.snippet || r.summary"></div>
+                                    <div class="text-[11px] text-gray-500 line-clamp-2 mt-2" x-html="safeHighlight(r.snippet || r.summary)"></div>
                                 </div>
                             </template>
                         </template>
