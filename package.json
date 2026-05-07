@@ -5,10 +5,10 @@
   "description": "Local dashboard for internal tooling (codex profile manager, etc).",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test tools/agents/__tests__/*.test.js"
   },
   "dependencies": {
-    "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
     "better-sqlite3": "^12.9.0",
     "node-pty": "^1.1.0"
   }

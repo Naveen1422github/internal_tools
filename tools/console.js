@@ -1,12 +1,6 @@
 const fs = require('fs/promises');
 const path = require('path');
-let pty;
-try {
-  pty = require('node-pty');
-} catch (e) {
-  // Fallback to prebuilt if node-pty fails to load/build (e.g. Windows)
-  pty = require('@homebridge/node-pty-prebuilt-multiarch');
-}
+const pty = require('node-pty');
 
 const SESSIONS_FILE = path.join(__dirname, '..', 'data', 'sessions.json');
 
@@ -24,15 +18,10 @@ async function ensureDataDir() {
 let sessions = [];
 
 // Load sessions from disk
-function loadSessionsSync() {
-  const fsSync = require('fs');
-  const dir = path.dirname(SESSIONS_FILE);
+async function loadSessions() {
+  await ensureDataDir();
   try {
-    fsSync.mkdirSync(dir, { recursive: true });
-  } catch (e) {}
-
-  try {
-    const data = fsSync.readFileSync(SESSIONS_FILE, 'utf-8');
+    const data = await fs.readFile(SESSIONS_FILE, 'utf-8');
     sessions = JSON.parse(data);
     // Remove _pty from loaded sessions just in case, and initialize other runtime state
     for (const session of sessions) {
@@ -64,16 +53,15 @@ async function saveSessions() {
   }
 }
 
+// Initial load
+loadSessions();
+
 function getBashPath() {
   if (process.platform === 'win32') {
-    const commonPath = 'C:\\Program Files\\Git\\bin\\bash.exe';
-    try {
-      require('fs').accessSync(commonPath);
-      return commonPath;
-    } catch {
-      // Ignored
-    }
     if (process.env.GIT_BASH) return process.env.GIT_BASH;
+    const commonPath = 'C:\\Program Files\\Git\\bin\\bash.exe';
+    // Sync check is okay at startup/spawn, but let's just return it and let it fail to cmd.exe if missing.
+    // However, node-pty handles 'bash.exe' if in PATH.
     return 'bash.exe';
   }
   return 'bash';
@@ -120,18 +108,13 @@ function spawnPty(session) {
   } catch (err) {
     // Fallback to cmd.exe on Windows if bash fails
     if (isWin) {
-      try {
-        session._pty = pty.spawn('cmd.exe', [], {
-          name: 'xterm-color',
-          cols: 80,
-          rows: 24,
-          cwd: session.cwd || process.env.HOME || process.cwd(),
-          env: process.env
-        });
-      } catch (cmdErr) {
-        // Fallback if node-pty is broken or native module error occurs on Windows
-        throw cmdErr;
-      }
+      session._pty = pty.spawn('cmd.exe', [], {
+        name: 'xterm-color',
+        cols: 80,
+        rows: 24,
+        cwd: session.cwd || process.env.HOME || process.cwd(),
+        env: process.env
+      });
     } else {
       throw err;
     }
@@ -158,12 +141,7 @@ function spawnPty(session) {
         if (activeBlock && activeBlock.exit === 'run') {
           activeBlock.exit = code === 0 ? 'ok' : 'err';
           activeBlock.code = code;
-          if (session._activeBlockStart) {
-            const elapsedMs = Date.now() - session._activeBlockStart;
-            activeBlock.duration = (elapsedMs / 1000).toFixed(1) + 's';
-          } else {
-            activeBlock.duration = '0.0s';
-          }
+          activeBlock.duration = 'TODOs'; // Can measure duration properly later
           broadcast(session, { type: 'block-end', sessionId: session.id, payload: { exit: activeBlock.exit, code, duration: activeBlock.duration } });
           saveSessions();
         }
@@ -184,14 +162,13 @@ function spawnPty(session) {
   });
 }
 
-// Initial load synchronously before spawning
-loadSessionsSync();
-
 // Re-spawn any persistent PTYs (wait, requirement says: "On server start, read the file if present; spawn fresh PTYs for each session and replay nothing")
 function init() {
-  for (const session of sessions) {
-    spawnPty(session);
-  }
+  loadSessions().then(() => {
+    for (const session of sessions) {
+      spawnPty(session);
+    }
+  });
 }
 init();
 

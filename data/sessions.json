@@ -1,0 +1,123 @@
+[
+  {
+    "id": "s-1778098243803",
+    "name": "bash",
+    "agent": "bash",
+    "cwd": "/home/jules",
+    "activeTaskId": null,
+    "blocks": [],
+    "pid": 47028
+  },
+  {
+    "id": "s-1778098295105",
+    "name": "bash",
+    "agent": "bash",
+    "cwd": "/home/jules",
+    "activeTaskId": null,
+    "blocks": [
+      {
+        "stamp": "08:11:36 PM",
+        "cmd": "ls -la",
+        "exit": "ok",
+        "out": [
+          [
+            "",
+            "\u001b[?2004h\u001b]0;jules@devbox: ~\u0007jules@devbox:~$ ls -la"
+          ],
+          [
+            "",
+            "\u001b[?2004ltotal 38"
+          ],
+          [
+            "",
+            "drwxr-x--- 1 jules jules 4096 May  6 20:10 ."
+          ],
+          [
+            "",
+            "drwxr-xr-x 1 root  root  4096 Mar  4 22:11 .."
+          ],
+          [
+            "",
+            "drwxr-xr-x 3 jules jules   28 Mar  6 16:42 .android"
+          ],
+          [
+            "",
+            "-rw------- 1 jules jules    7 May  6 20:10 .bash_history"
+          ],
+          [
+            "",
+            "-rw-r--r-- 1 jules jules  220 Mar 31  2024 .bash_logout"
+          ],
+          [
+            "",
+            "-rw-r--r-- 1 jules jules 3792 Mar  6 16:33 .bashrc"
+          ],
+          [
+            "",
+            "drwxr-xr-x 1 jules jules 4096 May  6 20:08 .cache"
+          ],
+          [
+            "",
+            "drwxr-xr-x 4 jules jules   37 Mar  6 16:33 .cargo"
+          ],
+          [
+            "",
+            "drwxr-xr-x 7 jules jules  109 Mar  6 16:42 .conan2"
+          ],
+          [
+            "",
+            "drwxr-xr-x 4 jules jules   40 Mar  6 16:42 .config"
+          ],
+          [
+            "",
+            "-rw-rw-r-- 1 jules jules  135 May  6 20:07 .gitconfig"
+          ],
+          [
+            "",
+            "drwxr-xr-x 4 jules jules   50 Mar  6 16:42 .gradle"
+          ],
+          [
+            "",
+            "drwxr-xr-x 5 jules jules   52 Mar  6 16:38 .local"
+          ],
+          [
+            "",
+            "drwxr-xr-x 1 jules jules 4096 May  6 20:08 .npm"
+          ],
+          [
+            "",
+            "drwxr-xr-x 1 jules jules 4096 Mar  6 16:39 .nvm"
+          ],
+          [
+            "",
+            "-rw-r--r-- 1 jules jules 1522 Mar  6 16:39 .profile"
+          ],
+          [
+            "",
+            "drwxr-xr-x 1 jules jules 4096 Mar  6 16:36 .pyenv"
+          ],
+          [
+            "",
+            "drwxr-xr-x 7 jules jules  103 Mar  6 16:33 .rustup"
+          ],
+          [
+            "",
+            "drwx------ 3 jules jules   38 Mar  4 22:11 .ssh"
+          ],
+          [
+            "",
+            "-rw-r--r-- 1 jules jules    0 Mar  4 22:11 .sudo_as_admin_successful"
+          ],
+          [
+            "",
+            "\u001b[?2004h\u001b]0;jules@devbox: ~\u0007jules@devbox:~$ echo \"::END::$?\""
+          ]
+        ],
+        "code": 0,
+        "duration": "TODOs"
+      }
+    ],
+    "pid": 47038,
+    "_activeBlockStart": 1778098296167
+  }
+]
