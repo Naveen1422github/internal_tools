@@ -29,6 +29,31 @@ function consoleApp() {
         collabSearch: '',
         collabResults: [],
         collabTasks: [],
+
+        // T2 Overlays & Modals
+        cmdkOpen: false,
+        cmdkQuery: '',
+        cmdkGroups: [],
+        cmdkSelectedIdx: 0,
+
+        ctxMenu: null, // {x, y, items}
+
+        dragTask: null,
+        dragGhost: null,
+        dragTargetTab: null,
+
+        tweaksOpen: false,
+        consoleLayout: 'balanced', // 'balanced' or 'terminal-first'
+        autoYes: false,
+
+        cmdkMeta: {
+            claude: { color: '#fb923c', letter: 'C' },
+            codex: { color: '#38bdf8', letter: 'X' },
+            gemini: { color: '#a78bfa', letter: 'G' }
+        },
+        activitySection: 'tasks',
+        get ctxItems() { return this.ctxMenu ? this.ctxMenu.items : []; },
+
         collabModules: [],
         activeEntryId: null,
         activeEntry: {},
@@ -64,6 +89,42 @@ function consoleApp() {
             await this.loadState();
             await this.loadConsoleSessions();
             await this.loadConsoleTasks();
+
+        this.consoleLayout = localStorage.getItem('consoleLayout') || 'balanced';
+        this.consoleAccent = localStorage.getItem('consoleAccent') || 'purple';
+        this.autoYes = localStorage.getItem('autoYes') === 'true';
+        this.applyConsoleTheme();
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                this.cmdkOpen = !this.cmdkOpen;
+                if (this.cmdkOpen) {
+                    this.cmdkQuery = '';
+                    this.cmdkUpdate();
+                    this.$nextTick(() => { this.$refs.cmdkInput?.focus(); });
+                }
+            } else if (e.key === 'Escape') {
+                this.cmdkOpen = false;
+                this.ctxMenu = null;
+                this.tweaksOpen = false;
+            }
+        });
+
+        window.addEventListener('toggle-tweaks', () => {
+            this.tweaksOpen = !this.tweaksOpen;
+        });
+
+        window.addEventListener('click', () => {
+            this.ctxMenu = null;
+        });
+
+        window.updateDragGhost = (e) => {
+            if (this.dragTask) {
+                this.dragGhost = { x: e.clientX + 10, y: e.clientY + 10 };
+            }
+        };
+
             
             // Polling for profiles
             setInterval(() => { if (this.tab === 'profiles') this.loadState(true); }, 15000);
@@ -79,6 +140,13 @@ function consoleApp() {
             });
         },
 
+
+        saveTweaks() {
+            localStorage.setItem('consoleTheme', this.consoleTheme);
+            localStorage.setItem('consoleDensity', this.consoleDensity);
+            localStorage.setItem('consoleLayout', this.consoleLayout);
+            localStorage.setItem('consoleAccent', this.consoleAccent);
+        },
         applyConsoleTheme() {
             const root = document.documentElement;
             root.dataset.theme = this.consoleTheme;
@@ -176,18 +244,227 @@ function consoleApp() {
             }
             if (this.splitWith === id) this.splitWith = null;
         },
-        async submitCommand(sessionId, text) {
+
+        // --- Cmd-K Palette ---
+        cmdkUpdate() {
+            const q = this.cmdkQuery.toLowerCase();
+            let groups = [];
+
+            // Tasks
+            let tasks = this.collabTasks.filter(t => t.title.toLowerCase().includes(q) || t.id.toLowerCase().includes(q));
+            if (tasks.length > 0) {
+                groups.push({
+                    label: 'Tasks',
+                    items: tasks.slice(0, 5).map(t => ({ kind: 'task', label: t.title, sub: t.id, task: t }))
+                });
+            }
+
+            // Sessions
+            let sessions = this.sessions.filter(s => s.name.toLowerCase().includes(q));
+            if (sessions.length > 0) {
+                groups.push({
+                    label: 'Active Sessions',
+                    items: sessions.map(s => ({ kind: 'focus', label: 'Focus ' + s.name, agent: s.agent, sessionId: s.id }))
+                });
+            }
+
+            // Agents
+            let agents = ['Claude', 'Codex', 'Gemini'].filter(a => a.toLowerCase().includes(q));
+            if (agents.length > 0) {
+                groups.push({
+                    label: 'Agents',
+                    items: agents.map(a => ({ kind: 'spawn', label: 'Start session with ' + a, agent: a.toLowerCase() }))
+                });
+            }
+
+            // Commands
+            let cmds = ['Toggle Layout', 'Toggle Theme', 'Clear Terminals'].filter(c => c.toLowerCase().includes(q));
+            if (cmds.length > 0) {
+                groups.push({
+                    label: 'Commands',
+                    items: cmds.map(c => ({ kind: 'cmd', label: c }))
+                });
+            }
+
+            this.cmdkGroups = groups;
+            this.cmdkSelectedIdx = 0;
+        },
+        cmdkKeydown(e) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                this.cmdkSelectedIdx = Math.min(this.cmdkSelectedIdx + 1, this.cmdkGetTotalItems() - 1);
+                this.cmdkScrollToSel();
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                this.cmdkSelectedIdx = Math.max(this.cmdkSelectedIdx - 1, 0);
+                this.cmdkScrollToSel();
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                const sel = this.cmdkGetSelectedItem();
+                if (sel) this.cmdkExec(sel);
+            } else {
+                this.$nextTick(() => this.cmdkUpdate());
+            }
+        },
+        cmdkGetTotalItems() {
+            return this.cmdkGroups.reduce((acc, g) => acc + g.items.length, 0);
+        },
+        cmdkGetSelectedItem() {
+            let i = 0;
+            for (const g of this.cmdkGroups) {
+                for (const item of g.items) {
+                    if (i === this.cmdkSelectedIdx) return item;
+                    i++;
+                }
+            }
+            return null;
+        },
+        cmdkIsSelected(item) {
+            return this.cmdkGetSelectedItem() === item;
+        },
+        cmdkSetSel(item) {
+            let i = 0;
+            for (const g of this.cmdkGroups) {
+                for (const it of g.items) {
+                    if (it === item) {
+                        this.cmdkSelectedIdx = i;
+                        return;
+                    }
+                    i++;
+                }
+            }
+        },
+        cmdkScrollToSel() {
+            this.$nextTick(() => {
+                const el = this.$refs.cmdkList?.querySelector('.cmdk-item.selected');
+                if (el) el.scrollIntoView({ block: 'nearest' });
+            });
+        },
+        cmdkExec(item) {
+            if (item.kind === 'spawn') {
+                this.spawnSession(item.agent);
+            } else if (item.kind === 'focus') {
+                this.activeSessionId = item.sessionId;
+                this.activitySection = 'terminals';
+            } else if (item.kind === 'task') {
+                this.selectedTaskId = item.task.id;
+                this.showTaskDetail = true;
+            } else if (item.kind === 'cmd') {
+                if (item.label === 'Toggle Layout') this.consoleLayout = this.consoleLayout === 'balanced' ? 'terminal-first' : 'balanced';
+                if (item.label === 'Toggle Theme') this.consoleTheme = this.consoleTheme === 'warp' ? 'vscode' : 'warp';
+                if (item.label === 'Clear Terminals') this.sessions.forEach(s => s.blocks = []);
+                this.applyConsoleTheme();
+                this.saveTweaks();
+            }
+            this.cmdkOpen = false;
+        },
+
+        // --- Context Menu ---
+        openCtx(e, task) {
+            e.preventDefault();
+            e.stopPropagation();
+            this.ctxMenu = {
+                x: e.clientX,
+                y: e.clientY,
+                task: task,
+                items: [
+                    { groupLabel: task.title.slice(0, 20) + '...' },
+                    { sep: true },
+                    { label: 'Run with Claude', agent: 'claude', color: '#fb923c', letter: 'C' },
+                    { label: 'Run with Codex', agent: 'codex', color: '#38bdf8', letter: 'X' },
+                    { label: 'Run with Gemini', agent: 'gemini', color: '#a78bfa', letter: 'G' },
+                    { sep: true },
+                    { label: 'Copy ID', action: 'copy-id', kbd: '⌘C' },
+                    { label: 'Change Status...', action: 'status' },
+                    { label: 'Delete Task', action: 'delete', danger: true, kbd: '⌘⌫' }
+                ]
+            };
+        },
+        ctxExec(item) {
+            if (!this.ctxMenu) return;
+            const task = this.ctxMenu.task;
+            if (item.agent) {
+                this.spawnSession(item.agent, { task: task });
+            } else if (item.action === 'copy-id') {
+                navigator.clipboard.writeText(task.id);
+                this.showToast('Copied ' + task.id);
+            } else if (item.action === 'delete') {
+                this.showToast('Deleted ' + task.id); // stub
+            } else if (item.action === 'status') {
+                 this.selectedTaskId = task.id;
+                 this.showTaskDetail = true;
+            }
+        },
+        injectTaskIntoSession(sessionId, task) {
+            const session = this.sessions.find(s => s.id === sessionId);
+            if (session) {
+                const el = document.querySelector(`.term-pane[data-session-id="${sessionId}"] .tp-input`);
+                if (el) { el.value = `Analyze task @${task.id}: ${task.title}`; }
+                this.activeSessionId = sessionId;
+            }
+        },
+
+                        async submitCommand(sessionId, text) {
             if (!text.trim()) return;
-            const data = await this.api('POST', '/api/console/command/run', { sessionId, text });
-            if (data.ok) {
-                const session = this.sessions.find(s => s.id === sessionId);
-                if (session) {
-                    session.blocks.push(data.block);
-                    // Scroll terminal to bottom after next tick
-                    setTimeout(() => {
-                        const el = document.querySelector(`[data-session-id="${sessionId}"] .tp-body`);
-                        if (el) el.scrollTop = el.scrollHeight;
-                    }, 50);
+            const session = this.sessions.find(s => s.id === sessionId);
+            if (!session) return;
+
+            // Determine if we want to run auto-yes
+            const stamp = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+            const tempBlock = { stamp, duration: '—', exit: 'run', cmd: text, out: [] };
+            session.blocks.push(tempBlock);
+            const blockIndex = session.blocks.length - 1;
+
+            const scrollToBottom = () => {
+                // Ensure Alpine has ticked before selecting
+                this.$nextTick(() => {
+                    const el = document.querySelector(`[data-session-id="${sessionId}"] .tp-body`);
+                    if (el) el.scrollTop = el.scrollHeight;
+                });
+            };
+            scrollToBottom();
+
+            // We use standard fetch fallback per requirements if SSE 404s, but let's try SSE first.
+            // Using standard fetch first then POST fallback
+            try {
+                // T1 streaming endpoint
+                const url = `/api/console/session/stream?id=${sessionId}&cmd=${encodeURIComponent(text)}&autoYes=${this.autoYes}`;
+                const es = new EventSource(url);
+
+                es.onmessage = (e) => {
+                    const data = JSON.parse(e.data);
+                    if (data.event === 'data') {
+                        // Append to the last block
+                        session.blocks[blockIndex].out.push(['', data.text]);
+                        scrollToBottom();
+                    } else if (data.event === 'block-end') {
+                        session.blocks[blockIndex].exit = data.exit || 'ok';
+                        session.blocks[blockIndex].duration = data.duration || '—';
+                        if (data.out) session.blocks[blockIndex].out = data.out;
+                        es.close();
+                        scrollToBottom();
+                    }
+                };
+
+                es.onerror = async (e) => {
+                    es.close();
+                    // Fallback to legacy
+                    session.blocks[blockIndex].exit = 'error';
+                    session.blocks[blockIndex].out = [['err', 'Streaming failed, retrying legacy fallback...']];
+                    const data = await this.api('POST', '/api/console/command/run', { sessionId, text, autoYes: this.autoYes });
+                    if (data.ok) {
+                        session.blocks[blockIndex] = data.block;
+                        setTimeout(scrollToBottom, 50);
+                    }
+                };
+            } catch (err) {
+                // Fallback to legacy POST if EventSource fails entirely before connecting
+                session.blocks[blockIndex].exit = 'error';
+                session.blocks[blockIndex].out = [['err', 'Streaming failed, retrying legacy fallback...']];
+                const data = await this.api('POST', '/api/console/command/run', { sessionId, text, autoYes: this.autoYes });
+                if (data.ok) {
+                    session.blocks[blockIndex] = data.block;
+                    setTimeout(scrollToBottom, 50);
                 }
             }
         },
