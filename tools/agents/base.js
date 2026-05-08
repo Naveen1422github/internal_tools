@@ -1,13 +1,15 @@
 // consumed by tools/console.js spawn(); see briefs/T3-agent-adapters.md
-const { exec } = require('child_process');
-const util = require('util');
-const execPromise = util.promisify(exec);
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 
-async function detectBinary(command, versionArgs = '--version') {
+const execFilePromise = promisify(execFile);
+
+async function detectBinary(command, args = ['--version']) {
   try {
-    const { stdout } = await execPromise(`${command} ${versionArgs}`);
-    return { ok: true, version: stdout.trim() };
-  } catch (err) {
+    const argv = Array.isArray(args) ? args : [args];
+    const { stdout, stderr } = await execFilePromise(command, argv, { windowsHide: true });
+    return { ok: true, version: (stdout || stderr || '').trim() };
+  } catch {
     return { ok: false, hint: `Could not run '${command}'. Is it installed and on PATH?` };
   }
 }

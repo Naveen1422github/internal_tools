@@ -1,179 +1,153 @@
 const fs = require('fs/promises');
+const fsSync = require('fs');
 const path = require('path');
-let pty;
-try {
-  pty = require('node-pty');
-} catch (e) {
-  // Fallback to prebuilt if node-pty fails to load/build (e.g. Windows)
-  pty = require('@homebridge/node-pty-prebuilt-multiarch');
-}
 
 const SESSIONS_FILE = path.join(__dirname, '..', 'data', 'sessions.json');
+const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 
-// Ensure data directory exists
-async function ensureDataDir() {
-  const dir = path.dirname(SESSIONS_FILE);
-  try {
-    await fs.mkdir(dir, { recursive: true });
-  } catch (err) {
-    // Ignore error
-  }
-}
-
-// In-memory sessions
 let sessions = [];
+let ready;
+let pty;
+let ptyLoadError;
 
-// Load sessions from disk
-function loadSessionsSync() {
-  const fsSync = require('fs');
-  const dir = path.dirname(SESSIONS_FILE);
-  try {
-    fsSync.mkdirSync(dir, { recursive: true });
-  } catch (e) {}
+function loadPty() {
+  if (pty) return pty;
+  if (ptyLoadError) throw ptyLoadError;
 
   try {
-    const data = fsSync.readFileSync(SESSIONS_FILE, 'utf-8');
-    sessions = JSON.parse(data);
-    // Remove _pty from loaded sessions just in case, and initialize other runtime state
-    for (const session of sessions) {
-      delete session._pty;
-      session._listeners = []; // SSE connections
-    }
+    pty = require('@homebridge/node-pty-prebuilt-multiarch');
+    return pty;
   } catch (err) {
-    if (err.code !== 'ENOENT') {
-      console.error('Failed to load sessions:', err);
-    }
-    // Leave sessions as is (could be empty or whatever was there)
+    ptyLoadError = err;
+    throw err;
   }
 }
 
-// Save sessions to disk
+function ptyUnavailableMessage(err) {
+  const detail = err && err.message ? err.message : String(err || 'unknown error');
+  return `PTY unavailable: ${detail}`;
+}
+
+function cloneSession(session) {
+  const copy = { ...session };
+  delete copy._pty;
+  delete copy._listeners;
+  delete copy._shellKind;
+  delete copy._activeBlockStart;
+  delete copy._activeBlockIndex;
+  return copy;
+}
+
+async function ensureDataDir() {
+  await fs.mkdir(path.dirname(SESSIONS_FILE), { recursive: true });
+}
+
 async function saveSessions() {
   await ensureDataDir();
-  // We need to omit _pty and _listeners
-  const toSave = sessions.map(s => {
-    const copy = { ...s };
-    delete copy._pty;
-    delete copy._listeners;
-    return copy;
-  });
-  try {
-    await fs.writeFile(SESSIONS_FILE, JSON.stringify(toSave, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Failed to save sessions:', err);
-  }
+  await fs.writeFile(SESSIONS_FILE, JSON.stringify(sessions.map(cloneSession), null, 2), 'utf8');
 }
 
-function getBashPath() {
-  if (process.platform === 'win32') {
-    const commonPath = 'C:\\Program Files\\Git\\bin\\bash.exe';
-    try {
-      require('fs').accessSync(commonPath);
-      return commonPath;
-    } catch {
-      // Ignored
-    }
-    if (process.env.GIT_BASH) return process.env.GIT_BASH;
-    return 'bash.exe';
+function resolveWindowsShell() {
+  const candidates = [
+    { file: 'C:\\Program Files\\Git\\bin\\bash.exe', kind: 'bash' },
+    process.env.GIT_BASH && { file: process.env.GIT_BASH, kind: 'bash' },
+    { file: 'bash.exe', kind: 'bash' },
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (!path.isAbsolute(candidate.file) || fsSync.existsSync(candidate.file)) return candidate;
   }
-  return 'bash';
+  return { file: 'cmd.exe', kind: 'cmd' };
 }
 
-function parseAnsi(line) {
-  // Simple coarse ANSI mapping
-  let cls = '';
-  if (line.includes('\x1b[31m')) cls = 'ansi-red';
-  else if (line.includes('\x1b[32m')) cls = 'ansi-green';
-  else if (line.includes('\x1b[33m')) cls = 'ansi-yellow';
-  else if (line.includes('\x1b[36m')) cls = 'ansi-cyan';
-  else if (line.includes('\x1b[35m')) cls = 'ansi-purple';
-  else if (line.includes('\x1b[2m')) cls = 'ansi-dim';
-  else if (line.includes('\x1b[1m')) cls = 'ansi-bold';
+function resolveShell() {
+  // AGENT_ADAPTER_HOOK - see tools/agents/<agent>.js (T3)
+  if (process.platform === 'win32') return resolveWindowsShell();
+  return { file: process.env.SHELL || 'bash', kind: 'bash' };
+}
 
-  // Strip all escape codes
-  // eslint-disable-next-line no-control-regex
-  const stripped = line.replace(/\x1b\[[0-9;]*m/g, '').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
-  return { line: stripped, ansiClass: cls };
+function parseAnsi(chunk) {
+  let ansiClass = '';
+  if (/\x1b\[[0-9;]*31m/.test(chunk)) ansiClass = 'ansi-red';
+  else if (/\x1b\[[0-9;]*32m/.test(chunk)) ansiClass = 'ansi-green';
+  else if (/\x1b\[[0-9;]*33m/.test(chunk)) ansiClass = 'ansi-yellow';
+  else if (/\x1b\[[0-9;]*36m/.test(chunk)) ansiClass = 'ansi-cyan';
+  else if (/\x1b\[[0-9;]*35m/.test(chunk)) ansiClass = 'ansi-purple';
+  else if (/\x1b\[[0-9;]*2m/.test(chunk)) ansiClass = 'ansi-dim';
+  else if (/\x1b\[[0-9;]*1m/.test(chunk)) ansiClass = 'ansi-bold';
+  return { line: chunk.replace(ANSI_RE, '').replace(/\r/g, ''), ansiClass };
 }
 
 function broadcast(session, event) {
-  if (!session._listeners) return;
-  const payload = `data: ${JSON.stringify(event)}\n\n`;
-  for (const res of session._listeners) {
-    res.write(payload);
+  for (const res of session._listeners || []) {
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
   }
 }
 
-// Helper to spawn PTY
-function spawnPty(session) {
-  const isWin = process.platform === 'win32';
-  const shell = session.agent === 'bash' || true ? (isWin ? getBashPath() : 'bash') : 'bash'; // TODO: AGENT_ADAPTER_HOOK — see tools/agents/<agent>.js (T3)
+function finishActiveBlock(session, code) {
+  const activeBlock = session.blocks[session._activeBlockIndex];
+  if (!activeBlock || activeBlock.exit !== 'run') return;
+
+  const elapsedMs = Date.now() - (session._activeBlockStart || Date.now());
+  activeBlock.exit = code === 0 ? 'ok' : 'err';
+  activeBlock.code = code;
+  activeBlock.duration = `${(elapsedMs / 1000).toFixed(1)}s`;
+  delete session._activeBlockStart;
+  delete session._activeBlockIndex;
+
+  broadcast(session, {
+    type: 'block-end',
+    sessionId: session.id,
+    payload: { exit: activeBlock.exit, code, duration: activeBlock.duration },
+  });
+  saveSessions().catch((err) => console.error('[console] save failed:', err));
+}
+
+function attachPty(session) {
+  const ptyLib = loadPty();
+  const shell = resolveShell();
+  session._shellKind = shell.kind;
+  session._listeners = session._listeners || [];
+  delete session.error;
+
+  const spawnOpts = {
+    name: 'xterm-color',
+    cols: 100,
+    rows: 30,
+    cwd: session.cwd || process.cwd(),
+    env: process.env,
+  };
 
   try {
-    session._pty = pty.spawn(shell, [], {
-      name: 'xterm-color',
-      cols: 80,
-      rows: 24,
-      cwd: session.cwd || process.env.HOME || process.cwd(),
-      env: process.env
-    });
+    session._pty = ptyLib.spawn(shell.file, [], spawnOpts);
   } catch (err) {
-    // Fallback to cmd.exe on Windows if bash fails
-    if (isWin) {
-      try {
-        session._pty = pty.spawn('cmd.exe', [], {
-          name: 'xterm-color',
-          cols: 80,
-          rows: 24,
-          cwd: session.cwd || process.env.HOME || process.cwd(),
-          env: process.env
-        });
-      } catch (cmdErr) {
-        // Fallback if node-pty is broken or native module error occurs on Windows
-        throw cmdErr;
-      }
-    } else {
-      throw err;
-    }
+    if (process.platform !== 'win32' || shell.file === 'cmd.exe') throw err;
+    session._shellKind = 'cmd';
+    session._pty = ptyLib.spawn('cmd.exe', [], spawnOpts);
   }
 
   session.pid = session._pty.pid;
-
   let buffer = '';
 
   session._pty.onData((data) => {
     buffer += data;
-    const lines = buffer.split('\n');
-    buffer = lines.pop(); // keep remainder
+    const lines = buffer.split(/\n/);
+    buffer = lines.pop() || '';
 
-    for (const line of lines) {
-      const cleanLine = line.replace(/\r/g, '');
+    for (const rawLine of lines) {
+      const cleanLine = rawLine.replace(/\r/g, '');
+      const sentinel = cleanLine.match(/::END::(-?\d+)/);
+      if (sentinel) {
+        finishActiveBlock(session, Number(sentinel[1]));
+        continue;
+      }
 
-      // Check for sentinel
-      const match = cleanLine.match(/::END::(\d+)/);
-      if (match) {
-        const code = parseInt(match[1], 10);
-        // We found block end. Find active block.
-        const activeBlock = session.blocks[session.blocks.length - 1];
-        if (activeBlock && activeBlock.exit === 'run') {
-          activeBlock.exit = code === 0 ? 'ok' : 'err';
-          activeBlock.code = code;
-          if (session._activeBlockStart) {
-            const elapsedMs = Date.now() - session._activeBlockStart;
-            activeBlock.duration = (elapsedMs / 1000).toFixed(1) + 's';
-          } else {
-            activeBlock.duration = '0.0s';
-          }
-          broadcast(session, { type: 'block-end', sessionId: session.id, payload: { exit: activeBlock.exit, code, duration: activeBlock.duration } });
-          saveSessions();
-        }
-      } else {
-        const parsed = parseAnsi(cleanLine);
-        const activeBlock = session.blocks[session.blocks.length - 1];
-        if (activeBlock && activeBlock.exit === 'run') {
-          const outLine = [parsed.ansiClass, parsed.line];
-          activeBlock.out.push(outLine);
-        }
+      const parsed = parseAnsi(rawLine);
+      const activeBlock = session.blocks[session._activeBlockIndex];
+      if (activeBlock && activeBlock.exit === 'run' && parsed.line) {
+        activeBlock.out.push([parsed.ansiClass, parsed.line]);
+      }
+      if (parsed.line) {
         broadcast(session, { type: 'data', sessionId: session.id, payload: parsed });
       }
     }
@@ -184,129 +158,137 @@ function spawnPty(session) {
   });
 }
 
-// Initial load synchronously before spawning
-loadSessionsSync();
-
-// Re-spawn any persistent PTYs (wait, requirement says: "On server start, read the file if present; spawn fresh PTYs for each session and replay nothing")
-function init() {
-  for (const session of sessions) {
-    spawnPty(session);
+async function loadSessions() {
+  await ensureDataDir();
+  try {
+    const raw = await fs.readFile(SESSIONS_FILE, 'utf8');
+    sessions = JSON.parse(raw).map((session) => ({ ...session, _listeners: [] }));
+  } catch (err) {
+    if (err.code !== 'ENOENT') console.error('[console] load failed:', err);
+    sessions = [];
   }
-}
-init();
 
-// Graceful shutdown
-process.on('SIGINT', async () => {
-  console.log('Shutting down...');
   for (const session of sessions) {
-    if (session._pty) {
-      session._pty.kill();
+    try {
+      attachPty(session);
+    } catch (err) {
+      session.error = ptyUnavailableMessage(err);
+      console.error('[console] restore PTY failed:', err);
     }
   }
-  await saveSessions();
+}
+
+function ensureReady() {
+  if (!ready) ready = loadSessions();
+  return ready;
+}
+
+function commandWithSentinel(session, text) {
+  if (session._shellKind === 'cmd') return `${text}\r\necho ::END::%ERRORLEVEL%\r\n`;
+  return `${text}\necho "::END::$?"\n`;
+}
+
+process.once('SIGINT', async () => {
+  for (const session of sessions) {
+    if (session._pty) session._pty.kill();
+  }
+  await saveSessions().catch(() => {});
   process.exit(0);
 });
 
+ready = loadSessions();
+
 module.exports.routes = {
   'GET /api/console/sessions': async (req, res, send) => {
-    const safeSessions = sessions.map(s => {
-      const copy = { ...s };
-      delete copy._pty;
-      delete copy._listeners;
-      return copy;
-    });
-    send(200, { sessions: safeSessions });
+    await ensureReady();
+    send(200, { sessions: sessions.map(cloneSession) });
   },
 
   'POST /api/console/session/spawn': async (req, res, send, body) => {
-    const { agent, opts = {} } = body;
-    const id = 's-' + Date.now();
-    const meta = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', jules: 'Jules', bash: 'shell', dev: 'dev' }[agent] || agent;
+    await ensureReady();
+    const { agent = 'bash', opts = {} } = body || {};
+    const id = `s-${Date.now()}`;
     const name = opts.task ? `${agent} / ${opts.task.id}` : opts.label || `${agent}`;
-    
-    const newSession = {
+    const session = {
       id,
       name,
       agent,
-      cwd: opts.cwd || process.env.HOME || process.cwd(),
+      cwd: opts.cwd || process.cwd(),
       activeTaskId: opts.task ? opts.task.id : null,
       blocks: [],
-      _listeners: []
+      _listeners: [],
     };
-    
-    sessions.push(newSession);
-    spawnPty(newSession);
+
+    try {
+      attachPty(session);
+    } catch (err) {
+      return send(503, { error: ptyUnavailableMessage(err) });
+    }
+
+    sessions.push(session);
     await saveSessions();
-
-    const safeSession = { ...newSession };
-    delete safeSession._pty;
-    delete safeSession._listeners;
-
-    send(200, { ok: true, session: safeSession });
+    send(200, { ok: true, session: cloneSession(session) });
   },
 
   'POST /api/console/session/close': async (req, res, send, body) => {
-    const { id } = body;
-    const idx = sessions.findIndex(s => s.id === id);
+    await ensureReady();
+    const { id } = body || {};
+    const idx = sessions.findIndex((s) => s.id === id);
     if (idx !== -1) {
-      const session = sessions[idx];
-      if (session._pty) {
-        session._pty.kill();
-      }
-      sessions.splice(idx, 1);
+      const [session] = sessions.splice(idx, 1);
+      if (session._pty) session._pty.kill();
       await saveSessions();
     }
     send(200, { ok: true });
   },
 
   'POST /api/console/command/run': async (req, res, send, body) => {
-    const { sessionId, text } = body;
-    const session = sessions.find(s => s.id === sessionId);
+    await ensureReady();
+    const { sessionId, text } = body || {};
+    const session = sessions.find((s) => s.id === sessionId);
     if (!session) return send(404, { error: 'Session not found' });
-    if (!session._pty) return send(400, { error: 'PTY not active' });
+    if (!session._pty) return send(400, { error: session.error || 'PTY not active' });
+    if (!text || !text.trim()) return send(400, { error: 'text required' });
+    if (session.blocks.some((b) => b.exit === 'run')) {
+      return send(409, { error: 'A command is already running in this session' });
+    }
 
-    const stamp = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
-    
     const block = {
-      stamp,
+      stamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       cmd: text,
       exit: 'run',
-      out: []
+      out: [],
     };
-    
     if (session.agent !== 'bash') {
       block.kind = 'agent';
-      block.agentLabel = `${session.agent} · running`;
+      block.agentLabel = `${session.agent} - running`;
     }
 
     session.blocks.push(block);
+    session._activeBlockIndex = session.blocks.length - 1;
     session._activeBlockStart = Date.now();
-
     broadcast(session, { type: 'block-start', sessionId, payload: block });
-
-    // Write command and sentinel
-    session._pty.write(text + `\necho "::END::$?"\n`);
-
-    send(200, { ok: true, blockId: session.blocks.length - 1 });
+    session._pty.write(commandWithSentinel(session, text));
+    send(200, { ok: true, blockId: session._activeBlockIndex });
   },
 
   'POST /api/console/session/input': async (req, res, send, body) => {
-    const { id, data } = body;
-    const session = sessions.find(s => s.id === id);
+    await ensureReady();
+    const { id, data } = body || {};
+    const session = sessions.find((s) => s.id === id);
     if (!session) return send(404, { error: 'Session not found' });
-    if (!session._pty) return send(400, { error: 'PTY not active' });
-
-    session._pty.write(data);
+    if (!session._pty) return send(400, { error: session.error || 'PTY not active' });
+    session._pty.write(String(data || ''));
     send(200, { ok: true });
   },
 
-  'GET /api/console/session/stream': async (req, res, send) => {
+  'GET /api/console/session/stream': async (req, res) => {
+    await ensureReady();
     const url = new URL(req.url, `http://${req.headers.host}`);
     const id = url.searchParams.get('id');
-    const session = sessions.find(s => s.id === id);
-
+    const session = sessions.find((s) => s.id === id);
     if (!session) {
-      res.writeHead(404);
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Session not found');
       return '__sse__';
     }
@@ -314,16 +296,14 @@ module.exports.routes = {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive'
+      Connection: 'keep-alive',
     });
+    res.write(': connected\n\n');
 
-    if (!session._listeners) session._listeners = [];
     session._listeners.push(res);
-
     req.on('close', () => {
-      session._listeners = session._listeners.filter(l => l !== res);
+      session._listeners = session._listeners.filter((listener) => listener !== res);
     });
-
     return '__sse__';
-  }
+  },
 };

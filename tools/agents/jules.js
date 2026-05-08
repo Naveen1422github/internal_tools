@@ -1,18 +1,14 @@
 // consumed by tools/console.js spawn(); see briefs/T3-agent-adapters.md
+const { detectBinary } = require('./base');
 
 module.exports = {
   name: 'jules',
 
-  detect: async () => ({
-    ok: false,
-    hint: 'Jules is cloud-only; assign a task at jules.google instead.',
-  }),
+  detect: async () => detectBinary('jules', ['version']),
 
-  spawnArgs: (opts = {}) => {
-    throw new Error('Jules has no local CLI; create a task at jules.google.');
+  spawnArgs: () => {
+    throw new Error('Jules is an async cloud/PR agent; dispatch with `jules remote new` instead of spawning a PTY.');
   },
 
-  onExit: async (session, exitCode) => {
-    // No-op for jules
-  }
+  onExit: async () => {},
 };

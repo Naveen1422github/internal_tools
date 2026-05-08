@@ -1,20 +1,15 @@
 // consumed by tools/console.js spawn(); see briefs/T3-agent-adapters.md
-const { detectBinary } = require('./base');
 const fs = require('fs');
-const path = require('path');
 const os = require('os');
-const { spawn } = require('child_process');
-
-// Require codex to reuse internal paths and resolution logic but use bash out-of-band to change profile since we can't reliably invoke routes
-const codexToolPath = path.join(__dirname, '..', 'codex.js');
-let codexTool = null;
-if (fs.existsSync(codexToolPath)) {
-  codexTool = require(codexToolPath);
-}
+const path = require('path');
+const { execFileSync } = require('child_process');
+const { detectBinary } = require('./base');
+const { formatEnvelope } = require('./envelope');
 
 const HOME = os.homedir();
 const PROFILES_DIR = path.join(HOME, '.codex', 'profiles');
 const TRACKER = path.join(PROFILES_DIR, 'tracker.json');
+const PROFILE_SCRIPT = path.join(PROFILES_DIR, 'codex-profile.sh');
 
 function resolveBash() {
   const candidates = [
@@ -22,20 +17,9 @@ function resolveBash() {
     'C:\\Program Files\\Git\\bin\\bash.exe',
     process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'),
     process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Git', 'bin', 'bash.exe'),
+    'bash',
   ].filter(Boolean);
-  for (const c of candidates) {
-    try { if (fs.existsSync(c)) return c; } catch {}
-  }
-  return 'bash';
-}
-
-function runScript(args) {
-  const bash = resolveBash();
-  return new Promise((resolve) => {
-    const p = spawn(bash, ['codex-profile.sh', ...args], { cwd: PROFILES_DIR, stdio: 'ignore' });
-    p.on('close', code => resolve(code));
-    p.on('error', () => resolve(-1));
-  });
+  return candidates.find((candidate) => !path.isAbsolute(candidate) || fs.existsSync(candidate)) || 'bash';
 }
 
 function readTracker() {
@@ -46,22 +30,29 @@ function readTracker() {
   }
 }
 
-function writeTracker(t) {
-  fs.writeFileSync(TRACKER, JSON.stringify(t, null, 2));
+function writeTracker(state) {
+  fs.writeFileSync(TRACKER, JSON.stringify(state, null, 2));
 }
 
-function isAvailable(p) {
-  if (!p.limit_resets_at) return true;
-  return new Date(p.limit_resets_at).getTime() <= Date.now();
+function isAvailable(profile) {
+  return !profile.limit_resets_at || new Date(profile.limit_resets_at).getTime() <= Date.now();
 }
 
 function pickNext() {
   const state = readTracker();
-  const candidates = Object.entries(state.profiles)
-    .filter(([n, p]) => n !== state.active_profile && isAvailable(p))
-    .sort((a, b) => (new Date(a[1].last_activated || 0)) - (new Date(b[1].last_activated || 0)));
-  if (candidates.length > 0) return candidates[0][0];
-  return null; // no ready identities
+  return Object.entries(state.profiles || {})
+    .filter(([name, profile]) => name !== state.active_profile && isAvailable(profile))
+    .sort((a, b) => new Date(a[1].last_activated || 0) - new Date(b[1].last_activated || 0))
+    .map(([name]) => name)[0] || null;
+}
+
+function switchProfile(profile) {
+  if (!profile || !fs.existsSync(PROFILE_SCRIPT)) return;
+  execFileSync(resolveBash(), [PROFILE_SCRIPT, 'switch', profile], {
+    cwd: PROFILES_DIR,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
 }
 
 module.exports = {
@@ -70,44 +61,29 @@ module.exports = {
   detect: async () => detectBinary('codex'),
 
   spawnArgs: (opts = {}) => {
-    let profile = opts.profile;
-    if (!profile) {
-      profile = pickNext();
-    }
-
-    if (profile) {
-       const bash = resolveBash();
-       try {
-         const { execSync } = require('child_process');
-         execSync(`"${bash}" codex-profile.sh switch "${profile}"`, { cwd: PROFILES_DIR, stdio: 'ignore' });
-       } catch (e) {
-         // ignore
-       }
-    }
-
-    const args = [];
-    if (!opts.autoYes) {
-      args.push('--no-auto-confirm');
+    const profile = opts.profile || pickNext();
+    try {
+      switchProfile(profile);
+    } catch (err) {
+      console.warn(`[codex adapter] profile switch failed: ${err.message}`);
     }
 
     return {
       file: 'codex',
-      args,
+      args: opts.autoYes ? [] : ['--no-auto-confirm'],
       env: opts.env || process.env,
       cwd: opts.cwd || process.cwd(),
-      initialStdin: undefined, // codex doesn't support task envelope via stdin like claude yet
+      initialStdin: opts.task ? formatEnvelope(opts.task, opts) : undefined,
     };
   },
 
   onExit: async (session, exitCode) => {
-    if (exitCode === 429) {
-      const state = readTracker();
-      const active = state.active_profile;
-      if (active && state.profiles[active]) {
-        state.profiles[active].limit_hit_at = new Date().toISOString().split('.')[0] + 'Z';
-        state.profiles[active].limit_resets_at = new Date(Date.now() + 7 * 86400000).toISOString().split('.')[0] + 'Z';
-        writeTracker(state);
-      }
-    }
-  }
+    if (exitCode !== 429) return;
+    const state = readTracker();
+    const active = state.active_profile;
+    if (!active || !state.profiles?.[active]) return;
+    state.profiles[active].limit_hit_at = new Date().toISOString().split('.')[0] + 'Z';
+    state.profiles[active].limit_resets_at = new Date(Date.now() + 7 * 86400000).toISOString().split('.')[0] + 'Z';
+    writeTracker(state);
+  },
 };

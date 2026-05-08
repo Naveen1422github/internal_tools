@@ -73,10 +73,8 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = req.method === 'GET' ? null : await readBody(req);
       const result = await handler(req, res, send, body);
-      // If a handler returns '__sse__', it manages the response entirely itself.
-      if (result === '__sse__') {
-        return;
-      }
+      // SSE handlers own the response lifecycle and intentionally keep it open.
+      if (result === '__sse__') return;
     } catch (err) {
       console.error('[error]', key, err);
       if (!res.headersSent) {

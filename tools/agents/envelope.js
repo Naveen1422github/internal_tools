@@ -1,96 +1,73 @@
 // consumed by tools/console.js spawn(); see briefs/T3-agent-adapters.md
+const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
-const fs = require('fs');
+
+function pushSection(lines, heading, value) {
+  if (!value) return;
+  lines.push(`## ${heading}`, String(value), '');
+}
 
 function formatEnvelope(task, opts = {}) {
-  let env = [];
+  const lines = [
+    `# Task @${task.id} - ${task.title}`,
+    '',
+    `**Module:** @${task.module || 'none'}`,
+    `**Status:** ${task.status || 'unknown'}  ·  **Priority:** ${task.priority || 'medium'}  ·  **Assignee:** ${task.assignee || 'none'}`,
+    '',
+  ];
 
-  // Task basic info
-  env.push(`# Task @${task.id} — ${task.title}`);
-  env.push('');
-  env.push(`**Module:** @${task.module || 'none'}`);
-  env.push(`**Status:** ${task.status || 'unknown'}  ·  **Priority:** ${task.priority || 'medium'}  ·  **Assignee:** ${task.assignee || 'none'}`);
-  env.push('');
+  pushSection(lines, 'Summary', task.summary);
+  pushSection(lines, 'Context', task.description || task.body);
 
-  // Summary
-  if (task.summary) {
-    env.push('## Summary');
-    env.push(task.summary);
-    env.push('');
-  }
-
-  // Description/Context
-  if (task.description) {
-    env.push('## Context');
-    env.push(task.description);
-    env.push('');
-  }
-
-  // If there's an active DB we can fetch recent entries to enrich
-  let db = null;
+  let db;
   try {
-    const dbPath = path.resolve(__dirname, '..', '..', 'collab-mcp', 'collab.db');
+    const dbPath = opts.dbPath || path.resolve(__dirname, '..', '..', 'collab-mcp', 'collab.db');
     if (fs.existsSync(dbPath)) {
       db = new Database(dbPath, { readonly: true });
+      const recent = db.prepare(`
+        SELECT rowid AS id, created_at, agent, type, title
+        FROM entries
+        WHERE deprecated = 0 AND (task_id = @taskId OR module = @module)
+        ORDER BY created_at DESC
+        LIMIT 5
+      `).all({ taskId: task.id || null, module: task.module || null });
 
-      // Recent activity (entries related to this task or module)
-      let recentActivity = [];
-      if (task.module) {
-        recentActivity = db.prepare(`
-          SELECT created_at, agent, type, title, module
-          FROM entries
-          WHERE (module = ? OR task_id = ?) AND deprecated = 0
-          ORDER BY created_at DESC
-          LIMIT 5
-        `).all(task.module, task.id);
-      } else if (task.id) {
-        recentActivity = db.prepare(`
-          SELECT created_at, agent, type, title, module
-          FROM entries
-          WHERE task_id = ? AND deprecated = 0
-          ORDER BY created_at DESC
-          LIMIT 5
-        `).all(task.id);
-      }
-
-      if (recentActivity.length > 0) {
-        env.push('## Recent activity');
-        for (const act of recentActivity.reverse()) { // oldest to newest
-          const time = new Date(act.created_at).toTimeString().substring(0, 5);
-          env.push(`- ${time}  ${act.agent || 'Unknown'}  ${act.type}: ${act.title}`);
+      if (recent.length > 0) {
+        lines.push('## Recent activity');
+        for (const entry of recent.reverse()) {
+          const time = String(entry.created_at || '').slice(11, 16) || '--:--';
+          lines.push(`- ${time}  ${entry.agent || 'Unknown'}  ${entry.type}: ${entry.title}`);
         }
-        env.push('');
+        lines.push('');
       }
 
-      // Linked entries
       if (task.id) {
-        const linkedEntries = db.prepare(`
-          SELECT rowid as id, type, title
+        const linked = db.prepare(`
+          SELECT rowid AS id, type, title
           FROM entries
-          WHERE task_id = ? AND deprecated = 0
+          WHERE deprecated = 0 AND task_id = ?
           ORDER BY created_at DESC
           LIMIT 5
         `).all(task.id);
 
-        if (linkedEntries.length > 0) {
-          env.push('## Linked entries');
-          for (const entry of linkedEntries) {
-            env.push(`- E-${String(entry.id).padStart(5, '0')} (${entry.type}) — ${entry.title}`);
+        if (linked.length > 0) {
+          lines.push('## Linked entries');
+          for (const entry of linked) {
+            lines.push(`- E-${String(entry.id).padStart(5, '0')} (${entry.type}) - ${entry.title}`);
           }
-          env.push('');
+          lines.push('');
         }
       }
     }
-  } catch (err) {
-    console.error(`[envelope] failed to read db: ${err.message}`);
+  } catch {
+    // Envelope enrichment is best-effort; the base task context is still valid.
   } finally {
     if (db) db.close();
   }
 
-  env.push('—— READY ——');
-
-  return env.join('\n');
+  lines.push('-- READY --');
+  return lines.join('\n').slice(0, 4096);
 }
 
 module.exports = { formatEnvelope };

@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
-    "better-sqlite3": "^12.9.0",
-    "node-pty": "^1.1.0"
+    "better-sqlite3": "^12.9.0"
   }
 }
