@@ -239,7 +239,7 @@
             </div>
 
             <!-- CONSOLE VIEW (ENGINEERING CONSOLE PORT) -->
-            <div x-show="tab === 'console'" x-cloak class="flex-1 flex flex-col overflow-hidden app" :data-theme="consoleTheme" :data-density="consoleDensity">
+            <div x-show="tab === 'console'" x-cloak class="flex-1 flex flex-col overflow-hidden app" :data-theme="consoleTheme" :data-density="consoleDensity" :data-layout="consoleLayout">
                 <!-- Console Titlebar -->
                 <header class="titlebar">
                     <div class="tb-traffic"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
@@ -268,34 +268,120 @@
                     </button>
                 </header>
 
-                <div class="flex-1 flex overflow-hidden">
+                                <div class="flex-1 flex overflow-hidden relative">
+                    <!-- Activity Bar -->
+                    <nav class="actbar w-12 border-r border-border bg-panel flex flex-col items-center py-2 gap-1 shrink-0 z-20">
+                        <button :class="activitySection === 'files' ? 'active' : ''" title="Files" @click="activitySection = 'files'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="20" height="20"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6z"/><path d="M14 3v6h6"/></svg></button>
+                        <button :class="activitySection === 'tasks' ? 'active' : ''" title="Tasks" @click="activitySection = 'tasks'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 12l2 2 4-4"/></svg>
+                            <span class="badge" x-text="tasks.filter(t => t.status === 'in-progress').length"></span>
+                        </button>
+                        <button :class="activitySection === 'modules' ? 'active' : ''" title="Modules" @click="activitySection = 'modules'; loadModules()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></button>
+                        <button :class="activitySection === 'terminals' ? 'active' : ''" title="Terminals" @click="activitySection = 'terminals'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg></button>
+                        <span class="spacer flex-1"></span>
+                        <button title="Settings" @click="window.dispatchEvent(new CustomEvent('toggle-tweaks'))"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+                    </nav>
+
                     <!-- Console Sidebar -->
-                    <aside class="sidebar">
-                        <div class="sb-section tasks">
-                            <div class="sb-header">
-                                <span x-text="'Tasks · ' + filteredConsoleTasks.length"></span>
-                            </div>
-                            <div class="task-filter">
-                                <div class="search-input">
-                                    <input placeholder="Filter tasks…" x-model="taskQuery">
+                    <aside class="sidebar w-[280px] shrink-0 border-r border-border overflow-y-auto bg-[#0d0f14] custom-scrollbar">
+
+                        <!-- Files View -->
+                        <div x-show="activitySection === 'files'" class="sb-section tree h-full flex flex-col">
+                            <div class="sb-header flex justify-between px-3 py-2 border-b border-border bg-panel text-xs text-gray-500 font-bold uppercase tracking-wider">
+                                <span>Workspace</span>
+                                <div class="actions flex gap-1">
+                                    <button class="hover:text-white" title="New file"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M12 5v14M5 12h14"/></svg></button>
+                                    <button class="hover:text-white" title="More"><svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg></button>
                                 </div>
-                                <div class="chip-row">
-                                    <template x-for="s in ['pending', 'assigned', 'in-progress', 'review', 'done']" :key="s">
-                                        <button @click="filterStatus = (filterStatus === s ? null : s)" 
-                                                class="chip" :class="filterStatus === s ? 'active' : ''" x-text="s"></button>
+                            </div>
+                            <div class="tree-list flex-1 overflow-y-auto p-2">
+                                <div class="tree-row open" style="padding-left: 6px;">
+                                    <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg></span>
+                                    <span class="icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z"/></svg></span>
+                                    <span class="name">frontend2</span>
+                                </div>
+                                <div class="tree-row leaf" style="padding-left: 18px;">
+                                    <span class="chev" style="visibility:hidden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg></span>
+                                    <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6z"/><path d="M14 3v6h6"/></svg></span>
+                                    <span class="name">package.json</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tasks View -->
+                        <div x-show="activitySection === 'tasks'" class="sb-section tasks h-full flex flex-col">
+                            <div class="sb-header flex justify-between px-3 py-2 border-b border-border bg-panel text-xs text-gray-500 font-bold uppercase tracking-wider">
+                                <span x-text="'Tasks · ' + filteredConsoleTasks.length"></span>
+                                <div class="flex items-center gap-2">
+                                    <button class="chip text-[9px]" :class="autoYes ? 'active' : ''" @click="autoYes = !autoYes; localStorage.setItem('autoYes', autoYes)">auto-yes <span class="dot ml-1" :style="autoYes ? 'background:#4ade80' : 'background:var(--text-3)'"></span></button>
+                                </div>
+                            </div>
+                            <div class="task-filter px-2 py-2 border-b border-border bg-[#0d0f14]">
+                                <div class="search-input bg-panel mb-2 flex items-center px-2 rounded border border-border">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" class="text-gray-500"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/></svg>
+                                    <input placeholder="Filter tasks…" x-model="taskQuery" class="bg-transparent border-none text-xs w-full py-1 ml-2 outline-none text-gray-300">
+                                </div>
+                                <div class="chip-row flex flex-wrap gap-1">
+                                    <template x-for="s in [{k:'in-progress', c:'#fbbf24'}, {k:'review', c:'#f472b6'}, {k:'pending', c:'#7d8699'}, {k:'assigned', c:'#5fa8ff'}, {k:'done', c:'#4ade80'}]" :key="s.k">
+                                        <button @click="filterStatus = (filterStatus === s.k ? null : s.k)" class="chip" :class="filterStatus === s.k ? 'active' : ''">
+                                            <span class="dot" :style="`background: ${s.c}`"></span> <span x-text="s.k"></span>
+                                        </button>
                                     </template>
                                 </div>
                             </div>
-                            <div class="task-list">
+                            <div class="task-list flex-1 overflow-y-auto">
                                 <template x-for="task in filteredConsoleTasks" :key="task.id">
-                                    <div class="task-row" :class="selectedTaskId === task.id ? 'active' : ''" @click="selectedTaskId = task.id; showTaskDetail = true">
-                                        <div class="tr-main">
-                                            <span class="tr-id" x-text="task.id"></span>
-                                            <span class="tr-title" x-text="task.title"></span>
+                                    <div class="task-row p-2 border-b border-border/50 hover:bg-[#161b22] cursor-pointer" :class="selectedTaskId === task.id ? 'bg-[#161b22] border-l-2 border-l-accent' : ''" @click="selectedTaskId = task.id; showTaskDetail = true" draggable="true" @dragstart="dragTask = task; window.updateDragGhost?.($event); document.addEventListener('dragover', window.updateDragGhost)" @dragend="dragTask = null; document.removeEventListener('dragover', window.updateDragGhost)" @contextmenu.prevent="openCtx($event, task)">
+                                        <div class="tr-main flex items-center justify-between text-xs text-gray-300 mb-1">
+                                            <span class="tr-id font-mono text-[10px] text-gray-500" :class="selectedTaskId === task.id ? 'text-accent' : ''" x-text="task.id"></span>
+                                            <span class="tr-title truncate ml-2 flex-1" x-text="task.title"></span>
                                         </div>
-                                        <div class="tr-meta">
-                                            <span class="tr-mod" x-text="'@'+task.module"></span>
-                                            <span class="tr-status" x-text="task.status"></span>
+                                        <div class="tr-meta flex items-center text-[10px] text-gray-500 gap-2">
+                                            <span class="tr-mod" x-text="task.module ? '@'+task.module : ''"></span>
+                                            <span class="tr-status flex items-center gap-1"><span class="status-dot" :class="task.status"></span></span>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+
+                        <!-- Modules View -->
+                        <div x-show="activitySection === 'modules'" class="sb-section modules h-full flex flex-col text-sm text-gray-400">
+                            <div class="sb-header px-3 py-2 border-b border-border bg-panel text-xs text-gray-500 font-bold uppercase tracking-wider">Modules</div>
+                            <div class="flex-1 overflow-y-auto p-2">
+                                <template x-for="m in collabModules" :key="m.slug">
+                                    <div class="p-2 mb-1 rounded hover:bg-panel cursor-pointer text-xs flex justify-between" @click="filterModule = m.slug; activitySection = 'tasks'">
+                                        <span x-text="'@' + m.slug" class="font-mono text-accent"></span>
+                                        <span x-text="m.status" class="text-gray-500"></span>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+
+                        <!-- Terminals View -->
+                        <div x-show="activitySection === 'terminals'" class="sb-section terminals h-full flex flex-col text-sm text-gray-400">
+                            <div class="sb-header px-3 py-2 border-b border-border bg-panel text-xs text-gray-500 font-bold uppercase tracking-wider">Sessions</div>
+                            <div class="flex-1 overflow-y-auto p-2">
+                                <template x-for="(s, index) in sessions" :key="s.id">
+                                    <div class="sx-instance group p-2 mb-1 rounded hover:bg-panel cursor-pointer flex flex-col gap-1 border border-transparent hover:border-border" :class="activeSessionId === s.id ? 'bg-[#161b22] border-border' : ''" @click="activeSessionId = s.id">
+                                        <div class="flex items-center justify-between">
+                                            <div class="flex items-center gap-2">
+                                                <span class="agent-letter w-4 h-4 flex items-center justify-center rounded text-[9px] font-bold text-white" :style="`background: ${cmdkMeta[s.agent.toLowerCase()]?.color || '#94a3b8'}`" x-text="cmdkMeta[s.agent.toLowerCase()]?.letter || s.agent.charAt(0).toUpperCase()"></span>
+                                                <span class="text-xs text-gray-300 font-mono" x-text="s.name"></span>
+                                            </div>
+                                            <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <button class="p-1 hover:text-white" @click.stop="splitWith = (splitWith ? null : s.id)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="12" height="12"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/></svg></button>
+                                                <button class="p-1 hover:text-red-400" @click.stop="closeSession(s.id)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M6 6l12 12M6 18L18 6"/></svg></button>
+                                            </div>
+                                        </div>
+                                        <div class="sx-i-meta flex items-center justify-between text-[10px] text-gray-500 font-mono">
+                                            <div class="flex gap-2">
+                                                <span class="sx-i-num" x-text="'λ#' + (index + 1)"></span>
+                                                <span class="sx-i-branch">main</span>
+                                            </div>
+                                            <div class="flex gap-2">
+                                                <span class="sx-diff--add text-green-400">+0</span>
+                                                <span class="sx-diff--del text-red-400">-0</span>
+                                            </div>
                                         </div>
                                     </div>
                                 </template>
@@ -307,7 +393,7 @@
                     <main class="canvas flex flex-col">
                         <div class="term-tabs">
                             <template x-for="s in sessions" :key="s.id">
-                                <button class="term-tab" :class="activeSessionId === s.id ? 'active' : ''" @click="activeSessionId = s.id">
+                                <button class="term-tab" :class="(activeSessionId === s.id ? 'active ' : '') + (dragTargetTab === s.id ? 'drag-target ' : '')" @click="activeSessionId = s.id" @dragover.prevent="if(dragTask) dragTargetTab = s.id" @dragleave="dragTargetTab = null" @drop.prevent="if(dragTask) { injectTaskIntoSession(s.id, dragTask); dragTargetTab = null; dragTask = null; }">
                                     <span class="agent-pill" :data-agent="s.agent" x-text="s.agent"></span>
                                     <span class="name" x-text="s.name"></span>
                                     <span class="close" @click.stop="closeSession(s.id)">✕</span>
@@ -323,7 +409,7 @@
 
                         <div class="term-grid flex-1 overflow-hidden" :class="splitWith ? 'split-2' : ''">
                             <template x-if="activeSession">
-                                <div class="term-pane flex flex-col" :data-session-id="activeSession.id">
+                                <div class="term-pane flex flex-col relative transition-shadow" :data-session-id="activeSession.id" :style="`box-shadow: inset 0 0 0 1.5px ${cmdkMeta[activeSession.agent]?.color || '#94a3b8'}; border-radius: 6px; margin: 4px; overflow: hidden;`">
                                     <div class="tp-body flex-1 overflow-y-auto p-4 font-mono text-sm bg-[#0d0f14]">
                                         <template x-for="block in activeSession.blocks" :key="block.stamp + block.cmd">
                                             <div class="term-block mb-4">
@@ -347,7 +433,7 @@
                                 </div>
                             </template>
                             <template x-if="splitSession">
-                                <div class="term-pane flex flex-col border-l border-border" :data-session-id="splitSession.id">
+                                <div class="term-pane flex flex-col relative transition-shadow" :data-session-id="splitSession.id" :style="`box-shadow: inset 0 0 0 1px ${cmdkMeta[splitSession.agent]?.color || '#94a3b8'}80; border-radius: 6px; margin: 4px; overflow: hidden; opacity: 0.8;`">
                                     <!-- Similar body/input for split pane -->
                                     <div class="tp-body flex-1 overflow-y-auto p-4 font-mono text-sm bg-[#0d0f14]">
                                         <template x-for="block in splitSession.blocks" :key="block.stamp + block.cmd">
@@ -369,12 +455,34 @@
                     </main>
                 </div>
 
-                <!-- Console Statusbar -->
-                <footer class="statusbar h-7 border-t border-border flex items-center px-3 text-[11px] bg-[#0d0f14]">
-                    <span class="mr-4 text-gray-500">main</span>
-                    <span class="mr-4 text-gray-500" x-text="activeSession?.cwd"></span>
-                    <div class="spacer flex-1"></div>
-                    <span class="text-gray-500">⌘K · palette</span>
+                                <!-- Console Statusbar -->
+                <footer class="statusbar h-7 border-t border-border flex items-center justify-center px-3 text-[11px] bg-[#0d0f14] transition-all" :class="(!activeSession || activitySection === 'tasks') ? 'font-mono text-gray-500' : 'justify-start'">
+
+                    <template x-if="!activeSession || activitySection === 'tasks'">
+                        <div class="flex items-center gap-4">
+                            <span><span class="text-accent border border-border bg-white/5 rounded px-1">n</span> new</span>
+                            <span class="text-gray-600">·</span>
+                            <span><span class="text-accent border border-border bg-white/5 rounded px-1">D</span> kill</span>
+                            <span class="text-gray-600">·</span>
+                            <span><span class="text-accent border border-border bg-white/5 rounded px-1">↵/o</span> open</span>
+                            <span class="text-gray-600">·</span>
+                            <span><span class="text-accent border border-border bg-white/5 rounded px-1">p</span> push</span>
+                            <span class="text-gray-600">·</span>
+                            <span><span class="text-accent border border-border bg-white/5 rounded px-1">c</span> checkout</span>
+                            <span class="text-gray-600">·</span>
+                            <span><span class="text-accent border border-border bg-white/5 rounded px-1">?</span></span>
+                        </div>
+                    </template>
+
+                    <template x-if="activeSession && activitySection !== 'tasks'">
+                        <div class="flex items-center w-full">
+                            <span class="mr-4 text-gray-500">main</span>
+                            <span class="mr-4 text-gray-500" x-text="activeSession?.cwd"></span>
+                            <div class="spacer flex-1"></div>
+                            <span class="mr-4 text-gray-500" x-text="sessions.length + ' sessions'"></span>
+                            <span class="text-gray-500">⌘K · palette</span>
+                        </div>
+                    </template>
                 </footer>
 
                 <!-- Task Detail Overlay (Console) -->
@@ -395,6 +503,207 @@
                 </div>
             </div>
         </div>
+
+                        <!-- Cmd-K Palette Overlay -->
+                <div x-show="cmdkOpen" x-cloak class="cmdk-overlay" @mousedown.self="cmdkOpen = false">
+                    <div class="cmdk" @mousedown.stop>
+                        <div class="cmdk-input">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.5-4.5"></path></svg>
+                            <input x-ref="cmdkInput" x-model="cmdkQuery" @keydown="cmdkKeydown($event)" placeholder="Search tasks, run with agent, focus terminal…">
+                            <span class="esc">esc</span>
+                        </div>
+                        <div class="cmdk-list" x-ref="cmdkList">
+                            <template x-if="cmdkGroups.length === 0">
+                                <div class="cmdk-empty">No results</div>
+                            </template>
+                            <template x-for="(group, gIdx) in cmdkGroups" :key="gIdx">
+                                <div>
+                                    <div class="cmdk-group-label" x-text="group.label"></div>
+                                    <template x-for="(item, iIdx) in group.items" :key="iIdx">
+                                        <div class="cmdk-item" :class="cmdkIsSelected(item) ? 'selected' : ''" @mouseenter="cmdkSetSel(item)" @click="cmdkExec(item)">
+                                            <template x-if="['run', 'spawn', 'focus'].includes(item.kind)">
+                                                <span class="ico agent" :style="item.color ? `background: ${item.color}` : (cmdkMeta[item.agent]?.color ? `background: ${cmdkMeta[item.agent].color}` : 'background: var(--bg-2)')" x-text="item.letter || cmdkMeta[item.agent]?.letter || '·'"></span>
+                                            </template>
+                                            <template x-if="item.kind === 'task'">
+                                                <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M9 12l2 2 4-4"></path></svg></span>
+                                            </template>
+                                            <template x-if="!['run', 'spawn', 'focus', 'task'].includes(item.kind)">
+                                                <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg></span>
+                                            </template>
+                                            <span class="label" x-text="item.label"></span>
+                                            <template x-if="item.sub">
+                                                <span class="sub" x-text="item.sub"></span>
+                                            </template>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Context Menu Overlay -->
+                <div x-show="ctxMenu" x-cloak class="context-menu" :style="`left: ${ctxMenu?.x}px; top: ${ctxMenu?.y}px`" @click.stop @contextmenu.prevent>
+                    <template x-for="(item, i) in ctxItems" :key="i">
+                        <template x-if="item.sep">
+                            <div class="sep"></div>
+                        </template>
+                        <template x-if="item.groupLabel">
+                            <div class="label" x-text="item.groupLabel"></div>
+                        </template>
+                        <template x-if="!item.sep && !item.groupLabel">
+                            <div class="item" :class="item.danger ? 'danger' : ''" @click="ctxExec(item); ctxMenu = null">
+                                <template x-if="item.letter">
+                                    <span class="agent-letter" :style="`background: ${item.color}; --agent-color: ${item.color}`" x-text="item.letter"></span>
+                                </template>
+                                <span x-text="item.label"></span>
+                                <template x-if="item.kbd">
+                                    <span class="kbd" x-text="item.kbd"></span>
+                                </template>
+                            </div>
+                        </template>
+                    </template>
+                </div>
+
+                <!-- Drag Ghost -->
+                <div x-show="dragTask" x-cloak class="drag-ghost" :style="`left: ${dragGhost?.x}px; top: ${dragGhost?.y}px`">
+                    <span x-text="`${dragTask?.id}  ${dragTask?.title?.slice(0, 36)}`"></span>
+                </div>
+
+                <!-- Tweaks Panel -->
+                <div x-show="tweaksOpen" x-cloak class="fixed right-4 bottom-4 w-72 bg-[#1a1f2b] border border-border shadow-2xl rounded-xl z-[999] flex flex-col font-sans text-[13px] text-gray-300" @click.stop x-transition>
+                    <div class="px-4 py-3 border-b border-border flex justify-between items-center font-bold text-white tracking-wide uppercase text-[10px]">
+                        Tweaks
+                        <button @click="tweaksOpen = false" class="text-gray-500 hover:text-white"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M6 18L18 6"></path></svg></button>
+                    </div>
+                    <div class="p-4 flex flex-col gap-4">
+                        <div>
+                            <div class="text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-2">Theme</div>
+                            <div class="flex items-center justify-between mb-2">
+                                <span>Style</span>
+                                <div class="flex bg-[#0d0f14] rounded-md p-1 border border-border">
+                                    <button class="px-3 py-1 rounded text-xs" :class="consoleTheme === 'warp' ? 'bg-[#232938] text-white' : 'text-gray-400'" @click="consoleTheme = 'warp'; applyConsoleTheme(); saveTweaks()">Warp</button>
+                                    <button class="px-3 py-1 rounded text-xs" :class="consoleTheme === 'vscode' ? 'bg-[#232938] text-white' : 'text-gray-400'" @click="consoleTheme = 'vscode'; applyConsoleTheme(); saveTweaks()">VS Code</button>
+                                </div>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span>Accent</span>
+                                <select class="bg-[#0d0f14] border border-border rounded text-xs py-1 px-2 text-white outline-none" x-model="consoleAccent" @change="applyConsoleTheme(); saveTweaks()">
+                                    <option value="purple">Purple</option>
+                                    <option value="cyan">Cyan</option>
+                                    <option value="amber">Amber</option>
+                                    <option value="green">Green</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="border-t border-border pt-4">
+                            <div class="text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-2">Layout</div>
+                            <div class="flex items-center justify-between mb-2">
+                                <span>Layout</span>
+                                <div class="flex bg-[#0d0f14] rounded-md p-1 border border-border">
+                                    <button class="px-2 py-1 rounded text-[11px]" :class="consoleLayout === 'balanced' ? 'bg-[#232938] text-white' : 'text-gray-400'" @click="consoleLayout = 'balanced'; applyConsoleTheme(); saveTweaks()">Balanced</button>
+                                    <button class="px-2 py-1 rounded text-[11px]" :class="consoleLayout === 'terminal-first' ? 'bg-[#232938] text-white' : 'text-gray-400'" @click="consoleLayout = 'terminal-first'; applyConsoleTheme(); saveTweaks()">Terminal-First</button>
+                                </div>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span>Density</span>
+                                <div class="flex bg-[#0d0f14] rounded-md p-1 border border-border">
+                                    <button class="px-2 py-1 rounded text-[11px]" :class="consoleDensity === 'compact' ? 'bg-[#232938] text-white' : 'text-gray-400'" @click="consoleDensity = 'compact'; applyConsoleTheme(); saveTweaks()">Compact</button>
+                                    <button class="px-2 py-1 rounded text-[11px]" :class="consoleDensity === 'cozy' ? 'bg-[#232938] text-white' : 'text-gray-400'" @click="consoleDensity = 'cozy'; applyConsoleTheme(); saveTweaks()">Cozy</button>
+                                    <button class="px-2 py-1 rounded text-[11px]" :class="consoleDensity === 'comfy' ? 'bg-[#232938] text-white' : 'text-gray-400'" @click="consoleDensity = 'comfy'; applyConsoleTheme(); saveTweaks()">Comfy</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Task Detail Overlay (Console) -->
+                <div x-show="showTaskDetail && selectedTask" x-cloak class="task-detail-overlay" @click.stop x-transition>
+                    <div class="td-header">
+                        <div class="td-row">
+                            <span class="td-id" x-text="selectedTask?.id"></span>
+                            <span class="td-status">
+                                <span class="status-dot" :class="selectedTask?.status"></span>
+                                <span x-text="selectedTask?.status"></span>
+                            </span>
+                            <span class="td-priority" :class="selectedTask?.priority" x-text="selectedTask?.priority"></span>
+                            <button class="td-close" @click="showTaskDetail = false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M6 18L18 6"></path></svg></button>
+                        </div>
+                        <div class="td-title" x-text="selectedTask?.title"></div>
+                        <div class="td-summary" x-text="selectedTask?.summary || selectedTask?.description"></div>
+                        <div class="td-meta-row">
+                            <template x-if="selectedTask?.module">
+                                <span class="module" x-text="'@' + selectedTask.module"></span>
+                            </template>
+                            <template x-for="s in (selectedTask?.services || [])" :key="s">
+                                <span class="svc" x-text="s"></span>
+                            </template>
+                            <span class="assignee" x-text="selectedTask?.assignee ? '→ ' + selectedTask.assignee : 'unassigned'"></span>
+                        </div>
+                    </div>
+                    <div class="td-actions">
+                        <span class="label">Run with</span>
+                        <div class="td-action-btns">
+                            <template x-for="a in ['Claude', 'Codex', 'Gemini']" :key="a">
+                                <button class="td-action" :data-agent="a.toLowerCase()" :style="`--agent-color: ${cmdkMeta[a.toLowerCase()]?.color || '#fb923c'}`" @click="spawnSession(a.toLowerCase(), { task: selectedTask })">
+                                    <span class="agent-letter" :style="`background: ${cmdkMeta[a.toLowerCase()]?.color || '#fb923c'}`" x-text="cmdkMeta[a.toLowerCase()]?.letter || a.charAt(0)"></span>
+                                    <span x-text="a"></span>
+                                </button>
+                            </template>
+                        </div>
+                        <div class="td-secondary-actions">
+                            <button class="td-sec" @click="showToast('Copied context envelope')">Copy context envelope</button>
+                            <button class="td-sec" @click="showToast('Opened terminal')">Open in terminal at @<span x-text="selectedTask?.module"></span></button>
+                            <select class="td-sec" :value="selectedTask?.status" @change="transitionTask(selectedTask.id, $event.target.value)">
+                                <template x-for="s in ['pending','assigned','in-progress','review','done']" :key="s">
+                                    <option :value="s" x-text="'→ ' + s"></option>
+                                </template>
+                            </select>
+                            <select class="td-sec" :value="selectedTask?.assignee || ''" @change="assignTaskTo(selectedTask.id, $event.target.value)">
+                                <option value="">unassigned</option>
+                                <option>Claude</option><option>Codex</option><option>Gemini</option><option>User</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="td-body">
+                        <template x-for="(blk, i) in (selectedTask?.body || [])" :key="i">
+                            <div>
+                                <h4 x-text="blk.h"></h4>
+                                <template x-if="blk.p"><p x-text="blk.p"></p></template>
+                                <template x-if="blk.list">
+                                    <ul>
+                                        <template x-for="(it, j) in blk.list" :key="j">
+                                            <li x-text="it"></li>
+                                        </template>
+                                    </ul>
+                                </template>
+                                <template x-if="blk.code">
+                                    <pre style="background:var(--bg-2); border:1px solid var(--line); padding:10px; border-radius:6px; font-family:var(--font-mono); font-size:11.5px; color:var(--text-1); overflow:auto; margin:0;" x-text="blk.code"></pre>
+                                </template>
+                            </div>
+                        </template>
+                        <template x-if="!selectedTask?.body || selectedTask.body.length === 0">
+                            <p style="color:var(--text-3)">No description.</p>
+                        </template>
+
+                        <h4>Activity</h4>
+                        <div class="td-activity">
+                            <template x-for="(act, i) in (selectedTask?.activity || [])" :key="i">
+                                <div class="td-activity-item">
+                                    <span class="timestamp" x-text="act.t"></span>
+                                    <span>
+                                        <span class="actor" x-text="act.a"></span>
+                                        <span class="act" x-text="act.act"></span>
+                                    </span>
+                                </div>
+                            </template>
+                            <template x-if="!selectedTask?.activity || selectedTask.activity.length === 0">
+                                <div style="color:var(--text-3); font-size:11.5px;">No activity yet.</div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+
 
         <!-- Identity Modals -->
         <!-- (Keep existing modals) -->
