@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Emp1st | Engineering Console</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="styles-terminal.css">
@@ -485,22 +486,6 @@
                     </template>
                 </footer>
 
-                <!-- Task Detail Overlay (Console) -->
-                <div x-show="showTaskDetail && selectedTask" class="fixed inset-y-0 right-0 w-[450px] bg-[#161b22] border-l border-border shadow-2xl z-50 flex flex-col" x-transition>
-                    <div class="p-6 border-b border-border flex justify-between items-center">
-                        <h3 class="text-lg font-bold" x-text="selectedTask?.id"></h3>
-                        <button @click="showTaskDetail = false">✕</button>
-                    </div>
-                    <div class="flex-1 overflow-y-auto p-6">
-                        <h2 class="text-2xl font-black italic mb-4" x-text="selectedTask?.title"></h2>
-                        <div class="prose prose-invert text-sm text-gray-400" x-text="selectedTask?.description"></div>
-                        
-                        <div class="mt-8 space-y-4">
-                            <button @click="spawnSession('claude', { task: selectedTask })" class="w-full py-3 bg-accent text-white rounded-xl font-bold">Run with Claude</button>
-                            <button @click="spawnSession('gemini', { task: selectedTask })" class="w-full py-3 bg-panel-light border border-border rounded-xl font-bold">Run with Gemini</button>
-                        </div>
-                    </div>
-                </div>
             </div>
         </div>
 

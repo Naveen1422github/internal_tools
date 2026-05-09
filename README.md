@@ -19,6 +19,7 @@ A small Node http server (no framework) that serves a vanilla-JS Alpine UI and e
 
 - **Codex Profile Manager** — GUI for `codex-profile.sh`. Switch profiles, mark rate-limited, save the current login as a named profile, run `check`/`check --all` probes, edit labels and reset times, delete profiles. Calls the canonical script via bash.
 - **Collab DB Explorer** — browse, search (FTS5), view, edit, and delete collab `entries`. List/edit `tasks` and `modules`. Direct SQLite reads/writes against `collab-mcp/collab.db`.
+- **Engineering Console** — terminal sessions with real PTYs, agent CLI adapters (Claude/Codex/Gemini/Jules), task-driven spawn from collab DB, Cmd-K palette, drag-task-to-tab, SSE-streamed output. Stylesheets split across `style.css` (Tailwind base), `styles.css` (Console theme), `styles-overlays.css`, `styles-terminal.css`.
 
 ### Usage
 
@@ -26,6 +27,7 @@ A small Node http server (no framework) that serves a vanilla-JS Alpine UI and e
 cd internal-tools
 npm install
 npm start            # → http://127.0.0.1:7473/
+npm run dev          # auto-restart server with nodemon
 ```
 
 If Git Bash isn't at one of the standard locations, set `GIT_BASH=/path/to/bash.exe` before `npm start` so the codex profile API can shell out.
@@ -43,12 +45,15 @@ internal-tools/
 ├── server.js          ← http server + static file handler
 ├── package.json
 ├── tools/
+│   ├── agents/        ← per-agent CLI adapters (Claude, Codex, Gemini, Jules) + envelope formatter
 │   ├── codex.js       ← /api/codex/* — profile manager
+│   ├── console.js     ← /api/console/* — PTY sessions + SSE
 │   └── collab.js      ← /api/collab/* — DB explorer
 ├── public/
 │   ├── index.html     ← Alpine UI
 │   ├── app.js         ← state + handlers
-│   └── style.css
+│   ├── style.css      ← Tailwind base layer
+│   └── styles*.css    ← console theme + overlays + terminal styles
 └── collab-mcp/        ← MCP server (separate from the dashboard)
 ```
 

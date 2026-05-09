@@ -19,7 +19,6 @@
         filterAgent: null,
         filterPriority: null,
         showTaskDetail: false,
-        activeFile: 'app.js',
         cmdkOpen: false,
         dragTask: null,
         dragTargetTab: null,
@@ -33,16 +32,13 @@
         collabTasks: [],
 
         // T2 Overlays & Modals
-        cmdkOpen: false,
         cmdkQuery: '',
         cmdkGroups: [],
         cmdkSelectedIdx: 0,
 
         ctxMenu: null, // {x, y, items}
 
-        dragTask: null,
         dragGhost: null,
-        dragTargetTab: null,
 
         tweaksOpen: false,
         consoleLayout: 'balanced', // 'balanced' or 'terminal-first'
@@ -68,8 +64,6 @@
         
         // Filters for entries list
         filterType: '',
-        filterModule: '',
-        filterAgent: '',
         filterKind: 'any',
         
         // Doctor result
@@ -134,12 +128,6 @@
             // Apply console theme
             this.applyConsoleTheme();
 
-            // Cmd-K hotkey
-            window.addEventListener('keydown', e => {
-                if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-                    e.preventDefault(); this.cmdkOpen = true;
-                }
-            });
         },
 
 
