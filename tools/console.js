@@ -186,6 +186,20 @@ async function loadSessions() {
     sessions = [];
   }
 
+  // PTYs don't survive process restarts. Any block left in 'run' is orphaned
+  // — mark it as interrupted so the session isn't permanently locked by the
+  // 409 'command already running' guard.
+  for (const session of sessions) {
+    for (const block of session.blocks || []) {
+      if (block.exit === 'run') {
+        block.exit = 'err';
+        block.code = -1;
+        block.duration = block.duration || '—';
+        if (Array.isArray(block.out)) block.out.push(['ansi-dim', '[interrupted by server restart]']);
+      }
+    }
+  }
+
   for (const session of sessions) {
     try {
       attachPty(session);

@@ -1,0 +1,13 @@
+{
+  "watch": ["server.js", "tools/"],
+  "ext": "js,mjs,cjs",
+  "ignore": [
+    "data/",
+    "public/",
+    "node_modules/",
+    "tools/agents/__tests__/",
+    "collab-mcp/",
+    "*.test.js"
+  ],
+  "delay": 500
+}
