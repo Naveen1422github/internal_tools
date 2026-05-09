@@ -55,10 +55,16 @@ async function saveSessions() {
 }
 
 function resolveWindowsShell() {
+  // Bare `bash.exe` on Windows usually resolves to C:\Windows\System32\bash.exe
+  // (the WSL launcher) which exits with an error if WSL isn't set up. Prefer
+  // explicit Git Bash paths and fall back to PowerShell, NOT bare bash.exe.
   const candidates = [
-    { file: 'C:\\Program Files\\Git\\bin\\bash.exe', kind: 'bash' },
     process.env.GIT_BASH && { file: process.env.GIT_BASH, kind: 'bash' },
-    { file: 'bash.exe', kind: 'bash' },
+    { file: 'C:\\Program Files\\Git\\bin\\bash.exe', kind: 'bash' },
+    { file: 'C:\\Program Files (x86)\\Git\\bin\\bash.exe', kind: 'bash' },
+    process.env.ProgramFiles && { file: path.join(process.env.ProgramFiles, 'Git', 'bin', 'bash.exe'), kind: 'bash' },
+    process.env.LOCALAPPDATA && { file: path.join(process.env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'), kind: 'bash' },
+    { file: 'powershell.exe', kind: 'powershell' },
   ].filter(Boolean);
 
   for (const candidate of candidates) {
@@ -133,9 +139,13 @@ function attachPty(session) {
     env: process.env,
   };
 
+  // Interactive flag keeps shells from exiting when stdin is empty. Without
+  // -i / -NoExit, bash and PowerShell read stdin once and exit.
+  const shellArgs = shell.kind === 'bash' ? ['-i'] : (shell.kind === 'powershell' ? ['-NoExit', '-NoLogo'] : []);
+
   try {
-    session._pty = ptyLib.spawn(shell.file, [], spawnOpts);
-    log(session.id, 'spawned', shell.file, 'pid=' + session._pty.pid);
+    session._pty = ptyLib.spawn(shell.file, shellArgs, spawnOpts);
+    log(session.id, 'spawned', shell.file, shellArgs.join(' '), 'pid=' + session._pty.pid);
   } catch (err) {
     log(session.id, 'spawn failed for', shell.file, '-', err.message);
     if (process.platform !== 'win32' || shell.file === 'cmd.exe') throw err;
@@ -161,6 +171,7 @@ function attachPty(session) {
       }
 
       const parsed = parseAnsi(rawLine);
+      log(session.id, 'data:', JSON.stringify(parsed.line.slice(0, 120)));
       const activeBlock = session.blocks[session._activeBlockIndex];
       if (activeBlock && activeBlock.exit === 'run' && parsed.line) {
         activeBlock.out.push([parsed.ansiClass, parsed.line]);
@@ -172,7 +183,9 @@ function attachPty(session) {
   });
 
   session._pty.onExit(({ exitCode, signal }) => {
-    broadcast(session, { type: 'exit', sessionId: session.id, payload: { exitCode, signal } });
+    log(session.id, 'PTY exited code=' + exitCode + ' signal=' + signal + ' shell=' + shell.file);
+    session.error = `Shell exited (code ${exitCode}). Shell: ${shell.file}`;
+    broadcast(session, { type: 'exit', sessionId: session.id, payload: { exitCode, signal, shell: shell.file } });
   });
 }
 
@@ -217,6 +230,7 @@ function ensureReady() {
 
 function commandWithSentinel(session, text) {
   if (session._shellKind === 'cmd') return `${text}\r\necho ::END::%ERRORLEVEL%\r\n`;
+  if (session._shellKind === 'powershell') return `${text}\r\nWrite-Output "::END::$LASTEXITCODE"\r\n`;
   return `${text}\necho "::END::$?"\n`;
 }
 
