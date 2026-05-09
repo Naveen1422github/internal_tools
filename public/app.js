@@ -223,12 +223,18 @@
 
         // --- CONSOLE ---
         mountXterm(host, sessionId) {
-            if (!host || !sessionId || typeof window.Terminal !== 'function') return;
+            if (!host || !sessionId) return;
+            if (typeof window.Terminal !== 'function') {
+                console.warn('[xterm] Terminal class not loaded yet — retrying in 200ms');
+                setTimeout(() => this.mountXterm(host, sessionId), 200);
+                return;
+            }
             if (this.xterms[sessionId]) {
                 try { this.xterms[sessionId].ro.disconnect(); } catch {}
                 try { this.xterms[sessionId].term.dispose(); } catch {}
                 delete this.xterms[sessionId];
             }
+            console.debug('[xterm] mount', sessionId, 'host size =', host.clientWidth, 'x', host.clientHeight);
 
             const term = new window.Terminal({
                 cursorBlink: true,
@@ -248,15 +254,21 @@
             if (fit) term.loadAddon(fit);
 
             term.open(host);
-            if (fit) {
-                try { fit.fit(); } catch {}
+            // Defer fit to next frame so layout has settled (host may be 0x0 at x-init time)
+            const doFit = () => {
+                if (!fit) return;
+                try { fit.fit(); } catch (e) { console.warn('[xterm] fit failed', e); }
                 const { cols, rows } = term;
-                fetch('/api/console/session/resize', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ id: sessionId, cols, rows }),
-                }).catch(() => {});
-            }
+                console.debug('[xterm]', sessionId, 'fit ->', cols, 'x', rows);
+                if (cols > 0 && rows > 0) {
+                    fetch('/api/console/session/resize', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ id: sessionId, cols, rows }),
+                    }).catch(() => {});
+                }
+            };
+            requestAnimationFrame(() => requestAnimationFrame(doFit));
 
             term.onData((data) => {
                 fetch('/api/console/session/input', {
@@ -457,7 +469,11 @@
 
                 if (data.type === 'raw') {
                     const xt = this.xterms[sessionId];
-                    if (xt) xt.term.write(data.payload || '');
+                    if (xt) {
+                        xt.term.write(data.payload || '');
+                    } else {
+                        console.warn('[sse] raw event for', sessionId, 'but no xterm mounted — buffering not implemented, dropping', (data.payload || '').slice(0, 40));
+                    }
                     return;
                 }
 

@@ -81,10 +81,15 @@
   flex: 1;
   min-height: 0;
   display: grid;
+  grid-template-columns: 1fr;
   gap: 1px;
   background: var(--line);
 }
 .term-grid.split-2 { grid-template-columns: 1fr 1fr; }
+
+.xt-host { min-height: 0; }
+.xt-host .xterm { width: 100%; height: 100%; }
+.xt-host .xterm-screen { width: 100%; }
 
 .term-pane {
   background: var(--bg-0);
