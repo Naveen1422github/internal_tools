@@ -4,10 +4,6 @@ const path = require('path');
 const AGENT_ADAPTERS = require('./agents');
 
 const SESSIONS_FILE = path.join(__dirname, '..', 'data', 'sessions.json');
-const ANSI_CSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
-const ANSI_OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
-const ANSI_BEL = /\x07/g;
-const ANSI_OTHER = /\x1b[PX^_][^\x1b]*\x1b\\/g;
 
 let sessions = [];
 let ready;
@@ -18,8 +14,6 @@ function loadPty() {
   if (pty) return pty;
   if (ptyLoadError) throw ptyLoadError;
 
-  // node-pty ships Windows prebuilds for Node 22; @homebridge fork only ships Linux.
-  // Try upstream first, fall back to the fork for non-Windows hosts where it works.
   const candidates = ['node-pty', '@homebridge/node-pty-prebuilt-multiarch'];
   const errors = [];
   for (const name of candidates) {
@@ -59,9 +53,6 @@ async function saveSessions() {
 }
 
 function resolveWindowsShell() {
-  // Bare `bash.exe` on Windows usually resolves to C:\Windows\System32\bash.exe
-  // (the WSL launcher) which exits with an error if WSL isn't set up. Prefer
-  // explicit Git Bash paths and fall back to PowerShell, NOT bare bash.exe.
   const candidates = [
     process.env.GIT_BASH && { file: process.env.GIT_BASH, kind: 'bash' },
     { file: 'C:\\Program Files\\Git\\bin\\bash.exe', kind: 'bash' },
@@ -83,56 +74,15 @@ function resolveShell() {
   return { file: process.env.SHELL || 'bash', kind: 'bash' };
 }
 
-function parseAnsi(chunk) {
-  let ansiClass = '';
-  if (/\x1b\[[0-9;]*31m/.test(chunk)) ansiClass = 'ansi-red';
-  else if (/\x1b\[[0-9;]*32m/.test(chunk)) ansiClass = 'ansi-green';
-  else if (/\x1b\[[0-9;]*33m/.test(chunk)) ansiClass = 'ansi-yellow';
-  else if (/\x1b\[[0-9;]*36m/.test(chunk)) ansiClass = 'ansi-cyan';
-  else if (/\x1b\[[0-9;]*35m/.test(chunk)) ansiClass = 'ansi-purple';
-  else if (/\x1b\[[0-9;]*2m/.test(chunk)) ansiClass = 'ansi-dim';
-  else if (/\x1b\[[0-9;]*1m/.test(chunk)) ansiClass = 'ansi-bold';
-  return {
-    line: chunk
-      .replace(ANSI_OSC, '')
-      .replace(ANSI_OTHER, '')
-      .replace(ANSI_CSI, '')
-      .replace(ANSI_BEL, ''),
-    ansiClass,
-  };
-}
-
 const DEBUG = process.env.CONSOLE_DEBUG === '1' || process.env.CONSOLE_DEBUG === 'true';
 const log = (...args) => DEBUG && console.log('[console]', ...args);
 
 function broadcast(session, event) {
   const listeners = session._listeners || [];
-  log(session.id, 'broadcast', event.type, '→', listeners.length, 'listener(s)');
-  if (listeners.length === 0 && (event.type === 'block-start' || event.type === 'block-end')) {
-    log(session.id, 'WARN: dropping', event.type, '(no listeners attached yet)');
-  }
+  log(session.id, 'broadcast', event.type, '->', listeners.length, 'listener(s)');
   for (const res of listeners) {
     res.write(`data: ${JSON.stringify(event)}\n\n`);
   }
-}
-
-function finishActiveBlock(session, code) {
-  const activeBlock = session.blocks[session._activeBlockIndex];
-  if (!activeBlock || activeBlock.exit !== 'run') return;
-
-  const elapsedMs = Date.now() - (session._activeBlockStart || Date.now());
-  activeBlock.exit = code === 0 ? 'ok' : 'err';
-  activeBlock.code = code;
-  activeBlock.duration = `${(elapsedMs / 1000).toFixed(1)}s`;
-  delete session._activeBlockStart;
-  delete session._activeBlockIndex;
-
-  broadcast(session, {
-    type: 'block-end',
-    sessionId: session.id,
-    payload: { exit: activeBlock.exit, code, duration: activeBlock.duration },
-  });
-  saveSessions().catch((err) => console.error('[console] save failed:', err));
 }
 
 async function attachPty(session) {
@@ -208,58 +158,9 @@ async function attachPty(session) {
     setTimeout(() => session._pty && session._pty.write(session._initialStdin), 200);
     delete session._initialStdin;
   }
-  let buffer = '';
 
   session._pty.onData((data) => {
-    buffer += data;
-    buffer = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const rawLine of lines) {
-      const cleanLine = rawLine;
-      const sentinel = !session._isAgent && cleanLine.match(/::END::(-?\d+)/);
-      if (sentinel) {
-        finishActiveBlock(session, Number(sentinel[1]));
-        continue;
-      }
-
-      const parsed = parseAnsi(rawLine);
-      const trimmed = parsed.line.trim();
-      if (!session._isAgent) {
-        if (/echo\s+["']?::END::/i.test(trimmed)) {
-          log(session.id, 'suppressed line:', JSON.stringify(trimmed.slice(0, 80)));
-          continue;
-        }
-        if (!trimmed) continue;
-        if (/MINGW(32|64)\b/.test(trimmed)) {
-          log(session.id, 'suppressed line:', JSON.stringify(trimmed.slice(0, 80)));
-          continue;
-        }
-        if (/^\$\s*$/.test(trimmed)) {
-          log(session.id, 'suppressed line:', JSON.stringify(trimmed.slice(0, 80)));
-          continue;
-        }
-        if (session._activeBlockIndex !== undefined && session._activeBlockIndex !== null) {
-          const block = session.blocks[session._activeBlockIndex];
-          if (block && block.cmd) {
-            const cmd = block.cmd.trim();
-            if (trimmed === `$ ${cmd}` || trimmed.endsWith(`$ ${cmd}`)) {
-              log(session.id, 'suppressed line:', JSON.stringify(trimmed.slice(0, 80)));
-              continue;
-            }
-          }
-        }
-      }
-      log(session.id, 'data:', JSON.stringify(parsed.line.slice(0, 120)));
-      const activeBlock = session.blocks[session._activeBlockIndex];
-      if (activeBlock && activeBlock.exit === 'run' && parsed.line) {
-        activeBlock.out.push([parsed.ansiClass, parsed.line]);
-      }
-      if (parsed.line) {
-        broadcast(session, { type: 'data', sessionId: session.id, payload: parsed });
-      }
-    }
+    broadcast(session, { type: 'raw', sessionId: session.id, payload: String(data || '') });
   });
 
   session._pty.onExit(({ exitCode, signal }) => {
@@ -280,20 +181,6 @@ async function loadSessions() {
     sessions = [];
   }
 
-  // PTYs don't survive process restarts. Any block left in 'run' is orphaned
-  // — mark it as interrupted so the session isn't permanently locked by the
-  // 409 'command already running' guard.
-  for (const session of sessions) {
-    for (const block of session.blocks || []) {
-      if (block.exit === 'run') {
-        block.exit = 'err';
-        block.code = -1;
-        block.duration = block.duration || '—';
-        if (Array.isArray(block.out)) block.out.push(['ansi-dim', '[interrupted by server restart]']);
-      }
-    }
-  }
-
   for (const session of sessions) {
     try {
       await attachPty(session);
@@ -310,10 +197,8 @@ function ensureReady() {
 }
 
 function commandWithSentinel(session, text) {
-  if (session._isAgent) return `${text}\n`;
-  if (session._shellKind === 'cmd') return `${text}\r\necho ::END::%ERRORLEVEL%\r\n`;
-  if (session._shellKind === 'powershell') return `${text}\r\nWrite-Output "::END::$LASTEXITCODE"\r\n`;
-  return `${text}\necho "::END::$?"\n`;
+  if (session._shellKind === 'cmd') return `${text}\r\n`;
+  return `${text}\n`;
 }
 
 process.once('SIGINT', async () => {
@@ -343,7 +228,6 @@ module.exports.routes = {
       agent,
       cwd: opts.cwd || process.cwd(),
       activeTaskId: opts.task ? opts.task.id : null,
-      blocks: [],
       _listeners: [],
     };
 
@@ -377,52 +261,9 @@ module.exports.routes = {
     if (!session) return send(404, { error: 'Session not found' });
     if (!session._pty) return send(400, { error: session.error || 'PTY not active' });
     if (!text || !text.trim()) return send(400, { error: 'text required' });
-    if (session._isAgent) {
-      let block = session.blocks[session._activeBlockIndex];
-      if (!block || block.exit !== 'run') {
-        block = {
-          id: `b-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          stamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-          cmd: `${session.agent} session`,
-          kind: 'agent',
-          agentLabel: `${session.agent} - running`,
-          exit: 'run',
-          out: [],
-        };
-        session.blocks.push(block);
-        session._activeBlockIndex = session.blocks.length - 1;
-        session._activeBlockStart = Date.now();
-        broadcast(session, { type: 'block-start', sessionId, payload: block });
-      }
-      const userLine = `> ${text}`;
-      block.out.push(['ansi-dim', userLine]);
-      broadcast(session, { type: 'data', sessionId, payload: { ansiClass: 'ansi-dim', line: userLine } });
-      session._pty.write(`${text}\n`);
-      return send(200, { ok: true, blockId: session._activeBlockIndex, agent: true });
-    }
-    if (session.blocks.some((b) => b.exit === 'run')) {
-      return send(409, { error: 'A command is already running in this session' });
-    }
-
-    const block = {
-      id: `b-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      stamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      cmd: text,
-      exit: 'run',
-      out: [],
-    };
-    if (session.agent !== 'bash') {
-      block.kind = 'agent';
-      block.agentLabel = `${session.agent} - running`;
-    }
-
-    session.blocks.push(block);
-    session._activeBlockIndex = session.blocks.length - 1;
-    session._activeBlockStart = Date.now();
     log(sessionId, 'run cmd:', JSON.stringify(text));
-    broadcast(session, { type: 'block-start', sessionId, payload: block });
     session._pty.write(commandWithSentinel(session, text));
-    send(200, { ok: true, blockId: session._activeBlockIndex });
+    send(200, { ok: true });
   },
 
   'POST /api/console/session/input': async (req, res, send, body) => {
@@ -433,6 +274,20 @@ module.exports.routes = {
     if (!session._pty) return send(400, { error: session.error || 'PTY not active' });
     session._pty.write(String(data || ''));
     send(200, { ok: true });
+  },
+
+  'POST /api/console/session/resize': async (req, res, send, body) => {
+    await ensureReady();
+    const { id, cols, rows } = body || {};
+    const session = sessions.find((s) => s.id === id);
+    if (!session) return send(404, { error: 'Session not found' });
+    if (!session._pty) return send(400, { error: session.error || 'PTY not active' });
+    try {
+      session._pty.resize(Math.max(1, +cols || 80), Math.max(1, +rows || 24));
+      send(200, { ok: true });
+    } catch (err) {
+      send(500, { error: err.message });
+    }
   },
 
   'GET /api/console/session/stream': async (req, res) => {

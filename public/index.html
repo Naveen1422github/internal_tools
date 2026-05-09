@@ -11,6 +11,10 @@
     <link rel="stylesheet" href="styles-overlays.css">
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.5.0/css/xterm.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.5.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
     <script src="app.js"></script>
     <script>
         tailwind.config = {
@@ -433,55 +437,12 @@
                         <div class="term-grid flex-1 overflow-hidden" :class="splitWith ? 'split-2' : ''">
                             <template x-if="activeSession">
                                 <div class="term-pane flex flex-col relative transition-shadow" :data-session-id="activeSession.id" :style="`box-shadow: inset 0 0 0 1.5px ${cmdkMeta[activeSession.agent]?.color || '#94a3b8'}; border-radius: 6px; margin: 4px; overflow: hidden;`">
-                                    <div class="tp-body flex-1 overflow-y-auto p-4 font-mono text-sm bg-[#0d0f14]">
-                                        <template x-for="block in activeSession.blocks" :key="block.id">
-                                            <div class="term-block mb-4">
-                                                <div class="block-header flex justify-between text-xs text-gray-600 mb-1">
-                                                    <span x-text="block.cmd"></span>
-                                                    <span x-text="block.stamp"></span>
-                                                </div>
-                                                <div class="block-out">
-                                                    <template x-for="(line, i) in block.out" :key="i">
-                                                        <div :class="line[0]" x-text="line[1]"></div>
-                                                    </template>
-                                                </div>
-                                            </div>
-                                        </template>
-                                    </div>
-                                    <div class="tp-input border-t border-border p-2 bg-[#161b22] flex items-center gap-2">
-                                        <input class="w-full bg-transparent outline-none font-mono text-sm"
-                                               placeholder="Type command..."
-                                               @keydown.enter="submitCommand(activeSession.id, $event.target.value); $event.target.value = ''; historyIndex[activeSession.id] = null"
-                                               @keydown.up.prevent="historyPrev(activeSession.id, $event.target)"
-                                               @keydown.down.prevent="historyNext(activeSession.id, $event.target)"
-                                               @keydown="if (!['ArrowUp','ArrowDown'].includes($event.key)) historyIndex[activeSession.id] = null"
-                                               @keydown.ctrl.c="if ((activeSession?.blocks || []).some(b => b.exit === 'run')) { $event.preventDefault(); killCurrentBlock(activeSession.id); }">
-                                        <button
-                                            x-show="(activeSession?.blocks || []).some(b => b.exit === 'run')"
-                                            class="px-2 py-1 rounded border border-red-400/30 text-red-300 text-xs hover:bg-red-500/10 hover:border-red-400/60"
-                                            @click="killCurrentBlock(activeSession.id)">
-                                            Kill
-                                        </button>
-                                    </div>
+                                    <div class="xt-host w-full h-full bg-[#0d0f14]" :data-session-id="activeSession.id" x-init="mountXterm($el, activeSession.id)"></div>
                                 </div>
                             </template>
                             <template x-if="splitSession">
                                 <div class="term-pane flex flex-col relative transition-shadow" :data-session-id="splitSession.id" :style="`box-shadow: inset 0 0 0 1px ${cmdkMeta[splitSession.agent]?.color || '#94a3b8'}80; border-radius: 6px; margin: 4px; overflow: hidden; opacity: 0.8;`">
-                                    <!-- Similar body/input for split pane -->
-                                    <div class="tp-body flex-1 overflow-y-auto p-4 font-mono text-sm bg-[#0d0f14]">
-                                        <template x-for="block in splitSession.blocks" :key="block.id">
-                                            <div class="term-block mb-4">
-                                                <div class="block-header flex justify-between text-xs text-gray-600 mb-1">
-                                                    <span x-text="block.cmd"></span>
-                                                </div>
-                                                <div class="block-out">
-                                                    <template x-for="(line, i) in block.out" :key="i">
-                                                        <div x-text="line[1]"></div>
-                                                    </template>
-                                                </div>
-                                            </div>
-                                        </template>
-                                    </div>
+                                    <div class="xt-host w-full h-full bg-[#0d0f14]" :data-session-id="splitSession.id" x-init="mountXterm($el, splitSession.id)"></div>
                                 </div>
                             </template>
                         </div>

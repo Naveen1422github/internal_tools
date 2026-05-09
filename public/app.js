@@ -9,8 +9,7 @@
         sessions: [],
         sessionStreams: {},
         sessionStreamRetries: {},
-        commandHistory: {},
-        historyIndex: {},
+        xterms: {},
         activeSessionId: null,
         splitWith: null,
         tasks: [],
@@ -223,15 +222,87 @@
         },
 
         // --- CONSOLE ---
+        mountXterm(host, sessionId) {
+            if (!host || !sessionId || typeof window.Terminal !== 'function') return;
+            if (this.xterms[sessionId]) {
+                try { this.xterms[sessionId].ro.disconnect(); } catch {}
+                try { this.xterms[sessionId].term.dispose(); } catch {}
+                delete this.xterms[sessionId];
+            }
+
+            const term = new window.Terminal({
+                cursorBlink: true,
+                fontFamily: '"Cascadia Code", "Fira Code", Menlo, Monaco, Consolas, monospace',
+                fontSize: 13,
+                theme: {
+                    background: '#0d0f14',
+                    foreground: '#cccccc',
+                    cursor: '#cccccc',
+                    selection: 'rgba(88, 166, 255, 0.3)'
+                },
+                scrollback: 5000,
+                convertEol: false,
+            });
+            const FitAddonCtor = (window.FitAddon && window.FitAddon.FitAddon) || window.FitAddon;
+            const fit = FitAddonCtor ? new FitAddonCtor() : null;
+            if (fit) term.loadAddon(fit);
+
+            term.open(host);
+            if (fit) {
+                try { fit.fit(); } catch {}
+                const { cols, rows } = term;
+                fetch('/api/console/session/resize', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: sessionId, cols, rows }),
+                }).catch(() => {});
+            }
+
+            term.onData((data) => {
+                fetch('/api/console/session/input', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: sessionId, data }),
+                }).catch(() => {});
+            });
+
+            const ro = new ResizeObserver(() => {
+                if (!fit) return;
+                try { fit.fit(); } catch {}
+                const { cols, rows } = term;
+                fetch('/api/console/session/resize', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: sessionId, cols, rows }),
+                }).catch(() => {});
+            });
+            ro.observe(host);
+
+            this.xterms[sessionId] = { term, fit, host, ro };
+            this.ensureSessionStream(sessionId);
+
+            const session = this.sessions.find((s) => s.id === sessionId);
+            if (session?.error) term.write(`\x1b[31m${session.error}\x1b[0m\r\n`);
+        },
+        disposeXterm(sessionId) {
+            const xt = this.xterms[sessionId];
+            if (!xt) return;
+            try { xt.ro.disconnect(); } catch {}
+            try { xt.term.dispose(); } catch {}
+            delete this.xterms[sessionId];
+        },
         async loadConsoleSessions() {
             const data = await this.api('GET', '/api/console/sessions');
+            const incomingIds = new Set((data.sessions || []).map((s) => s.id));
+            Object.keys(this.xterms).forEach((id) => {
+                if (!incomingIds.has(id)) this.disposeXterm(id);
+            });
             this.sessions = data.sessions || [];
             for (const session of this.sessions) {
                 this.ensureSessionStream(session.id);
-                const key = `cmdHistory:${session.id}`;
-                const saved = localStorage.getItem(key);
-                this.commandHistory[session.id] = saved ? JSON.parse(saved) : [];
-                this.historyIndex[session.id] = null;
+            }
+            if (this.activeSessionId && !this.sessions.find((s) => s.id === this.activeSessionId)) {
+                this.activeSessionId = null;
             }
             if (this.sessions.length && !this.activeSessionId) {
                 this.activeSessionId = this.sessions[0].id;
@@ -333,13 +404,12 @@
             if (data.ok) {
                 this.sessions.push(data.session);
                 this.ensureSessionStream(data.session.id);
-                this.commandHistory[data.session.id] = this.commandHistory[data.session.id] || [];
-                this.historyIndex[data.session.id] = null;
                 this.activeSessionId = data.session.id;
                 this.focusSessionInput(data.session.id);
             }
         },
         async closeSession(id) {
+            this.disposeXterm(id);
             await this.api('POST', '/api/console/session/close', { id });
             if (this.sessionStreams[id]) {
                 this.sessionStreams[id].close();
@@ -369,13 +439,6 @@
             });
             this.sessionStreamReady[sessionId] = ready;
 
-            const scrollToBottom = () => {
-                this.$nextTick(() => {
-                    const el = document.querySelector(`[data-session-id="${sessionId}"] .tp-body`);
-                    if (el) el.scrollTop = el.scrollHeight;
-                });
-            };
-
             es.onopen = () => {
                 this.sessionStreamRetries[sessionId] = 0;
             };
@@ -392,40 +455,16 @@
                 const current = this.sessions.find((s) => s.id === sessionId);
                 if (!current) return;
 
-                if (data.type === 'block-start') {
-                    current.blocks = current.blocks || [];
-                    current.blocks.push(data.payload);
-                    current._currentBlockIndex = current.blocks.length - 1;
-                    scrollToBottom();
-                    return;
-                }
-
-                if (data.type === 'data') {
-                    const idx = current._currentBlockIndex;
-                    const block = Number.isInteger(idx) ? current.blocks[idx] : null;
-                    if (block && block.exit === 'run') {
-                        block.out = block.out || [];
-                        block.out.push([data.payload?.ansiClass || '', data.payload?.line || '']);
-                        scrollToBottom();
-                    }
-                    return;
-                }
-
-                if (data.type === 'block-end') {
-                    const idx = current._currentBlockIndex;
-                    const block = Number.isInteger(idx) ? current.blocks[idx] : null;
-                    if (block) {
-                        block.exit = data.payload?.exit || block.exit;
-                        block.code = data.payload?.code;
-                        block.duration = data.payload?.duration || block.duration;
-                    }
-                    delete current._currentBlockIndex;
-                    scrollToBottom();
+                if (data.type === 'raw') {
+                    const xt = this.xterms[sessionId];
+                    if (xt) xt.term.write(data.payload || '');
                     return;
                 }
 
                 if (data.type === 'exit') {
                     current.error = `Session exited (code ${data.payload?.exitCode ?? 'unknown'})`;
+                    const xt = this.xterms[sessionId];
+                    if (xt) xt.term.write(`\x1b[31m${current.error}\x1b[0m\r\n`);
                 }
             };
 
@@ -553,7 +592,7 @@
             } else if (item.kind === 'cmd') {
                 if (item.label === 'Toggle Layout') this.consoleLayout = this.consoleLayout === 'balanced' ? 'terminal-first' : 'balanced';
                 if (item.label === 'Toggle Theme') this.consoleTheme = this.consoleTheme === 'warp' ? 'vscode' : 'warp';
-                if (item.label === 'Clear Terminals') this.sessions.forEach(s => s.blocks = []);
+                if (item.label === 'Clear Terminals') Object.values(this.xterms).forEach((xt) => xt.term.clear());
                 this.applyConsoleTheme();
                 this.saveTweaks();
             }
@@ -599,77 +638,16 @@
         injectTaskIntoSession(sessionId, task) {
             const session = this.sessions.find(s => s.id === sessionId);
             if (session) {
-                const el = document.querySelector(`.term-pane[data-session-id="${sessionId}"] .tp-input input`);
-                if (el) { el.value = `Analyze task @${task.id}: ${task.title}`; }
+                const xt = this.xterms[sessionId];
+                if (xt) xt.term.paste(`Analyze task @${task.id}: ${task.title}\n`);
                 this.activeSessionId = sessionId;
                 this.focusSessionInput(sessionId);
             }
         },
         focusSessionInput(sessionId) {
             this.$nextTick(() => {
-                const el = document.querySelector(`.term-pane[data-session-id="${sessionId}"] .tp-input input`);
-                if (el) el.focus();
+                this.xterms[sessionId]?.term.focus();
             });
-        },
-        historyPrev(sessionId, inputEl) {
-            const history = this.commandHistory[sessionId] || [];
-            if (!history.length) return;
-            const current = this.historyIndex[sessionId];
-            if (current === null || current === undefined) {
-                this.historyIndex[sessionId] = history.length - 1;
-            } else {
-                this.historyIndex[sessionId] = Math.max(0, current - 1);
-            }
-            inputEl.value = history[this.historyIndex[sessionId]] || '';
-        },
-        historyNext(sessionId, inputEl) {
-            const history = this.commandHistory[sessionId] || [];
-            if (!history.length) return;
-            const current = this.historyIndex[sessionId];
-            if (current === null || current === undefined) return;
-            const next = Math.min(history.length, current + 1);
-            if (next >= history.length) {
-                this.historyIndex[sessionId] = null;
-                inputEl.value = '';
-                return;
-            }
-            this.historyIndex[sessionId] = next;
-            inputEl.value = history[next] || '';
-        },
-        async killCurrentBlock(sessionId) {
-            const session = this.sessions.find(s => s.id === sessionId);
-            if (!session) return;
-            const running = (session.blocks || []).some(b => b.exit === 'run');
-            if (!running) return;
-            await this.api('POST', '/api/console/session/input', { id: sessionId, data: '\x03' });
-        },
-
-        async submitCommand(sessionId, text) {
-            if (!text.trim()) return;
-            const cmd = text.trim();
-            this.commandHistory[sessionId] = this.commandHistory[sessionId] || [];
-            this.commandHistory[sessionId].push(cmd);
-            if (this.commandHistory[sessionId].length > 200) this.commandHistory[sessionId].shift();
-            localStorage.setItem(`cmdHistory:${sessionId}`, JSON.stringify(this.commandHistory[sessionId]));
-            const session = this.sessions.find(s => s.id === sessionId);
-            if (!session) return;
-            await this.ensureSessionStream(sessionId);
-            try {
-                console.debug('[cmd]', sessionId, '→', cmd);
-                const res = await fetch('/api/console/command/run', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ sessionId, text, autoYes: this.autoYes }),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (res.status === 409) {
-                    this.showToast('Command already running', 'err');
-                    return;
-                }
-                if (!res.ok) throw new Error(data.error || data.stderr || res.statusText);
-            } catch (err) {
-                this.showToast(err.message, 'err');
-            }
         },
         get filteredConsoleTasks() {
             return this.tasks.filter(t => {
