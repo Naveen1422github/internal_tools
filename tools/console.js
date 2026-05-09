@@ -168,10 +168,10 @@ function attachPty(session) {
 async function loadSessions() {
   await ensureDataDir();
   try {
-    const raw = await fs.readFile(SESSIONS_FILE, 'utf8');
-    sessions = JSON.parse(raw).map((session) => ({ ...session, _listeners: [] }));
+    const raw = (await fs.readFile(SESSIONS_FILE, 'utf8')).trim();
+    sessions = raw ? JSON.parse(raw).map((session) => ({ ...session, _listeners: [] })) : [];
   } catch (err) {
-    if (err.code !== 'ENOENT') console.error('[console] load failed:', err);
+    if (err.code !== 'ENOENT') console.error('[console] load failed (resetting sessions):', err.message);
     sessions = [];
   }
 
