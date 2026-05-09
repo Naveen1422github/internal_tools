@@ -254,6 +254,7 @@ module.exports.routes = {
     }
 
     const block = {
+      id: `b-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       stamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       cmd: text,
       exit: 'run',

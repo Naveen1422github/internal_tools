@@ -1,4 +1,4 @@
-function consoleApp() {
+﻿function consoleApp() {
     return {
         tab: 'profiles',
         subTab: 'entries', // For collab view: entries | tasks | modules
@@ -7,6 +7,8 @@ function consoleApp() {
         
         // Console Data
         sessions: [],
+        sessionStreams: {},
+        sessionStreamRetries: {},
         activeSessionId: null,
         splitWith: null,
         tasks: [],
@@ -221,6 +223,7 @@ function consoleApp() {
         async loadConsoleSessions() {
             const data = await this.api('GET', '/api/console/sessions');
             this.sessions = data.sessions || [];
+            for (const session of this.sessions) this.ensureSessionStream(session.id);
             if (this.sessions.length && !this.activeSessionId) {
                 this.activeSessionId = this.sessions[0].id;
             }
@@ -233,16 +236,103 @@ function consoleApp() {
             const data = await this.api('POST', '/api/console/session/spawn', { agent, opts });
             if (data.ok) {
                 this.sessions.push(data.session);
+                this.ensureSessionStream(data.session.id);
                 this.activeSessionId = data.session.id;
             }
         },
         async closeSession(id) {
             await this.api('POST', '/api/console/session/close', { id });
+            if (this.sessionStreams[id]) {
+                this.sessionStreams[id].close();
+                delete this.sessionStreams[id];
+            }
+            delete this.sessionStreamRetries[id];
             this.sessions = this.sessions.filter(s => s.id !== id);
             if (this.activeSessionId === id && this.sessions.length) {
                 this.activeSessionId = this.sessions[0].id;
             }
             if (this.splitWith === id) this.splitWith = null;
+        },
+        ensureSessionStream(sessionId) {
+            if (this.sessionStreams[sessionId]) return;
+            const session = this.sessions.find((s) => s.id === sessionId);
+            if (!session) return;
+
+            const es = new EventSource(`/api/console/session/stream?id=${sessionId}`);
+            this.sessionStreams[sessionId] = es;
+            this.sessionStreamRetries[sessionId] = this.sessionStreamRetries[sessionId] || 0;
+
+            const scrollToBottom = () => {
+                this.$nextTick(() => {
+                    const el = document.querySelector(`[data-session-id="${sessionId}"] .tp-body`);
+                    if (el) el.scrollTop = el.scrollHeight;
+                });
+            };
+
+            es.onopen = () => {
+                this.sessionStreamRetries[sessionId] = 0;
+            };
+
+            es.onmessage = (e) => {
+                let data;
+                try {
+                    data = JSON.parse(e.data);
+                } catch {
+                    return;
+                }
+
+                const current = this.sessions.find((s) => s.id === sessionId);
+                if (!current) return;
+
+                if (data.type === 'block-start') {
+                    current.blocks = current.blocks || [];
+                    current.blocks.push(data.payload);
+                    current._currentBlockIndex = current.blocks.length - 1;
+                    scrollToBottom();
+                    return;
+                }
+
+                if (data.type === 'data') {
+                    const idx = current._currentBlockIndex;
+                    const block = Number.isInteger(idx) ? current.blocks[idx] : null;
+                    if (block && block.exit === 'run') {
+                        block.out = block.out || [];
+                        block.out.push([data.payload?.ansiClass || '', data.payload?.line || '']);
+                        scrollToBottom();
+                    }
+                    return;
+                }
+
+                if (data.type === 'block-end') {
+                    const idx = current._currentBlockIndex;
+                    const block = Number.isInteger(idx) ? current.blocks[idx] : null;
+                    if (block) {
+                        block.exit = data.payload?.exit || block.exit;
+                        block.code = data.payload?.code;
+                        block.duration = data.payload?.duration || block.duration;
+                    }
+                    delete current._currentBlockIndex;
+                    scrollToBottom();
+                    return;
+                }
+
+                if (data.type === 'exit') {
+                    current.error = `Session exited (code ${data.payload?.exitCode ?? 'unknown'})`;
+                }
+            };
+
+            es.onerror = () => {
+                es.close();
+                if (this.sessionStreams[sessionId] === es) delete this.sessionStreams[sessionId];
+                if (!this.sessions.find((s) => s.id === sessionId)) return;
+
+                const retries = (this.sessionStreamRetries[sessionId] || 0) + 1;
+                this.sessionStreamRetries[sessionId] = retries;
+                const delay = Math.min(30000, 1000 * Math.pow(2, retries));
+                setTimeout(() => {
+                    if (this.sessions.find((s) => s.id === sessionId)) this.ensureSessionStream(sessionId);
+                }, delay);
+            };
         },
 
         // --- Cmd-K Palette ---
@@ -404,68 +494,25 @@ function consoleApp() {
             }
         },
 
-                        async submitCommand(sessionId, text) {
+        async submitCommand(sessionId, text) {
             if (!text.trim()) return;
             const session = this.sessions.find(s => s.id === sessionId);
             if (!session) return;
-
-            // Determine if we want to run auto-yes
-            const stamp = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
-            const tempBlock = { stamp, duration: '—', exit: 'run', cmd: text, out: [] };
-            session.blocks.push(tempBlock);
-            const blockIndex = session.blocks.length - 1;
-
-            const scrollToBottom = () => {
-                // Ensure Alpine has ticked before selecting
-                this.$nextTick(() => {
-                    const el = document.querySelector(`[data-session-id="${sessionId}"] .tp-body`);
-                    if (el) el.scrollTop = el.scrollHeight;
-                });
-            };
-            scrollToBottom();
-
-            // We use standard fetch fallback per requirements if SSE 404s, but let's try SSE first.
-            // Using standard fetch first then POST fallback
+            this.ensureSessionStream(sessionId);
             try {
-                // T1 streaming endpoint
-                const url = `/api/console/session/stream?id=${sessionId}&cmd=${encodeURIComponent(text)}&autoYes=${this.autoYes}`;
-                const es = new EventSource(url);
-
-                es.onmessage = (e) => {
-                    const data = JSON.parse(e.data);
-                    if (data.event === 'data') {
-                        // Append to the last block
-                        session.blocks[blockIndex].out.push(['', data.text]);
-                        scrollToBottom();
-                    } else if (data.event === 'block-end') {
-                        session.blocks[blockIndex].exit = data.exit || 'ok';
-                        session.blocks[blockIndex].duration = data.duration || '—';
-                        if (data.out) session.blocks[blockIndex].out = data.out;
-                        es.close();
-                        scrollToBottom();
-                    }
-                };
-
-                es.onerror = async (e) => {
-                    es.close();
-                    // Fallback to legacy
-                    session.blocks[blockIndex].exit = 'error';
-                    session.blocks[blockIndex].out = [['err', 'Streaming failed, retrying legacy fallback...']];
-                    const data = await this.api('POST', '/api/console/command/run', { sessionId, text, autoYes: this.autoYes });
-                    if (data.ok) {
-                        session.blocks[blockIndex] = data.block;
-                        setTimeout(scrollToBottom, 50);
-                    }
-                };
-            } catch (err) {
-                // Fallback to legacy POST if EventSource fails entirely before connecting
-                session.blocks[blockIndex].exit = 'error';
-                session.blocks[blockIndex].out = [['err', 'Streaming failed, retrying legacy fallback...']];
-                const data = await this.api('POST', '/api/console/command/run', { sessionId, text, autoYes: this.autoYes });
-                if (data.ok) {
-                    session.blocks[blockIndex] = data.block;
-                    setTimeout(scrollToBottom, 50);
+                const res = await fetch('/api/console/command/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionId, text, autoYes: this.autoYes }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (res.status === 409) {
+                    this.showToast('Command already running', 'err');
+                    return;
                 }
+                if (!res.ok) throw new Error(data.error || data.stderr || res.statusText);
+            } catch (err) {
+                this.showToast(err.message, 'err');
             }
         },
         get filteredConsoleTasks() {
@@ -729,3 +776,4 @@ function consoleApp() {
         }
     };
 }
+

@@ -411,14 +411,14 @@
                             <template x-if="activeSession">
                                 <div class="term-pane flex flex-col relative transition-shadow" :data-session-id="activeSession.id" :style="`box-shadow: inset 0 0 0 1.5px ${cmdkMeta[activeSession.agent]?.color || '#94a3b8'}; border-radius: 6px; margin: 4px; overflow: hidden;`">
                                     <div class="tp-body flex-1 overflow-y-auto p-4 font-mono text-sm bg-[#0d0f14]">
-                                        <template x-for="block in activeSession.blocks" :key="block.stamp + block.cmd">
+                                        <template x-for="block in activeSession.blocks" :key="block.id">
                                             <div class="term-block mb-4">
                                                 <div class="block-header flex justify-between text-xs text-gray-600 mb-1">
                                                     <span x-text="block.cmd"></span>
                                                     <span x-text="block.stamp"></span>
                                                 </div>
                                                 <div class="block-out">
-                                                    <template x-for="line in block.out" :key="line[1]">
+                                                    <template x-for="(line, i) in block.out" :key="i">
                                                         <div :class="line[0]" x-text="line[1]"></div>
                                                     </template>
                                                 </div>
@@ -436,13 +436,13 @@
                                 <div class="term-pane flex flex-col relative transition-shadow" :data-session-id="splitSession.id" :style="`box-shadow: inset 0 0 0 1px ${cmdkMeta[splitSession.agent]?.color || '#94a3b8'}80; border-radius: 6px; margin: 4px; overflow: hidden; opacity: 0.8;`">
                                     <!-- Similar body/input for split pane -->
                                     <div class="tp-body flex-1 overflow-y-auto p-4 font-mono text-sm bg-[#0d0f14]">
-                                        <template x-for="block in splitSession.blocks" :key="block.stamp + block.cmd">
+                                        <template x-for="block in splitSession.blocks" :key="block.id">
                                             <div class="term-block mb-4">
                                                 <div class="block-header flex justify-between text-xs text-gray-600 mb-1">
                                                     <span x-text="block.cmd"></span>
                                                 </div>
                                                 <div class="block-out">
-                                                    <template x-for="line in block.out" :key="line[1]">
+                                                    <template x-for="(line, i) in block.out" :key="i">
                                                         <div x-text="line[1]"></div>
                                                     </template>
                                                 </div>
