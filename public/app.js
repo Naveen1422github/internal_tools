@@ -9,6 +9,8 @@
         sessions: [],
         sessionStreams: {},
         sessionStreamRetries: {},
+        commandHistory: {},
+        historyIndex: {},
         activeSessionId: null,
         splitWith: null,
         tasks: [],
@@ -224,9 +226,16 @@
         async loadConsoleSessions() {
             const data = await this.api('GET', '/api/console/sessions');
             this.sessions = data.sessions || [];
-            for (const session of this.sessions) this.ensureSessionStream(session.id);
+            for (const session of this.sessions) {
+                this.ensureSessionStream(session.id);
+                const key = `cmdHistory:${session.id}`;
+                const saved = localStorage.getItem(key);
+                this.commandHistory[session.id] = saved ? JSON.parse(saved) : [];
+                this.historyIndex[session.id] = null;
+            }
             if (this.sessions.length && !this.activeSessionId) {
                 this.activeSessionId = this.sessions[0].id;
+                this.focusSessionInput(this.sessions[0].id);
             }
         },
         async loadConsoleTasks() {
@@ -324,7 +333,10 @@
             if (data.ok) {
                 this.sessions.push(data.session);
                 this.ensureSessionStream(data.session.id);
+                this.commandHistory[data.session.id] = this.commandHistory[data.session.id] || [];
+                this.historyIndex[data.session.id] = null;
                 this.activeSessionId = data.session.id;
+                this.focusSessionInput(data.session.id);
             }
         },
         async closeSession(id) {
@@ -337,6 +349,7 @@
             this.sessions = this.sessions.filter(s => s.id !== id);
             if (this.activeSessionId === id && this.sessions.length) {
                 this.activeSessionId = this.sessions[0].id;
+                this.focusSessionInput(this.sessions[0].id);
             }
             if (this.splitWith === id) this.splitWith = null;
         },
@@ -523,6 +536,7 @@
             } else if (item.kind === 'focus') {
                 this.activeSessionId = item.sessionId;
                 this.activitySection = 'terminals';
+                this.focusSessionInput(item.sessionId);
             } else if (item.kind === 'task') {
                 this.selectedTaskId = item.task.id;
                 this.showTaskDetail = true;
@@ -575,14 +589,58 @@
         injectTaskIntoSession(sessionId, task) {
             const session = this.sessions.find(s => s.id === sessionId);
             if (session) {
-                const el = document.querySelector(`.term-pane[data-session-id="${sessionId}"] .tp-input`);
+                const el = document.querySelector(`.term-pane[data-session-id="${sessionId}"] .tp-input input`);
                 if (el) { el.value = `Analyze task @${task.id}: ${task.title}`; }
                 this.activeSessionId = sessionId;
+                this.focusSessionInput(sessionId);
             }
+        },
+        focusSessionInput(sessionId) {
+            this.$nextTick(() => {
+                const el = document.querySelector(`.term-pane[data-session-id="${sessionId}"] .tp-input input`);
+                if (el) el.focus();
+            });
+        },
+        historyPrev(sessionId, inputEl) {
+            const history = this.commandHistory[sessionId] || [];
+            if (!history.length) return;
+            const current = this.historyIndex[sessionId];
+            if (current === null || current === undefined) {
+                this.historyIndex[sessionId] = history.length - 1;
+            } else {
+                this.historyIndex[sessionId] = Math.max(0, current - 1);
+            }
+            inputEl.value = history[this.historyIndex[sessionId]] || '';
+        },
+        historyNext(sessionId, inputEl) {
+            const history = this.commandHistory[sessionId] || [];
+            if (!history.length) return;
+            const current = this.historyIndex[sessionId];
+            if (current === null || current === undefined) return;
+            const next = Math.min(history.length, current + 1);
+            if (next >= history.length) {
+                this.historyIndex[sessionId] = null;
+                inputEl.value = '';
+                return;
+            }
+            this.historyIndex[sessionId] = next;
+            inputEl.value = history[next] || '';
+        },
+        async killCurrentBlock(sessionId) {
+            const session = this.sessions.find(s => s.id === sessionId);
+            if (!session) return;
+            const running = (session.blocks || []).some(b => b.exit === 'run');
+            if (!running) return;
+            await this.api('POST', '/api/console/session/input', { id: sessionId, data: '\x03' });
         },
 
         async submitCommand(sessionId, text) {
             if (!text.trim()) return;
+            const cmd = text.trim();
+            this.commandHistory[sessionId] = this.commandHistory[sessionId] || [];
+            this.commandHistory[sessionId].push(cmd);
+            if (this.commandHistory[sessionId].length > 200) this.commandHistory[sessionId].shift();
+            localStorage.setItem(`cmdHistory:${sessionId}`, JSON.stringify(this.commandHistory[sessionId]));
             const session = this.sessions.find(s => s.id === sessionId);
             if (!session) return;
             this.ensureSessionStream(sessionId);

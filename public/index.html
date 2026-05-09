@@ -370,13 +370,13 @@
                             <div class="sb-header px-3 py-2 border-b border-border bg-panel text-xs text-gray-500 font-bold uppercase tracking-wider">Sessions</div>
                             <div class="flex-1 overflow-y-auto p-2">
                                 <template x-for="(s, index) in sessions" :key="s.id">
-                                    <div class="sx-instance group p-2 mb-1 rounded hover:bg-panel cursor-pointer flex flex-col gap-1 border border-transparent hover:border-border" :class="activeSessionId === s.id ? 'bg-[#161b22] border-border' : ''" @click="activeSessionId = s.id">
+                                    <div class="sx-instance group p-2 mb-1 rounded hover:bg-panel cursor-pointer flex flex-col gap-1 border border-transparent hover:border-border" :class="activeSessionId === s.id ? 'bg-[#161b22] border-border' : ''" @click="activeSessionId = s.id; focusSessionInput(s.id)">
                                         <div class="flex items-center justify-between">
                                             <div class="flex items-center gap-2">
                                                 <span class="agent-letter w-4 h-4 flex items-center justify-center rounded text-[9px] font-bold text-white" :style="`background: ${cmdkMeta[s.agent.toLowerCase()]?.color || '#94a3b8'}`" x-text="cmdkMeta[s.agent.toLowerCase()]?.letter || s.agent.charAt(0).toUpperCase()"></span>
                                                 <span class="text-xs text-gray-300 font-mono" x-text="s.name"></span>
                                             </div>
-                                            <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <div class="flex gap-1 opacity-60 hover:opacity-100">
                                                 <button class="p-1 hover:text-white" @click.stop="splitWith = (splitWith ? null : s.id)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="12" height="12"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/></svg></button>
                                                 <button class="p-1 hover:text-red-400" @click.stop="closeSession(s.id)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M6 6l12 12M6 18L18 6"/></svg></button>
                                             </div>
@@ -384,7 +384,7 @@
                                         <div class="sx-i-meta flex items-center justify-between text-[10px] text-gray-500 font-mono">
                                             <div class="flex gap-2">
                                                 <span class="sx-i-num" x-text="'Î»#' + (index + 1)"></span>
-                                                <span class="sx-i-branch" x-text="workspace.branch || '—'"></span>
+                                                <span class="sx-i-branch" x-text="workspace.branch || 'ï¿½'"></span>
                                             </div>
                                             <div class="flex gap-2">
                                                 <span class="sx-diff--add text-green-400" x-text="'+' + (workspace.diff?.add || 0)"></span>
@@ -401,13 +401,28 @@
                     <main class="canvas flex flex-col">
                         <div class="term-tabs">
                             <template x-for="s in sessions" :key="s.id">
-                                <button class="term-tab" :class="(activeSessionId === s.id ? 'active ' : '') + (dragTargetTab === s.id ? 'drag-target ' : '')" @click="activeSessionId = s.id" @dragover.prevent="if(dragTask) dragTargetTab = s.id" @dragleave="dragTargetTab = null" @drop.prevent="if(dragTask) { injectTaskIntoSession(s.id, dragTask); dragTargetTab = null; dragTask = null; }">
+                                <button class="term-tab" :class="(activeSessionId === s.id ? 'active ' : '') + (dragTargetTab === s.id ? 'drag-target ' : '')" @click="activeSessionId = s.id; focusSessionInput(s.id)" @dragover.prevent="if(dragTask) dragTargetTab = s.id" @dragleave="dragTargetTab = null" @drop.prevent="if(dragTask) { injectTaskIntoSession(s.id, dragTask); dragTargetTab = null; dragTask = null; }">
                                     <span class="agent-pill" :data-agent="s.agent" x-text="s.agent"></span>
                                     <span class="name" x-text="s.name"></span>
                                     <span class="close" @click.stop="closeSession(s.id)">âœ•</span>
                                 </button>
                             </template>
-                            <button class="new-tab" @click="spawnSession('bash')">+ New</button>
+                            <div class="relative" x-data="{ open: false }">
+                                <button class="new-tab" @click="open = !open" @click.away="open = false">+ New â–¾</button>
+                                <div x-show="open" x-cloak class="absolute top-full left-0 mt-1 w-44 bg-panel border border-border rounded-lg shadow-xl z-50 py-1">
+                                    <template x-for="agent in [
+                                        {id:'bash', label:'Bash shell', color:'#94a3b8', letter:'$'},
+                                        {id:'claude', label:'Claude', color:'#fb923c', letter:'C'},
+                                        {id:'codex', label:'Codex', color:'#38bdf8', letter:'X'},
+                                        {id:'gemini', label:'Gemini', color:'#a78bfa', letter:'G'}
+                                    ]" :key="agent.id">
+                                        <button @click="spawnSession(agent.id); open = false" class="w-full text-left px-3 py-2 text-xs flex items-center gap-2 hover:bg-panel-light">
+                                            <span class="agent-letter w-4 h-4 flex items-center justify-center rounded text-[9px] font-bold text-white" :style="`background: ${agent.color}`" x-text="agent.letter"></span>
+                                            <span x-text="agent.label"></span>
+                                        </button>
+                                    </template>
+                                </div>
+                            </div>
                             <div class="right-actions ml-auto flex">
                                 <button class="icon-btn" @click="splitWith = (splitWith ? null : sessions.find(s => s.id !== activeSessionId)?.id)">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
@@ -433,10 +448,20 @@
                                             </div>
                                         </template>
                                     </div>
-                                    <div class="tp-input border-t border-border p-2 bg-[#161b22]">
-                                        <input class="w-full bg-transparent outline-none font-mono text-sm" 
-                                               placeholder="Type command..." 
-                                               @keydown.enter="submitCommand(activeSession.id, $event.target.value); $event.target.value = ''">
+                                    <div class="tp-input border-t border-border p-2 bg-[#161b22] flex items-center gap-2">
+                                        <input class="w-full bg-transparent outline-none font-mono text-sm"
+                                               placeholder="Type command..."
+                                               @keydown.enter="submitCommand(activeSession.id, $event.target.value); $event.target.value = ''; historyIndex[activeSession.id] = null"
+                                               @keydown.up.prevent="historyPrev(activeSession.id, $event.target)"
+                                               @keydown.down.prevent="historyNext(activeSession.id, $event.target)"
+                                               @keydown="if (!['ArrowUp','ArrowDown'].includes($event.key)) historyIndex[activeSession.id] = null"
+                                               @keydown.ctrl.c="if ((activeSession?.blocks || []).some(b => b.exit === 'run')) { $event.preventDefault(); killCurrentBlock(activeSession.id); }">
+                                        <button
+                                            x-show="(activeSession?.blocks || []).some(b => b.exit === 'run')"
+                                            class="px-2 py-1 rounded border border-red-400/30 text-red-300 text-xs hover:bg-red-500/10 hover:border-red-400/60"
+                                            @click="killCurrentBlock(activeSession.id)">
+                                            Kill
+                                        </button>
                                     </div>
                                 </div>
                             </template>
@@ -484,7 +509,7 @@
 
                     <template x-if="activeSession && activitySection !== 'tasks'">
                         <div class="flex items-center w-full">
-                            <span class="mr-4 text-gray-500" x-text="workspace.branch || '—'"></span>
+                            <span class="mr-4 text-gray-500" x-text="workspace.branch || 'ï¿½'"></span>
                             <span class="mr-4 text-gray-500" x-text="activeSession?.cwd"></span>
                             <div class="spacer flex-1"></div>
                             <span class="mr-4 text-gray-500" x-text="sessions.length + ' sessions'"></span>
