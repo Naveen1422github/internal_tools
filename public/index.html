@@ -434,14 +434,16 @@
                         </div>
 
                         <div class="term-grid flex-1 overflow-hidden" :class="splitWith ? 'split-2' : ''">
-                            <template x-if="activeSession">
-                                <div class="term-pane flex flex-col relative transition-shadow" :data-session-id="activeSession.id" :style="`box-shadow: inset 0 0 0 1.5px ${cmdkMeta[activeSession.agent]?.color || '#94a3b8'}; border-radius: 6px; margin: 4px; overflow: hidden;`">
-                                    <div class="xt-host w-full h-full bg-[#0d0f14]" :data-session-id="activeSession.id" x-init="mountXterm($el, activeSession.id)"></div>
-                                </div>
-                            </template>
-                            <template x-if="splitSession">
-                                <div class="term-pane flex flex-col relative transition-shadow" :data-session-id="splitSession.id" :style="`box-shadow: inset 0 0 0 1px ${cmdkMeta[splitSession.agent]?.color || '#94a3b8'}80; border-radius: 6px; margin: 4px; overflow: hidden; opacity: 0.8;`">
-                                    <div class="xt-host w-full h-full bg-[#0d0f14]" :data-session-id="splitSession.id" x-init="mountXterm($el, splitSession.id)"></div>
+                            <template x-for="s in sessions" :key="s.id">
+                                <div class="term-pane flex flex-col relative transition-shadow"
+                                     x-show="s.id === activeSessionId || s.id === splitWith"
+                                     :data-session-id="s.id"
+                                     :style="`
+                                       box-shadow: inset 0 0 0 ${s.id === activeSessionId ? '1.5px' : '1px'} ${cmdkMeta[s.agent]?.color || '#94a3b8'}${s.id === activeSessionId ? '' : '80'};
+                                       border-radius: 6px; margin: 4px; overflow: hidden;
+                                       ${s.id === splitWith && s.id !== activeSessionId ? 'opacity: 0.8;' : ''}
+                                     `">
+                                    <div class="xt-host w-full h-full bg-[#0d0f14]" :data-session-id="s.id" x-init="mountXterm($el, s.id)"></div>
                                 </div>
                             </template>
                         </div>

@@ -130,6 +130,25 @@
             }
         };
 
+        this.$watch('activeSessionId', (id) => {
+            if (!id) return;
+            this.$nextTick(() => {
+                const xt = this.xterms[id];
+                if (xt) {
+                    try { xt.fit?.fit(); } catch {}
+                    try { xt.term.focus(); } catch {}
+                    const { cols, rows } = xt.term;
+                    if (cols > 0 && rows > 0) {
+                        fetch('/api/console/session/resize', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ id, cols, rows }),
+                        }).catch(() => {});
+                    }
+                }
+            });
+        });
+
             
             // Polling for profiles
             setInterval(() => { if (this.tab === 'profiles') this.loadState(true); }, 15000);
@@ -229,6 +248,7 @@
                 setTimeout(() => this.mountXterm(host, sessionId), 200);
                 return;
             }
+            console.debug('[xterm] mount', sessionId, 'reason:', this.xterms[sessionId] ? 'remount' : 'first-mount');
             if (this.xterms[sessionId]) {
                 try { this.xterms[sessionId].ro.disconnect(); } catch {}
                 try { this.xterms[sessionId].term.dispose(); } catch {}

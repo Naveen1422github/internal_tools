@@ -38,8 +38,6 @@ function cloneSession(session) {
   delete copy._pty;
   delete copy._listeners;
   delete copy._shellKind;
-  delete copy._activeBlockStart;
-  delete copy._activeBlockIndex;
   return copy;
 }
 
@@ -89,7 +87,6 @@ async function attachPty(session) {
   const ptyLib = loadPty();
   session._listeners = session._listeners || [];
   delete session.error;
-  delete session._isAgent;
 
   const isAgent = Boolean(session.agent && AGENT_ADAPTERS[session.agent]);
   let spawnFile;
@@ -120,7 +117,6 @@ async function attachPty(session) {
       cwd: sa.cwd || process.cwd(),
       env: sa.env || process.env,
     };
-    session._isAgent = true;
     session._initialStdin = sa.initialStdin;
     log(session.id, 'spawn path=agent', session.agent, 'file=', spawnFile, 'args=', spawnArgs.join(' '));
   } else {
@@ -196,11 +192,6 @@ function ensureReady() {
   return ready;
 }
 
-function commandWithSentinel(session, text) {
-  if (session._shellKind === 'cmd') return `${text}\r\n`;
-  return `${text}\n`;
-}
-
 process.once('SIGINT', async () => {
   for (const session of sessions) {
     if (session._pty) session._pty.kill();
@@ -262,7 +253,7 @@ module.exports.routes = {
     if (!session._pty) return send(400, { error: session.error || 'PTY not active' });
     if (!text || !text.trim()) return send(400, { error: 'text required' });
     log(sessionId, 'run cmd:', JSON.stringify(text));
-    session._pty.write(commandWithSentinel(session, text));
+    session._pty.write(text + (session._shellKind === 'cmd' ? '\r\n' : '\n'));
     send(200, { ok: true });
   },
 
