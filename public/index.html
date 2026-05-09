@@ -246,20 +246,23 @@
                     <div class="tb-traffic"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
                     <div class="tb-workspace">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>
-                        <span>frontend2</span>
+                        <span x-text="workspace.name || 'workspace'"></span>
                         <span class="crumb-sep">/</span>
                         <span class="crumb-svc" x-text="activeSession?.activeTaskId ? '@' + (tasks.find(x => x.id === activeSession.activeTaskId)?.module || 'workspace') : 'workspace'"></span>
                     </div>
                     <div class="tb-spacer"></div>
                     <div class="tb-agents">
-                        <div class="tb-agent" data-agent="claude">
-                            <span class="pulse"></span>Claude · active
+                        <div class="tb-agent" :class="rowClassForAgent('claude')" data-agent="claude">
+                            <span class="pulse"></span>Claude · <span x-text="agentLabel('claude')"></span>
                         </div>
-                        <div class="tb-agent cooldown" data-agent="codex">
-                            <span class="pulse"></span>Codex · 2h
+                        <div class="tb-agent" :class="rowClassForAgent('codex')" data-agent="codex">
+                            <span class="pulse"></span>Codex · <span x-text="agentLabel('codex')"></span>
                         </div>
-                        <div class="tb-agent" data-agent="gemini">
-                            <span class="pulse"></span>Gemini · ready
+                        <div class="tb-agent" :class="rowClassForAgent('gemini')" data-agent="gemini">
+                            <span class="pulse"></span>Gemini · <span x-text="agentLabel('gemini')"></span>
+                        </div>
+                        <div class="tb-agent" :class="rowClassForAgent('jules')" data-agent="jules">
+                            <span class="pulse"></span>Jules · <span x-text="agentLabel('jules')"></span>
                         </div>
                     </div>
                     <button class="tb-cmdk" @click="cmdkOpen = true">
@@ -295,16 +298,20 @@
                                 </div>
                             </div>
                             <div class="tree-list flex-1 overflow-y-auto p-2">
-                                <div class="tree-row open" style="padding-left: 6px;">
-                                    <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg></span>
-                                    <span class="icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z"/></svg></span>
-                                    <span class="name">frontend2</span>
-                                </div>
-                                <div class="tree-row leaf" style="padding-left: 18px;">
-                                    <span class="chev" style="visibility:hidden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg></span>
-                                    <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6z"/><path d="M14 3v6h6"/></svg></span>
-                                    <span class="name">package.json</span>
-                                </div>
+                                <template x-for="node in flatTree" :key="node.path">
+                                    <div class="tree-row" :class="node.type === 'file' ? 'leaf' : (node.open ? 'open' : '')" :style="`padding-left: ${(node.depth * 12) + 6}px;`" @click="if(node.type === 'dir') toggleFileNode(node.path)">
+                                        <span class="chev" :style="node.type === 'file' ? 'visibility:hidden' : ''"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg></span>
+                                        <span class="icon">
+                                            <template x-if="node.type === 'dir'">
+                                                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z"/></svg>
+                                            </template>
+                                            <template x-if="node.type === 'file'">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6z"/><path d="M14 3v6h6"/></svg>
+                                            </template>
+                                        </span>
+                                        <span class="name" x-text="node.name"></span>
+                                    </div>
+                                </template>
                             </div>
                         </div>
 
@@ -377,11 +384,11 @@
                                         <div class="sx-i-meta flex items-center justify-between text-[10px] text-gray-500 font-mono">
                                             <div class="flex gap-2">
                                                 <span class="sx-i-num" x-text="'λ#' + (index + 1)"></span>
-                                                <span class="sx-i-branch">main</span>
+                                                <span class="sx-i-branch" x-text="workspace.branch || '�'"></span>
                                             </div>
                                             <div class="flex gap-2">
-                                                <span class="sx-diff--add text-green-400">+0</span>
-                                                <span class="sx-diff--del text-red-400">-0</span>
+                                                <span class="sx-diff--add text-green-400" x-text="'+' + (workspace.diff?.add || 0)"></span>
+                                                <span class="sx-diff--del text-red-400" x-text="'-' + (workspace.diff?.del || 0)"></span>
                                             </div>
                                         </div>
                                     </div>
@@ -477,7 +484,7 @@
 
                     <template x-if="activeSession && activitySection !== 'tasks'">
                         <div class="flex items-center w-full">
-                            <span class="mr-4 text-gray-500">main</span>
+                            <span class="mr-4 text-gray-500" x-text="workspace.branch || '�'"></span>
                             <span class="mr-4 text-gray-500" x-text="activeSession?.cwd"></span>
                             <div class="spacer flex-1"></div>
                             <span class="mr-4 text-gray-500" x-text="sessions.length + ' sessions'"></span>
@@ -732,3 +739,4 @@
 
 </body>
 </html>
+

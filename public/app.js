@@ -25,6 +25,10 @@
         consoleTheme: 'warp',
         consoleDensity: 'cozy',
         consoleAccent: 'purple',
+        workspace: { name: '', branch: null, diff: { add: 0, del: 0, files: 0 } },
+        agentStatus: { claude: null, codex: null, gemini: null, jules: null },
+        fileTree: { path: '', entries: [] },
+        fileTreeOpen: { '': true },
 
         // Collab Data
         collabSearch: '',
@@ -47,7 +51,8 @@
         cmdkMeta: {
             claude: { color: '#fb923c', letter: 'C' },
             codex: { color: '#38bdf8', letter: 'X' },
-            gemini: { color: '#a78bfa', letter: 'G' }
+            gemini: { color: '#a78bfa', letter: 'G' },
+            jules: { color: '#94a3b8', letter: 'J' }
         },
         activitySection: 'tasks',
         get ctxItems() { return this.ctxMenu ? this.ctxMenu.items : []; },
@@ -85,6 +90,9 @@
             await this.loadState();
             await this.loadConsoleSessions();
             await this.loadConsoleTasks();
+            await this.loadWorkspace();
+            await this.loadAgents();
+            await this.loadFiles();
 
         this.consoleLayout = localStorage.getItem('consoleLayout') || 'balanced';
         this.consoleAccent = localStorage.getItem('consoleAccent') || 'purple';
@@ -124,6 +132,8 @@
             
             // Polling for profiles
             setInterval(() => { if (this.tab === 'profiles') this.loadState(true); }, 15000);
+            setInterval(() => { if (this.tab === 'console') this.loadAgents(); }, 60000);
+            setInterval(() => { if (this.tab === 'console') this.loadWorkspace(); }, 30000);
             
             // Apply console theme
             this.applyConsoleTheme();
@@ -198,6 +208,9 @@
             if (t === 'console') {
                 this.loadConsoleSessions();
                 this.loadConsoleTasks();
+                this.loadWorkspace();
+                this.loadAgents();
+                this.loadFiles('');
             }
         },
 
@@ -219,6 +232,92 @@
         async loadConsoleTasks() {
             const data = await this.api('GET', '/api/collab/tasks');
             this.tasks = data.results || [];
+        },
+        async loadWorkspace() {
+            try {
+                this.workspace = await this.api('GET', '/api/workspace/info');
+            } catch (e) {
+                console.error(e);
+            }
+        },
+        async loadAgents() {
+            try {
+                this.agentStatus = await this.api('GET', '/api/workspace/agents');
+            } catch (e) {
+                console.error(e);
+            }
+        },
+        async loadFiles(rel = '') {
+            try {
+                const data = await this.api('GET', `/api/workspace/files?path=${encodeURIComponent(rel)}&depth=2`);
+                if (rel === '') {
+                    this.fileTree = data;
+                    return;
+                }
+                const node = this.findTreeNodeByPath(this.fileTree.entries || [], rel);
+                if (node && node.type === 'dir') {
+                    node.children = data.entries || [];
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        },
+        findTreeNodeByPath(entries, targetPath) {
+            for (const entry of entries || []) {
+                if (entry.path === targetPath) return entry;
+                if (entry.type === 'dir' && entry.children?.length) {
+                    const found = this.findTreeNodeByPath(entry.children, targetPath);
+                    if (found) return found;
+                }
+            }
+            return null;
+        },
+        toggleFileNode(path) {
+            this.fileTreeOpen[path] = !this.fileTreeOpen[path];
+            if (!this.fileTreeOpen[path]) return;
+            const node = this.findTreeNodeByPath(this.fileTree.entries || [], path);
+            if (node && node.type === 'dir' && (!Array.isArray(node.children) || node.children.length === 0)) {
+                this.loadFiles(path);
+            }
+        },
+        agentLabel(agent) {
+            const s = this.agentStatus?.[agent];
+            if (!s) return '...';
+            if (this.sessions.some((x) => String(x.agent || '').toLowerCase() === agent)) return 'active';
+            if (s.label === 'cooldown' && s.cooldownEndsAt) {
+                const ms = new Date(s.cooldownEndsAt).getTime() - Date.now();
+                const h = Math.max(0, Math.floor(ms / 3600000));
+                return `${h}h`;
+            }
+            return s.label || (s.ok ? 'ready' : 'missing');
+        },
+        rowClassForAgent(agent) {
+            const label = this.agentLabel(agent);
+            if (label === 'cooldown' || /^\d+h$/.test(label)) return 'cooldown';
+            if (label === 'active') return '';
+            return 'idle';
+        },
+        flattenTree(entries = [], depth = 0, out = []) {
+            for (const entry of entries) {
+                const isDir = entry.type === 'dir';
+                const open = isDir ? Boolean(this.fileTreeOpen[entry.path]) : false;
+                const childrenLoaded = isDir && Array.isArray(entry.children) && entry.children.length > 0;
+                out.push({
+                    name: entry.name,
+                    type: entry.type,
+                    path: entry.path,
+                    depth,
+                    open,
+                    hasChildren: isDir && childrenLoaded,
+                });
+                if (isDir && open && childrenLoaded) {
+                    this.flattenTree(entry.children, depth + 1, out);
+                }
+            }
+            return out;
+        },
+        get flatTree() {
+            return this.flattenTree(this.fileTree.entries || [], 0, []);
         },
         async spawnSession(agent, opts = {}) {
             const data = await this.api('POST', '/api/console/session/spawn', { agent, opts });
