@@ -407,9 +407,9 @@
                                     <span class="close" @click.stop="closeSession(s.id)">✕</span>
                                 </button>
                             </template>
-                            <div class="relative" x-data="{ open: false }">
-                                <button class="new-tab" @click="open = !open" @click.away="open = false">+ New ▾</button>
-                                <div x-show="open" x-cloak class="absolute top-full left-0 mt-1 w-44 bg-panel border border-border rounded-lg shadow-xl z-50 py-1">
+                            <div x-data="{ open: false, x: 0, y: 0, place(btn){ const r = btn.getBoundingClientRect(); this.x = r.left; this.y = r.bottom + 4; } }" @click.away="open = false">
+                                <button class="new-tab" @click="place($event.currentTarget); open = !open">+ New ▾</button>
+                                <div x-show="open" x-cloak class="fixed w-44 bg-panel border border-border rounded-lg shadow-xl z-[200] py-1" :style="`left: ${x}px; top: ${y}px`">
                                     <template x-for="agent in [
                                         {id:'bash', label:'Bash shell', color:'#94a3b8', letter:'$'},
                                         {id:'claude', label:'Claude', color:'#fb923c', letter:'C'},
