@@ -354,13 +354,20 @@
             if (this.splitWith === id) this.splitWith = null;
         },
         ensureSessionStream(sessionId) {
-            if (this.sessionStreams[sessionId]) return;
+            if (this.sessionStreams[sessionId]) return this.sessionStreamReady?.[sessionId] || Promise.resolve();
             const session = this.sessions.find((s) => s.id === sessionId);
-            if (!session) return;
+            if (!session) return Promise.resolve();
 
             const es = new EventSource(`/api/console/session/stream?id=${sessionId}`);
             this.sessionStreams[sessionId] = es;
             this.sessionStreamRetries[sessionId] = this.sessionStreamRetries[sessionId] || 0;
+            this.sessionStreamReady = this.sessionStreamReady || {};
+
+            const ready = new Promise((resolve) => {
+                const onceOpen = () => { console.debug('[sse]', sessionId, 'open'); resolve(); };
+                es.addEventListener('open', onceOpen, { once: true });
+            });
+            this.sessionStreamReady[sessionId] = ready;
 
             const scrollToBottom = () => {
                 this.$nextTick(() => {
@@ -380,6 +387,7 @@
                 } catch {
                     return;
                 }
+                console.debug('[sse]', sessionId, data.type, data.payload);
 
                 const current = this.sessions.find((s) => s.id === sessionId);
                 if (!current) return;
@@ -422,8 +430,10 @@
             };
 
             es.onerror = () => {
+                console.warn('[sse]', sessionId, 'error/closed; will reconnect');
                 es.close();
                 if (this.sessionStreams[sessionId] === es) delete this.sessionStreams[sessionId];
+                if (this.sessionStreamReady) delete this.sessionStreamReady[sessionId];
                 if (!this.sessions.find((s) => s.id === sessionId)) return;
 
                 const retries = (this.sessionStreamRetries[sessionId] || 0) + 1;
@@ -643,8 +653,9 @@
             localStorage.setItem(`cmdHistory:${sessionId}`, JSON.stringify(this.commandHistory[sessionId]));
             const session = this.sessions.find(s => s.id === sessionId);
             if (!session) return;
-            this.ensureSessionStream(sessionId);
+            await this.ensureSessionStream(sessionId);
             try {
+                console.debug('[cmd]', sessionId, '→', cmd);
                 const res = await fetch('/api/console/command/run', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },

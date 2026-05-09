@@ -85,8 +85,16 @@ function parseAnsi(chunk) {
   return { line: chunk.replace(ANSI_RE, '').replace(/\r/g, ''), ansiClass };
 }
 
+const DEBUG = process.env.CONSOLE_DEBUG === '1' || process.env.CONSOLE_DEBUG === 'true';
+const log = (...args) => DEBUG && console.log('[console]', ...args);
+
 function broadcast(session, event) {
-  for (const res of session._listeners || []) {
+  const listeners = session._listeners || [];
+  log(session.id, 'broadcast', event.type, '→', listeners.length, 'listener(s)');
+  if (listeners.length === 0 && (event.type === 'block-start' || event.type === 'block-end')) {
+    log(session.id, 'WARN: dropping', event.type, '(no listeners attached yet)');
+  }
+  for (const res of listeners) {
     res.write(`data: ${JSON.stringify(event)}\n\n`);
   }
 }
@@ -127,10 +135,13 @@ function attachPty(session) {
 
   try {
     session._pty = ptyLib.spawn(shell.file, [], spawnOpts);
+    log(session.id, 'spawned', shell.file, 'pid=' + session._pty.pid);
   } catch (err) {
+    log(session.id, 'spawn failed for', shell.file, '-', err.message);
     if (process.platform !== 'win32' || shell.file === 'cmd.exe') throw err;
     session._shellKind = 'cmd';
     session._pty = ptyLib.spawn('cmd.exe', [], spawnOpts);
+    log(session.id, 'fallback spawned cmd.exe pid=' + session._pty.pid);
   }
 
   session.pid = session._pty.pid;
@@ -275,6 +286,7 @@ module.exports.routes = {
     session.blocks.push(block);
     session._activeBlockIndex = session.blocks.length - 1;
     session._activeBlockStart = Date.now();
+    log(sessionId, 'run cmd:', JSON.stringify(text));
     broadcast(session, { type: 'block-start', sessionId, payload: block });
     session._pty.write(commandWithSentinel(session, text));
     send(200, { ok: true, blockId: session._activeBlockIndex });
@@ -309,8 +321,10 @@ module.exports.routes = {
     res.write(': connected\n\n');
 
     session._listeners.push(res);
+    log(id, 'SSE listener attached, total =', session._listeners.length);
     req.on('close', () => {
       session._listeners = session._listeners.filter((listener) => listener !== res);
+      log(id, 'SSE listener detached, total =', session._listeners.length);
     });
     return '__sse__';
   },
