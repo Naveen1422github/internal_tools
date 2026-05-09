@@ -14,13 +14,20 @@ function loadPty() {
   if (pty) return pty;
   if (ptyLoadError) throw ptyLoadError;
 
-  try {
-    pty = require('@homebridge/node-pty-prebuilt-multiarch');
-    return pty;
-  } catch (err) {
-    ptyLoadError = err;
-    throw err;
+  // node-pty ships Windows prebuilds for Node 22; @homebridge fork only ships Linux.
+  // Try upstream first, fall back to the fork for non-Windows hosts where it works.
+  const candidates = ['node-pty', '@homebridge/node-pty-prebuilt-multiarch'];
+  const errors = [];
+  for (const name of candidates) {
+    try {
+      pty = require(name);
+      return pty;
+    } catch (err) {
+      errors.push(`${name}: ${err.message}`);
+    }
   }
+  ptyLoadError = new Error(`No PTY backend available. Tried:\n  - ${errors.join('\n  - ')}`);
+  throw ptyLoadError;
 }
 
 function ptyUnavailableMessage(err) {
