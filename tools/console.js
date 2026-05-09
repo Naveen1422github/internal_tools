@@ -1,9 +1,13 @@
 const fs = require('fs/promises');
 const fsSync = require('fs');
 const path = require('path');
+const AGENT_ADAPTERS = require('./agents');
 
 const SESSIONS_FILE = path.join(__dirname, '..', 'data', 'sessions.json');
-const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+const ANSI_CSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+const ANSI_OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+const ANSI_BEL = /\x07/g;
+const ANSI_OTHER = /\x1b[PX^_][^\x1b]*\x1b\\/g;
 
 let sessions = [];
 let ready;
@@ -88,7 +92,14 @@ function parseAnsi(chunk) {
   else if (/\x1b\[[0-9;]*35m/.test(chunk)) ansiClass = 'ansi-purple';
   else if (/\x1b\[[0-9;]*2m/.test(chunk)) ansiClass = 'ansi-dim';
   else if (/\x1b\[[0-9;]*1m/.test(chunk)) ansiClass = 'ansi-bold';
-  return { line: chunk.replace(ANSI_RE, '').replace(/\r/g, ''), ansiClass };
+  return {
+    line: chunk
+      .replace(ANSI_OSC, '')
+      .replace(ANSI_OTHER, '')
+      .replace(ANSI_CSI, '')
+      .replace(ANSI_BEL, ''),
+    ansiClass,
+  };
 }
 
 const DEBUG = process.env.CONSOLE_DEBUG === '1' || process.env.CONSOLE_DEBUG === 'true';
@@ -124,53 +135,122 @@ function finishActiveBlock(session, code) {
   saveSessions().catch((err) => console.error('[console] save failed:', err));
 }
 
-function attachPty(session) {
+async function attachPty(session) {
   const ptyLib = loadPty();
-  const shell = resolveShell();
-  session._shellKind = shell.kind;
   session._listeners = session._listeners || [];
   delete session.error;
+  delete session._isAgent;
 
-  const spawnOpts = {
-    name: 'xterm-color',
-    cols: 100,
-    rows: 30,
-    cwd: session.cwd || process.cwd(),
-    env: process.env,
-  };
+  const isAgent = Boolean(session.agent && AGENT_ADAPTERS[session.agent]);
+  let spawnFile;
+  let spawnArgs;
+  let spawnOpts;
+  let shell = null;
 
-  // Interactive flag keeps shells from exiting when stdin is empty. Without
-  // -i / -NoExit, bash and PowerShell read stdin once and exit.
-  const shellArgs = shell.kind === 'bash' ? ['-i'] : (shell.kind === 'powershell' ? ['-NoExit', '-NoLogo'] : []);
+  if (isAgent) {
+    const adapter = AGENT_ADAPTERS[session.agent];
+    const detection = await adapter.detect().catch(() => ({ ok: false, hint: 'detect failed' }));
+    if (!detection.ok) {
+      session.error = `${session.agent} not available: ${detection.hint || 'unknown'}`;
+      log(session.id, 'agent detect failed:', session.error);
+      return;
+    }
+    const sa = adapter.spawnArgs({
+      task: session.task || null,
+      cwd: session.cwd || process.cwd(),
+      env: process.env,
+      autoYes: session.autoYes || false,
+    });
+    spawnFile = sa.file;
+    spawnArgs = sa.args || [];
+    spawnOpts = {
+      name: 'xterm-color',
+      cols: 100,
+      rows: 30,
+      cwd: sa.cwd || process.cwd(),
+      env: sa.env || process.env,
+    };
+    session._isAgent = true;
+    session._initialStdin = sa.initialStdin;
+    log(session.id, 'spawn path=agent', session.agent, 'file=', spawnFile, 'args=', spawnArgs.join(' '));
+  } else {
+    shell = resolveShell();
+    session._shellKind = shell.kind;
+    spawnFile = shell.file;
+    spawnArgs = shell.kind === 'bash' ? ['-i'] : (shell.kind === 'powershell' ? ['-NoExit', '-NoLogo'] : []);
+    spawnOpts = {
+      name: 'xterm-color',
+      cols: 100,
+      rows: 30,
+      cwd: session.cwd || process.cwd(),
+      env: process.env,
+    };
+    log(session.id, 'spawn path=shell', shell.kind, 'file=', spawnFile, 'args=', spawnArgs.join(' '));
+  }
 
   try {
-    session._pty = ptyLib.spawn(shell.file, shellArgs, spawnOpts);
-    log(session.id, 'spawned', shell.file, shellArgs.join(' '), 'pid=' + session._pty.pid);
+    session._pty = ptyLib.spawn(spawnFile, spawnArgs, spawnOpts);
+    log(session.id, 'spawned', spawnFile, spawnArgs.join(' '), 'pid=' + session._pty.pid, isAgent ? '(agent)' : '(shell)');
   } catch (err) {
-    log(session.id, 'spawn failed for', shell.file, '-', err.message);
-    if (process.platform !== 'win32' || shell.file === 'cmd.exe') throw err;
+    log(session.id, 'spawn failed for', spawnFile, '-', err.message);
+    if (isAgent) {
+      session.error = `Failed to start ${session.agent}: ${err.message}`;
+      return;
+    }
+    if (process.platform !== 'win32' || spawnFile === 'cmd.exe') throw err;
     session._shellKind = 'cmd';
     session._pty = ptyLib.spawn('cmd.exe', [], spawnOpts);
     log(session.id, 'fallback spawned cmd.exe pid=' + session._pty.pid);
   }
 
   session.pid = session._pty.pid;
+  if (session._initialStdin) {
+    setTimeout(() => session._pty && session._pty.write(session._initialStdin), 200);
+    delete session._initialStdin;
+  }
   let buffer = '';
 
   session._pty.onData((data) => {
     buffer += data;
-    const lines = buffer.split(/\n/);
+    buffer = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const lines = buffer.split('\n');
     buffer = lines.pop() || '';
 
     for (const rawLine of lines) {
-      const cleanLine = rawLine.replace(/\r/g, '');
-      const sentinel = cleanLine.match(/::END::(-?\d+)/);
+      const cleanLine = rawLine;
+      const sentinel = !session._isAgent && cleanLine.match(/::END::(-?\d+)/);
       if (sentinel) {
         finishActiveBlock(session, Number(sentinel[1]));
         continue;
       }
 
       const parsed = parseAnsi(rawLine);
+      const trimmed = parsed.line.trim();
+      if (!session._isAgent) {
+        if (/echo\s+["']?::END::/i.test(trimmed)) {
+          log(session.id, 'suppressed line:', JSON.stringify(trimmed.slice(0, 80)));
+          continue;
+        }
+        if (!trimmed) continue;
+        if (/MINGW(32|64)\b/.test(trimmed)) {
+          log(session.id, 'suppressed line:', JSON.stringify(trimmed.slice(0, 80)));
+          continue;
+        }
+        if (/^\$\s*$/.test(trimmed)) {
+          log(session.id, 'suppressed line:', JSON.stringify(trimmed.slice(0, 80)));
+          continue;
+        }
+        if (session._activeBlockIndex !== undefined && session._activeBlockIndex !== null) {
+          const block = session.blocks[session._activeBlockIndex];
+          if (block && block.cmd) {
+            const cmd = block.cmd.trim();
+            if (trimmed === `$ ${cmd}` || trimmed.endsWith(`$ ${cmd}`)) {
+              log(session.id, 'suppressed line:', JSON.stringify(trimmed.slice(0, 80)));
+              continue;
+            }
+          }
+        }
+      }
       log(session.id, 'data:', JSON.stringify(parsed.line.slice(0, 120)));
       const activeBlock = session.blocks[session._activeBlockIndex];
       if (activeBlock && activeBlock.exit === 'run' && parsed.line) {
@@ -183,9 +263,10 @@ function attachPty(session) {
   });
 
   session._pty.onExit(({ exitCode, signal }) => {
-    log(session.id, 'PTY exited code=' + exitCode + ' signal=' + signal + ' shell=' + shell.file);
-    session.error = `Shell exited (code ${exitCode}). Shell: ${shell.file}`;
-    broadcast(session, { type: 'exit', sessionId: session.id, payload: { exitCode, signal, shell: shell.file } });
+    const runner = isAgent ? spawnFile : (shell && shell.file ? shell.file : spawnFile);
+    log(session.id, 'PTY exited code=' + exitCode + ' signal=' + signal + ' shell=' + runner);
+    session.error = `Shell exited (code ${exitCode}). Shell: ${runner}`;
+    broadcast(session, { type: 'exit', sessionId: session.id, payload: { exitCode, signal, shell: runner } });
   });
 }
 
@@ -215,7 +296,7 @@ async function loadSessions() {
 
   for (const session of sessions) {
     try {
-      attachPty(session);
+      await attachPty(session);
     } catch (err) {
       session.error = ptyUnavailableMessage(err);
       console.error('[console] restore PTY failed:', err);
@@ -229,6 +310,7 @@ function ensureReady() {
 }
 
 function commandWithSentinel(session, text) {
+  if (session._isAgent) return `${text}\n`;
   if (session._shellKind === 'cmd') return `${text}\r\necho ::END::%ERRORLEVEL%\r\n`;
   if (session._shellKind === 'powershell') return `${text}\r\nWrite-Output "::END::$LASTEXITCODE"\r\n`;
   return `${text}\necho "::END::$?"\n`;
@@ -266,7 +348,7 @@ module.exports.routes = {
     };
 
     try {
-      attachPty(session);
+      await attachPty(session);
     } catch (err) {
       return send(503, { error: ptyUnavailableMessage(err) });
     }
@@ -295,6 +377,29 @@ module.exports.routes = {
     if (!session) return send(404, { error: 'Session not found' });
     if (!session._pty) return send(400, { error: session.error || 'PTY not active' });
     if (!text || !text.trim()) return send(400, { error: 'text required' });
+    if (session._isAgent) {
+      let block = session.blocks[session._activeBlockIndex];
+      if (!block || block.exit !== 'run') {
+        block = {
+          id: `b-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          stamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          cmd: `${session.agent} session`,
+          kind: 'agent',
+          agentLabel: `${session.agent} - running`,
+          exit: 'run',
+          out: [],
+        };
+        session.blocks.push(block);
+        session._activeBlockIndex = session.blocks.length - 1;
+        session._activeBlockStart = Date.now();
+        broadcast(session, { type: 'block-start', sessionId, payload: block });
+      }
+      const userLine = `> ${text}`;
+      block.out.push(['ansi-dim', userLine]);
+      broadcast(session, { type: 'data', sessionId, payload: { ansiClass: 'ansi-dim', line: userLine } });
+      session._pty.write(`${text}\n`);
+      return send(200, { ok: true, blockId: session._activeBlockIndex, agent: true });
+    }
     if (session.blocks.some((b) => b.exit === 'run')) {
       return send(409, { error: 'A command is already running in this session' });
     }
