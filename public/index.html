@@ -3,115 +3,105 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Emp1st | Engineering Console</title>
+    <title>Emp1st | Collaboration Dashboard</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="styles.css">
-    <link rel="stylesheet" href="styles-terminal.css">
-    <link rel="stylesheet" href="styles-overlays.css">
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
     <script src="app.js"></script>
     <script>
         tailwind.config = {
             theme: {
                 extend: {
                     colors: {
-                        dark: '#0d1117',
-                        panel: '#161b22',
-                        'panel-light': '#21262d',
-                        border: '#30363d',
-                        accent: '#58a6ff',
-                        success: '#238636',
-                        danger: '#da3633',
-                        warning: '#d29922',
+                        dark: '#1a1a1a',      
+                        panel: '#282828',     
+                        'panel-light': '#333333',
+                        border: '#3e3e3e',    
+                        accent: '#ffa116',    
+                        success: '#2cbb5d',   
+                        danger: '#ef4743',    
+                        warning: '#fac02e',   
+                    },
+                    borderRadius: {
+                        'xs': '2px',
+                        'sm': '4px',
+                        'md': '8px',
+                        'lg': '12px',
                     }
                 }
             }
         }
     </script>
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+        
         [x-cloak] { display: none !important; }
-        /* Override some handoff styles to play nice with Tailwind */
+        body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+        
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; height: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3e3e3e; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #555555; }
+
+        input, select, textarea {
+            background: #282828 !important;
+            border: 1px solid #3e3e3e !important;
+            border-radius: 5px !important;
+            transition: all 0.2s ease;
+        }
+        input:focus, select:focus, textarea:focus {
+            border-color: #ffa116 !important;
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(255, 161, 22, 0.1);
+        }
+        
         .app { height: 100%; position: relative; }
         .canvas { flex: 1; min-width: 0; }
     </style>
 </head>
-<body x-data="consoleApp()" x-init="init()" class="h-full bg-dark text-gray-300 font-sans selection:bg-accent/30 selection:text-white flex overflow-hidden">
-
-    <!-- Sidebar -->
-    <aside class="w-16 border-r border-border bg-panel flex flex-col items-center py-6 space-y-8 z-30 shadow-2xl">
-        <div class="text-accent font-bold text-2xl tracking-tighter">◈</div>
-        <nav class="flex flex-col space-y-4">
-            <button @click="switchTab('profiles')" :class="tab === 'profiles' ? 'text-accent bg-accent/10 shadow-inner' : 'text-gray-500 hover:text-gray-300'" class="p-3 rounded-xl transition-all group relative">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
-                <span class="absolute left-full ml-4 px-2 py-1 bg-panel border border-border text-[10px] font-bold text-white rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 whitespace-nowrap">Identities</span>
-            </button>
-            <button @click="switchTab('collab')" :class="tab === 'collab' ? 'text-accent bg-accent/10 shadow-inner' : 'text-gray-500 hover:text-gray-300'" class="p-3 rounded-xl transition-all group relative">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
-                <span class="absolute left-full ml-4 px-2 py-1 bg-panel border border-border text-[10px] font-bold text-white rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 whitespace-nowrap">Collaboration</span>
-            </button>
-            <button @click="switchTab('console')" :class="tab === 'console' ? 'text-accent bg-accent/10 shadow-inner' : 'text-gray-500 hover:text-gray-300'" class="p-3 rounded-xl transition-all group relative">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                <span class="absolute left-full ml-4 px-2 py-1 bg-panel border border-border text-[10px] font-bold text-white rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 whitespace-nowrap">Console</span>
-            </button>
-        </nav>
-        <div class="mt-auto">
-            <button @click="refresh()" class="p-3 text-gray-600 hover:text-accent transition-colors" :class="loading ? 'animate-spin' : ''">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-            </button>
-        </div>
-    </aside>
+<body x-data="consoleApp()" x-init="init()" class="h-full bg-dark text-gray-200 selection:bg-accent/30 selection:text-white flex overflow-hidden">
 
     <!-- Main Workspace -->
-    <main class="flex-1 flex flex-col min-w-0 bg-dark relative">
+    <main class="flex-1 flex flex-col min-w-0 bg-[#1a1a1a] relative">
         
-        <!-- Header (Standard) -->
-        <header x-show="tab !== 'console'" class="h-14 border-b border-border flex items-center px-6 justify-between bg-panel/50 backdrop-blur-md sticky top-0 z-20">
+        <!-- Header -->
+        <header class="h-12 border-b border-border flex items-center px-4 justify-between bg-dark sticky top-0 z-20">
             <div class="flex items-center space-x-6">
-                <span class="text-xs font-black uppercase tracking-[0.2em] text-gray-500" x-text="tab === 'profiles' ? 'Identity Management' : 'Knowledge & Memory'"></span>
+                <div class="flex items-center space-x-2 text-accent">
+                    <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>
+                    <span class="text-xs font-bold uppercase tracking-wider">Emp1st Collab</span>
+                </div>
                 
-                <template x-if="tab === 'collab'">
-                    <nav class="flex space-x-4 border-l border-border pl-6">
-                        <button @click="subTab = 'entries'; refreshCollabData()" :class="subTab === 'entries' ? 'text-accent border-b-2 border-accent' : 'text-gray-500'" class="text-[10px] font-bold uppercase tracking-widest py-4 transition-all">Entries</button>
-                        <button @click="subTab = 'tasks'; refreshCollabData()" :class="subTab === 'tasks' ? 'text-accent border-b-2 border-accent' : 'text-gray-500'" class="text-[10px] font-bold uppercase tracking-widest py-4 transition-all">Board</button>
-                        <button @click="subTab = 'modules'; refreshCollabData()" :class="subTab === 'modules' ? 'text-accent border-b-2 border-accent' : 'text-gray-500'" class="text-[10px] font-bold uppercase tracking-widest py-4 transition-all">Modules</button>
-                    </nav>
-                </template>
+                <nav class="flex space-x-1">
+                    <template x-for="st in ['entries', 'tasks', 'modules', 'dispatches']">
+                        <button @click="switchSubTab(st)" 
+                                :class="subTab === st ? 'text-white border-b-2 border-accent' : 'text-gray-500 hover:text-gray-300'" 
+                                class="text-xs font-medium px-4 h-12 flex items-center transition-all capitalize" 
+                                x-text="st"></button>
+                    </template>
+                </nav>
             </div>
             
-            <div class="flex items-center space-x-4">
+            <div class="flex items-center space-x-3">
                 <template x-if="loading">
-                    <span class="flex items-center space-x-2 bg-accent/10 px-3 py-1 rounded-full border border-accent/20">
-                        <span class="w-2 h-2 bg-accent rounded-full animate-pulse"></span>
-                        <span class="text-[9px] text-accent font-black uppercase tracking-tighter">Synchronizing</span>
+                    <span class="flex items-center space-x-2 bg-accent/5 px-2 py-1 rounded border border-accent/20">
+                        <span class="w-1.5 h-1.5 bg-accent rounded-full animate-pulse"></span>
+                        <span class="text-[10px] text-accent font-medium">Syncing</span>
                     </span>
                 </template>
-                <div class="flex space-x-2">
-                    <template x-if="tab === 'profiles'">
-                        <button @click="openSaveDialog()" class="text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-lg bg-accent text-white hover:bg-blue-600 transition-all shadow-lg shadow-accent/20">Initialize Identity</button>
-                    </template>
-                    <template x-if="tab === 'collab'">
-                        <div class="flex space-x-2">
-                            <button @click="runDoctor()" title="Run schema + data integrity checks"
-                                    class="text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-lg bg-panel-light border border-border text-gray-300 hover:text-white hover:border-accent transition-all">Doctor</button>
-                            <div class="relative" x-data="{ open: false }">
-                                <button @click="open = !open" @click.away="open = false"
-                                        class="text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-lg bg-panel-light border border-border text-gray-300 hover:text-white hover:border-accent transition-all">Export ▾</button>
-                                <div x-show="open" x-cloak class="absolute right-0 mt-1 w-32 bg-panel border border-border rounded-lg shadow-xl z-50">
-                                    <button @click="exportData('json'); open=false" class="w-full text-left px-4 py-2 text-[10px] font-black uppercase tracking-widest text-gray-300 hover:bg-panel-light">JSON</button>
-                                    <button @click="exportData('markdown'); open=false" class="w-full text-left px-4 py-2 text-[10px] font-black uppercase tracking-widest text-gray-300 hover:bg-panel-light">Markdown</button>
-                                </div>
-                            </div>
-                            <button @click="subTab === 'entries' ? createEntry() : (subTab === 'tasks' ? createTask() : createModule())"
-                                    class="text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-lg bg-accent text-white hover:bg-blue-600 transition-all shadow-lg shadow-accent/20">
-                                + <span x-text="subTab === 'entries' ? 'Log Entry' : (subTab === 'tasks' ? 'New Task' : 'New Module')"></span>
-                            </button>
-                        </div>
-                    </template>
+                <div class="flex items-center space-x-2">
+                    <button @click="runDoctor()" title="Run integrity checks"
+                            class="text-xs font-medium px-3 py-1.5 rounded bg-panel border border-border text-gray-400 hover:text-white transition-all">Doctor</button>
+                    <button @click="subTab === 'entries' ? createEntry() : (subTab === 'tasks' ? createTask() : createModule())"
+                            class="text-xs font-semibold px-3 py-1.5 rounded bg-accent/10 border border-accent/20 text-accent hover:bg-accent hover:text-dark transition-all">
+                        + New <span x-text="subTab.slice(0, -1)"></span>
+                    </button>
+                    <button @click="refresh()" class="p-2 text-gray-500 hover:text-accent transition-colors" :class="loading ? 'animate-spin' : ''">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                    </button>
                 </div>
             </div>
         </header>
@@ -119,611 +109,315 @@
         <!-- Viewport -->
         <div class="flex-1 overflow-hidden flex">
             
-            <!-- PROFILES VIEW -->
-            <div x-show="tab === 'profiles'" x-cloak class="flex-1 overflow-y-auto p-10 custom-scrollbar">
-                <!-- (Existing Profiles UI - truncated for brevity but kept in mind) -->
-                <div class="max-w-7xl mx-auto space-y-12">
-                    <!-- Stats -->
-                    <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
-                        <div class="bg-panel p-8 rounded-3xl border border-border shadow-inner group transition-all hover:border-accent/30">
-                            <div class="text-[9px] font-black uppercase text-gray-500 tracking-[0.25em] mb-6">Active Terminal</div>
-                            <div class="text-3xl font-black text-accent font-mono truncate" x-text="state?.active_profile || 'ROOT'"></div>
-                        </div>
-                        <div class="bg-panel p-8 rounded-3xl border border-border shadow-inner">
-                            <div class="text-[9px] font-black uppercase text-gray-500 tracking-[0.25em] mb-6">Available Nodes</div>
-                            <div class="text-3xl font-black text-success font-mono" x-text="getReadyCount()"></div>
-                        </div>
-                        <div class="bg-panel p-8 rounded-3xl border border-border shadow-inner">
-                            <div class="text-[9px] font-black uppercase text-gray-500 tracking-[0.25em] mb-6">Neutralizing</div>
-                            <div class="text-3xl font-black text-warning font-mono" x-text="getCooldownCount()"></div>
-                        </div>
-                        <div class="bg-panel p-8 rounded-3xl border border-border shadow-inner flex flex-col justify-between">
-                            <div>
-                                <div class="text-[9px] font-black uppercase text-gray-500 tracking-[0.25em] mb-4">Total Inventory</div>
-                                <div class="text-3xl font-black text-white font-mono" x-text="Object.keys(state?.profiles || {}).length"></div>
-                            </div>
-                            <div class="flex gap-2 mt-4">
-                                <button @click="pickNext()" class="flex-1 text-[10px] font-bold text-accent uppercase tracking-widest border border-accent/20 px-4 py-2 rounded hover:bg-accent/5 transition-all">Auto-Rotate</button>
-                                <button @click="checkAll()" class="flex-1 text-[10px] font-bold text-gray-300 uppercase tracking-widest border border-border px-4 py-2 rounded hover:border-accent hover:text-accent transition-all">Probe All</button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Cards -->
-                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
-                        <template x-for="[name, p] in Object.entries(state?.profiles || {})" :key="name">
-                            <div class="bg-panel rounded-[2rem] border transition-all duration-500 overflow-hidden group shadow-lg"
-                                 :class="state.active_profile === name ? 'border-accent ring-4 ring-accent/5 shadow-accent/10' : 'border-border hover:border-gray-600 hover:shadow-2xl'">
-                                <div class="p-8">
-                                    <div class="flex justify-between items-start mb-8">
-                                        <div>
-                                            <h3 class="text-xl font-black text-white italic tracking-tighter" x-text="name"></h3>
-                                            <p class="text-xs text-gray-500 mt-2 font-medium tracking-wide" x-text="p.label || 'Standard Identity'"></p>
-                                        </div>
-                                        <span :class="isAvailable(p) ? 'status-done' : 'status-warning'" class="text-[9px] font-black uppercase px-2.5 py-1 rounded-lg tracking-[0.15em]" x-text="isAvailable(p) ? 'Ready' : 'Cooldown'"></span>
-                                    </div>
-                                    <div class="space-y-4 mb-8">
-                                        <div class="flex justify-between items-center text-[10px] font-black uppercase tracking-widest text-gray-600">
-                                            <span>Validation</span>
-                                            <span :class="p.check_ok ? 'text-success' : 'text-danger'" x-text="p.check_ok ? 'Verified' : 'Unverified'"></span>
-                                        </div>
-                                        <div class="bg-dark/40 p-4 rounded-2xl border border-border/50 text-[11px] font-mono space-y-2">
-                                            <div class="flex justify-between"><span class="text-gray-600">Last Seen:</span><span class="text-gray-300" x-text="formatRelTime(p.last_activated)"></span></div>
-                                            <div class="flex justify-between" x-show="p.last_checked"><span class="text-gray-600">Last Probe:</span><span class="text-gray-300" x-text="formatRelTime(p.last_checked)"></span></div>
-                                            <div class="flex justify-between" x-show="p.check_message"><span class="text-gray-600">Probe Result:</span><span :class="p.check_ok ? 'text-success' : 'text-warning'" class="truncate ml-2 max-w-[180px]" x-text="p.check_message"></span></div>
-                                        </div>
-                                    </div>
-                                    <div class="flex gap-3">
-                                        <button @click="activate(name)" x-show="state.active_profile !== name" class="flex-1 bg-accent text-white text-[10px] font-black uppercase tracking-widest py-3 rounded-xl shadow-lg shadow-accent/20 hover:scale-[1.02] transition-all active:scale-95">Engage</button>
-                                        <button @click="check(name)" class="px-5 py-3 bg-panel-light text-[10px] font-black uppercase tracking-widest rounded-xl border border-border hover:border-gray-500 text-gray-300 transition-all">Probe</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </template>
-                    </div>
-                </div>
-            </div>
-
-            <!-- COLLAB VIEW -->
-            <div x-show="tab === 'collab'" x-cloak class="flex-1 flex overflow-hidden">
-                <!-- (Existing Collab UI) -->
+            <div class="flex-1 flex overflow-hidden">
                 <!-- Master List -->
-                <div class="w-[400px] border-r border-border flex flex-col bg-panel/30 backdrop-blur-sm z-10 shadow-2xl">
-                    <div class="p-6 space-y-4 border-b border-border">
+                <div class="w-[320px] border-r border-border flex flex-col bg-dark/50 z-10">
+                    <div class="p-4 space-y-3 border-b border-border">
                         <template x-if="subTab === 'entries'">
                             <div class="space-y-3">
+                                <div class="flex p-0.5 bg-panel-light/30 border border-border rounded-md">
+                                    <button @click="filterKind = 'signal'; searchCollab()" :class="filterKind === 'signal' ? 'bg-panel text-white' : 'text-gray-500 hover:text-gray-300'" class="flex-1 py-1.5 text-[10px] font-semibold uppercase rounded transition-all">Knowledge</button>
+                                    <button @click="filterKind = 'log'; searchCollab()" :class="filterKind === 'log' ? 'bg-panel text-white' : 'text-gray-500 hover:text-gray-300'" class="flex-1 py-1.5 text-[10px] font-semibold uppercase rounded transition-all">Memory</button>
+                                    <button @click="filterKind = 'any'; searchCollab()" :class="filterKind === 'any' ? 'bg-panel text-white' : 'text-gray-500 hover:text-gray-300'" class="flex-1 py-1.5 text-[10px] font-semibold uppercase rounded transition-all">All</button>
+                                </div>
                                 <div class="relative group">
-                                    <input type="text" x-model="collabSearch" @keydown.enter="searchCollab()" placeholder="Filter entries..."
-                                           class="w-full bg-dark border border-border rounded-2xl py-3.5 pl-12 pr-4 text-sm focus:border-accent outline-none transition-all shadow-inner group-focus-within:ring-4 ring-accent/5">
+                                    <input type="text" x-model="collabSearch" @keydown.enter="searchCollab()" placeholder="Search..."
+                                           class="w-full bg-panel border border-border rounded-md py-2 pl-9 pr-3 text-xs focus:border-accent outline-none transition-all">
+                                    <svg class="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                                 </div>
                             </div>
                         </template>
-                        <template x-if="subTab === 'tasks'">
-                            <div class="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">Live Engineering Board</div>
-                        </template>
                     </div>
-                    <div class="flex-1 overflow-y-auto custom-scrollbar divide-y divide-border/20">
+                    <div class="flex-1 overflow-y-auto custom-scrollbar">
                         <template x-if="subTab === 'entries'">
                             <template x-for="r in collabResults" :key="r.id">
-                                <div @click="viewEntry(r.id)" class="p-6 cursor-pointer transition-all border-l-4 border-transparent"
-                                     :class="activeEntryId === r.id ? 'bg-accent/5 border-accent' : 'hover:bg-panel-light/30'">
-                                    <h4 class="text-sm font-black text-white truncate" x-text="r.title"></h4>
-                                    <div class="text-[11px] text-gray-500 line-clamp-2 mt-2" x-html="safeHighlight(r.snippet || r.summary)"></div>
+                                <div @click="viewEntry(r.id)" class="p-3.5 border-b border-border/50 cursor-pointer transition-all border-l-2"
+                                     :style="`border-left-color: ${activeEntryId === r.id ? '#ffa116' : 'transparent'}`"
+                                     :class="activeEntryId === r.id ? 'bg-panel-light/30' : 'hover:bg-panel-light/10'">
+                                    <div class="flex justify-between items-start mb-1.5">
+                                        <span class="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-xs" 
+                                              :style="`color: ${typeColor(r.type)}; background: ${typeColor(r.type)}20; border: 1px solid ${typeColor(r.type)}30`" x-text="r.type"></span>
+                                        <span class="text-[9px] font-mono text-gray-600" x-text="formatDateShort(r.created_at)"></span>
+                                    </div>
+                                    <h4 class="text-[13px] font-medium text-gray-200 truncate" x-text="r.title"></h4>
+                                    <div class="text-[11px] text-gray-500 line-clamp-1 mt-1 font-normal" x-text="r.summary || 'No summary'"></div>
                                 </div>
                             </template>
                         </template>
                         <template x-if="subTab === 'tasks'">
                             <template x-for="t in collabTasks" :key="t.id">
-                                <div @click="viewTask(t)" class="p-6 cursor-pointer transition-all border-l-4 border-transparent"
-                                     :class="activeTaskId === t.id ? 'bg-accent/5 border-accent' : 'hover:bg-panel-light/30'">
-                                    <div class="flex items-center space-x-2">
-                                        <span class="text-[10px] font-black font-mono text-accent" x-text="t.id"></span>
-                                        <h4 class="text-sm font-black text-white truncate" x-text="t.title"></h4>
+                                <div @click="viewTask(t)" class="p-3.5 border-b border-border/50 cursor-pointer transition-all border-l-2"
+                                     :class="activeTaskId === t.id ? 'bg-panel-light/30 border-l-accent' : 'hover:bg-panel-light/10 border-l-transparent'">
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex flex-col min-w-0">
+                                            <span class="text-[10px] font-mono text-accent/80" x-text="t.id"></span>
+                                            <h4 class="text-[13px] font-medium text-gray-200 truncate" x-text="t.title"></h4>
+                                        </div>
+                                        <span class="w-2 h-2 rounded-full" :style="`background: ${t.status === 'done' ? '#2cbb5d' : (t.status === 'in-progress' ? '#ffa116' : '#94a3b8')}`"></span>
                                     </div>
+                                </div>
+                            </template>
+                        </template>
+                        <template x-if="subTab === 'modules'">
+                            <template x-for="m in collabModules" :key="m.slug">
+                                <div @click="viewModule(m)" class="p-3.5 border-b border-border/50 cursor-pointer transition-all border-l-2"
+                                     :class="activeModuleSlug === m.slug ? 'bg-panel-light/30 border-l-accent' : 'hover:bg-panel-light/10 border-l-transparent'">
+                                    <h4 class="text-[13px] font-medium text-gray-200" x-text="'@' + m.slug"></h4>
+                                    <p class="text-[11px] text-gray-500 mt-0.5" x-text="m.name"></p>
                                 </div>
                             </template>
                         </template>
                     </div>
                 </div>
+
                 <!-- Detail View -->
                 <div class="flex-1 flex flex-col bg-dark overflow-hidden">
-                    <template x-if="activeEntryId">
-                        <div class="p-8 overflow-y-auto">
-                            <h2 class="text-4xl font-black text-white mb-5 italic" x-text="activeEntry.title"></h2>
-                            <div class="prose prose-invert max-w-4xl font-mono text-sm leading-relaxed whitespace-pre-wrap text-gray-300" x-text="activeEntry.description"></div>
-                        </div>
-                    </template>
-                    <template x-if="activeTaskId">
-                        <div class="p-8 overflow-y-auto">
-                            <h2 class="text-4xl font-black text-white mb-5 italic" x-text="activeTask.title"></h2>
-                            <div class="prose prose-invert max-w-4xl font-mono text-sm leading-relaxed whitespace-pre-wrap text-gray-300" x-text="activeTask.description"></div>
-                        </div>
-                    </template>
-                </div>
-            </div>
-
-            <!-- CONSOLE VIEW (ENGINEERING CONSOLE PORT) -->
-            <div x-show="tab === 'console'" x-cloak class="flex-1 flex flex-col overflow-hidden app" :data-theme="consoleTheme" :data-density="consoleDensity" :data-layout="consoleLayout">
-                <!-- Console Titlebar -->
-                <header class="titlebar">
-                    <div class="tb-traffic"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
-                    <div class="tb-workspace">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>
-                        <span x-text="workspace.name || 'workspace'"></span>
-                        <span class="crumb-sep">/</span>
-                        <span class="crumb-svc" x-text="activeSession?.activeTaskId ? '@' + (tasks.find(x => x.id === activeSession.activeTaskId)?.module || 'workspace') : 'workspace'"></span>
-                    </div>
-                    <div class="tb-spacer"></div>
-                    <div class="tb-agents">
-                        <div class="tb-agent" :class="rowClassForAgent('claude')" data-agent="claude">
-                            <span class="pulse"></span>Claude · <span x-text="agentLabel('claude')"></span>
-                        </div>
-                        <div class="tb-agent" :class="rowClassForAgent('codex')" data-agent="codex">
-                            <span class="pulse"></span>Codex · <span x-text="agentLabel('codex')"></span>
-                        </div>
-                        <div class="tb-agent" :class="rowClassForAgent('gemini')" data-agent="gemini">
-                            <span class="pulse"></span>Gemini · <span x-text="agentLabel('gemini')"></span>
-                        </div>
-                        <div class="tb-agent" :class="rowClassForAgent('jules')" data-agent="jules">
-                            <span class="pulse"></span>Jules · <span x-text="agentLabel('jules')"></span>
-                        </div>
-                    </div>
-                    <button class="tb-cmdk" @click="cmdkOpen = true">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
-                        <span>Search tasks, run with agent…</span>
-                        <kbd>⌘K</kbd>
-                    </button>
-                </header>
-
-                                <div class="flex-1 flex overflow-hidden relative">
-                    <!-- Activity Bar -->
-                    <nav class="actbar w-12 border-r border-border bg-panel flex flex-col items-center py-2 gap-1 shrink-0 z-20">
-                        <button :class="activitySection === 'files' ? 'active' : ''" title="Files" @click="activitySection = 'files'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="20" height="20"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6z"/><path d="M14 3v6h6"/></svg></button>
-                        <button :class="activitySection === 'tasks' ? 'active' : ''" title="Tasks" @click="activitySection = 'tasks'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 12l2 2 4-4"/></svg>
-                            <span class="badge" x-text="tasks.filter(t => t.status === 'in-progress').length"></span>
-                        </button>
-                        <button :class="activitySection === 'modules' ? 'active' : ''" title="Modules" @click="activitySection = 'modules'; loadModules()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></button>
-                        <button :class="activitySection === 'terminals' ? 'active' : ''" title="Terminals" @click="activitySection = 'terminals'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg></button>
-                        <span class="spacer flex-1"></span>
-                        <button title="Settings" @click="window.dispatchEvent(new CustomEvent('toggle-tweaks'))"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
-                    </nav>
-
-                    <!-- Console Sidebar -->
-                    <aside class="sidebar w-[280px] shrink-0 border-r border-border overflow-y-auto bg-[#0d0f14] custom-scrollbar">
-
-                        <!-- Files View -->
-                        <div x-show="activitySection === 'files'" class="sb-section tree h-full flex flex-col">
-                            <div class="sb-header flex justify-between px-3 py-2 border-b border-border bg-panel text-xs text-gray-500 font-bold uppercase tracking-wider">
-                                <span>Workspace</span>
-                                <div class="actions flex gap-1">
-                                    <button class="hover:text-white" title="New file"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M12 5v14M5 12h14"/></svg></button>
-                                    <button class="hover:text-white" title="More"><svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg></button>
-                                </div>
-                            </div>
-                            <div class="tree-list flex-1 overflow-y-auto p-2">
-                                <template x-for="node in flatTree" :key="node.path">
-                                    <div class="tree-row" :class="node.type === 'file' ? 'leaf' : (node.open ? 'open' : '')" :style="`padding-left: ${(node.depth * 12) + 6}px;`" @click="if(node.type === 'dir') toggleFileNode(node.path)">
-                                        <span class="chev" :style="node.type === 'file' ? 'visibility:hidden' : ''"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg></span>
-                                        <span class="icon">
-                                            <template x-if="node.type === 'dir'">
-                                                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z"/></svg>
-                                            </template>
-                                            <template x-if="node.type === 'file'">
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6z"/><path d="M14 3v6h6"/></svg>
-                                            </template>
-                                        </span>
-                                        <span class="name" x-text="node.name"></span>
-                                    </div>
-                                </template>
-                            </div>
-                        </div>
-
-                        <!-- Tasks View -->
-                        <div x-show="activitySection === 'tasks'" class="sb-section tasks h-full flex flex-col">
-                            <div class="sb-header flex justify-between px-3 py-2 border-b border-border bg-panel text-xs text-gray-500 font-bold uppercase tracking-wider">
-                                <span x-text="'Tasks · ' + filteredConsoleTasks.length"></span>
-                                <div class="flex items-center gap-2">
-                                    <button class="chip text-[9px]" :class="autoYes ? 'active' : ''" @click="autoYes = !autoYes; localStorage.setItem('autoYes', autoYes)">auto-yes <span class="dot ml-1" :style="autoYes ? 'background:#4ade80' : 'background:var(--text-3)'"></span></button>
-                                </div>
-                            </div>
-                            <div class="task-filter px-2 py-2 border-b border-border bg-[#0d0f14]">
-                                <div class="search-input bg-panel mb-2 flex items-center px-2 rounded border border-border">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" class="text-gray-500"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/></svg>
-                                    <input placeholder="Filter tasks…" x-model="taskQuery" class="bg-transparent border-none text-xs w-full py-1 ml-2 outline-none text-gray-300">
-                                </div>
-                                <div class="chip-row flex flex-wrap gap-1">
-                                    <template x-for="s in [{k:'in-progress', c:'#fbbf24'}, {k:'review', c:'#f472b6'}, {k:'pending', c:'#7d8699'}, {k:'assigned', c:'#5fa8ff'}, {k:'done', c:'#4ade80'}]" :key="s.k">
-                                        <button @click="filterStatus = (filterStatus === s.k ? null : s.k)" class="chip" :class="filterStatus === s.k ? 'active' : ''">
-                                            <span class="dot" :style="`background: ${s.c}`"></span> <span x-text="s.k"></span>
-                                        </button>
-                                    </template>
-                                </div>
-                            </div>
-                            <div class="task-list flex-1 overflow-y-auto">
-                                <template x-for="task in filteredConsoleTasks" :key="task.id">
-                                    <div class="task-row p-2 border-b border-border/50 hover:bg-[#161b22] cursor-pointer" :class="selectedTaskId === task.id ? 'bg-[#161b22] border-l-2 border-l-accent' : ''" @click="selectedTaskId = task.id; showTaskDetail = true" draggable="true" @dragstart="dragTask = task; window.updateDragGhost?.($event); document.addEventListener('dragover', window.updateDragGhost)" @dragend="dragTask = null; document.removeEventListener('dragover', window.updateDragGhost)" @contextmenu.prevent="openCtx($event, task)">
-                                        <div class="tr-main flex items-center justify-between text-xs text-gray-300 mb-1">
-                                            <span class="tr-id font-mono text-[10px] text-gray-500" :class="selectedTaskId === task.id ? 'text-accent' : ''" x-text="task.id"></span>
-                                            <span class="tr-title truncate ml-2 flex-1" x-text="task.title"></span>
-                                        </div>
-                                        <div class="tr-meta flex items-center text-[10px] text-gray-500 gap-2">
-                                            <span class="tr-mod" x-text="task.module ? '@'+task.module : ''"></span>
-                                            <span class="tr-status flex items-center gap-1"><span class="status-dot" :class="task.status"></span></span>
-                                        </div>
-                                    </div>
-                                </template>
-                            </div>
-                        </div>
-
-                        <!-- Modules View -->
-                        <div x-show="activitySection === 'modules'" class="sb-section modules h-full flex flex-col text-sm text-gray-400">
-                            <div class="sb-header px-3 py-2 border-b border-border bg-panel text-xs text-gray-500 font-bold uppercase tracking-wider">Modules</div>
-                            <div class="flex-1 overflow-y-auto p-2">
-                                <template x-for="m in collabModules" :key="m.slug">
-                                    <div class="p-2 mb-1 rounded hover:bg-panel cursor-pointer text-xs flex justify-between" @click="filterModule = m.slug; activitySection = 'tasks'">
-                                        <span x-text="'@' + m.slug" class="font-mono text-accent"></span>
-                                        <span x-text="m.status" class="text-gray-500"></span>
-                                    </div>
-                                </template>
-                            </div>
-                        </div>
-
-                        <!-- Terminals View -->
-                        <div x-show="activitySection === 'terminals'" class="sb-section terminals h-full flex flex-col text-sm text-gray-400">
-                            <div class="sb-header px-3 py-2 border-b border-border bg-panel text-xs text-gray-500 font-bold uppercase tracking-wider">Sessions</div>
-                            <div class="flex-1 overflow-y-auto p-2">
-                                <template x-for="(s, index) in sessions" :key="s.id">
-                                    <div class="sx-instance group p-2 mb-1 rounded hover:bg-panel cursor-pointer flex flex-col gap-1 border border-transparent hover:border-border" :class="activeSessionId === s.id ? 'bg-[#161b22] border-border' : ''" @click="activeSessionId = s.id; focusSessionInput(s.id)">
-                                        <div class="flex items-center justify-between">
-                                            <div class="flex items-center gap-2">
-                                                <span class="agent-letter w-4 h-4 flex items-center justify-center rounded text-[9px] font-bold text-white" :style="`background: ${cmdkMeta[s.agent.toLowerCase()]?.color || '#94a3b8'}`" x-text="cmdkMeta[s.agent.toLowerCase()]?.letter || s.agent.charAt(0).toUpperCase()"></span>
-                                                <span class="text-xs text-gray-300 font-mono" x-text="s.name"></span>
-                                            </div>
-                                            <div class="flex gap-1 opacity-60 hover:opacity-100">
-                                                <button class="p-1 hover:text-white" @click.stop="splitWith = (splitWith ? null : s.id)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="12" height="12"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/></svg></button>
-                                                <button class="p-1 hover:text-red-400" @click.stop="closeSession(s.id)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M6 6l12 12M6 18L18 6"/></svg></button>
-                                            </div>
-                                        </div>
-                                        <div class="sx-i-meta flex items-center justify-between text-[10px] text-gray-500 font-mono">
-                                            <div class="flex gap-2">
-                                                <span class="sx-i-num" x-text="'λ#' + (index + 1)"></span>
-                                                <span class="sx-i-branch" x-text="workspace.branch || '�'"></span>
-                                            </div>
-                                            <div class="flex gap-2">
-                                                <span class="sx-diff--add text-green-400" x-text="'+' + (workspace.diff?.add || 0)"></span>
-                                                <span class="sx-diff--del text-red-400" x-text="'-' + (workspace.diff?.del || 0)"></span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </template>
-                            </div>
-                        </div>
-                    </aside>
-
-                    <!-- Console Canvas -->
-                    <main class="canvas flex flex-col">
-                        <div class="term-tabs">
-                            <template x-for="s in sessions" :key="s.id">
-                                <button class="term-tab" :class="(activeSessionId === s.id ? 'active ' : '') + (dragTargetTab === s.id ? 'drag-target ' : '')" @click="activeSessionId = s.id; focusSessionInput(s.id)" @dragover.prevent="if(dragTask) dragTargetTab = s.id" @dragleave="dragTargetTab = null" @drop.prevent="if(dragTask) { injectTaskIntoSession(s.id, dragTask); dragTargetTab = null; dragTask = null; }">
-                                    <span class="agent-pill" :data-agent="s.agent" x-text="s.agent"></span>
-                                    <span class="name" x-text="s.name"></span>
-                                    <span class="close" @click.stop="closeSession(s.id)">✕</span>
-                                </button>
-                            </template>
-                            <div x-data="{ open: false, x: 0, y: 0, place(btn){ const r = btn.getBoundingClientRect(); this.x = r.left; this.y = r.bottom + 4; } }" @click.away="open = false">
-                                <button class="new-tab" @click="place($event.currentTarget); open = !open">+ New ▾</button>
-                                <div x-show="open" x-cloak class="fixed w-44 bg-panel border border-border rounded-lg shadow-xl z-[200] py-1" :style="`left: ${x}px; top: ${y}px`">
-                                    <template x-for="agent in [
-                                        {id:'bash', label:'Bash shell', color:'#94a3b8', letter:'$'},
-                                        {id:'claude', label:'Claude', color:'#fb923c', letter:'C'},
-                                        {id:'codex', label:'Codex', color:'#38bdf8', letter:'X'},
-                                        {id:'gemini', label:'Gemini', color:'#a78bfa', letter:'G'}
-                                    ]" :key="agent.id">
-                                        <button @click="spawnSession(agent.id); open = false" class="w-full text-left px-3 py-2 text-xs flex items-center gap-2 hover:bg-panel-light">
-                                            <span class="agent-letter w-4 h-4 flex items-center justify-center rounded text-[9px] font-bold text-white" :style="`background: ${agent.color}`" x-text="agent.letter"></span>
-                                            <span x-text="agent.label"></span>
-                                        </button>
-                                    </template>
-                                </div>
-                            </div>
-                            <div class="right-actions ml-auto flex">
-                                <button class="icon-btn" @click="splitWith = (splitWith ? null : sessions.find(s => s.id !== activeSessionId)?.id)">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
-                                </button>
-                            </div>
-                        </div>
-
-                        <div class="term-grid flex-1 overflow-hidden" :class="splitWith ? 'split-2' : ''">
-                            <template x-for="s in sessions" :key="s.id">
-                                <div class="term-pane flex flex-col relative transition-shadow"
-                                     x-show="s.id === activeSessionId || s.id === splitWith"
-                                     :data-session-id="s.id"
-                                     :style="`
-                                       box-shadow: inset 0 0 0 ${s.id === activeSessionId ? '1.5px' : '1px'} ${cmdkMeta[s.agent]?.color || '#94a3b8'}${s.id === activeSessionId ? '' : '80'};
-                                       border-radius: 6px; margin: 4px; overflow: hidden;
-                                       ${s.id === splitWith && s.id !== activeSessionId ? 'opacity: 0.8;' : ''}
-                                     `">
-                                    <div class="xt-host w-full h-full bg-[#0d0f14]" :data-session-id="s.id" x-init="mountXterm($el, s.id)"></div>
-                                </div>
-                            </template>
-                        </div>
-                    </main>
-                </div>
-
-                                <!-- Console Statusbar -->
-                <footer class="statusbar h-7 border-t border-border flex items-center justify-center px-3 text-[11px] bg-[#0d0f14] transition-all" :class="(!activeSession || activitySection === 'tasks') ? 'font-mono text-gray-500' : 'justify-start'">
-
-                    <template x-if="!activeSession || activitySection === 'tasks'">
-                        <div class="flex items-center gap-4">
-                            <span><span class="text-accent border border-border bg-white/5 rounded px-1">n</span> new</span>
-                            <span class="text-gray-600">·</span>
-                            <span><span class="text-accent border border-border bg-white/5 rounded px-1">D</span> kill</span>
-                            <span class="text-gray-600">·</span>
-                            <span><span class="text-accent border border-border bg-white/5 rounded px-1">↵/o</span> open</span>
-                            <span class="text-gray-600">·</span>
-                            <span><span class="text-accent border border-border bg-white/5 rounded px-1">p</span> push</span>
-                            <span class="text-gray-600">·</span>
-                            <span><span class="text-accent border border-border bg-white/5 rounded px-1">c</span> checkout</span>
-                            <span class="text-gray-600">·</span>
-                            <span><span class="text-accent border border-border bg-white/5 rounded px-1">?</span></span>
-                        </div>
-                    </template>
-
-                    <template x-if="activeSession && activitySection !== 'tasks'">
-                        <div class="flex items-center w-full">
-                            <span class="mr-4 text-gray-500" x-text="workspace.branch || '�'"></span>
-                            <span class="mr-4 text-gray-500" x-text="activeSession?.cwd"></span>
-                            <div class="spacer flex-1"></div>
-                            <span class="mr-4 text-gray-500" x-text="sessions.length + ' sessions'"></span>
-                            <span class="text-gray-500">⌘K · palette</span>
-                        </div>
-                    </template>
-                </footer>
-
-            </div>
-        </div>
-
-                        <!-- Cmd-K Palette Overlay -->
-                <div x-show="cmdkOpen" x-cloak class="cmdk-overlay" @mousedown.self="cmdkOpen = false">
-                    <div class="cmdk" @mousedown.stop>
-                        <div class="cmdk-input">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.5-4.5"></path></svg>
-                            <input x-ref="cmdkInput" x-model="cmdkQuery" @keydown="cmdkKeydown($event)" placeholder="Search tasks, run with agent, focus terminal…">
-                            <span class="esc">esc</span>
-                        </div>
-                        <div class="cmdk-list" x-ref="cmdkList">
-                            <template x-if="cmdkGroups.length === 0">
-                                <div class="cmdk-empty">No results</div>
-                            </template>
-                            <template x-for="(group, gIdx) in cmdkGroups" :key="gIdx">
-                                <div>
-                                    <div class="cmdk-group-label" x-text="group.label"></div>
-                                    <template x-for="(item, iIdx) in group.items" :key="iIdx">
-                                        <div class="cmdk-item" :class="cmdkIsSelected(item) ? 'selected' : ''" @mouseenter="cmdkSetSel(item)" @click="cmdkExec(item)">
-                                            <template x-if="['run', 'spawn', 'focus'].includes(item.kind)">
-                                                <span class="ico agent" :style="item.color ? `background: ${item.color}` : (cmdkMeta[item.agent]?.color ? `background: ${cmdkMeta[item.agent].color}` : 'background: var(--bg-2)')" x-text="item.letter || cmdkMeta[item.agent]?.letter || '·'"></span>
-                                            </template>
-                                            <template x-if="item.kind === 'task'">
-                                                <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M9 12l2 2 4-4"></path></svg></span>
-                                            </template>
-                                            <template x-if="!['run', 'spawn', 'focus', 'task'].includes(item.kind)">
-                                                <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg></span>
-                                            </template>
-                                            <span class="label" x-text="item.label"></span>
-                                            <template x-if="item.sub">
-                                                <span class="sub" x-text="item.sub"></span>
-                                            </template>
-                                        </div>
-                                    </template>
-                                </div>
-                            </template>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Context Menu Overlay -->
-                <div x-show="ctxMenu" x-cloak class="context-menu" :style="`left: ${ctxMenu?.x}px; top: ${ctxMenu?.y}px`" @click.stop @contextmenu.prevent>
-                    <template x-for="(item, i) in ctxItems" :key="i">
-                        <template x-if="item.sep">
-                            <div class="sep"></div>
-                        </template>
-                        <template x-if="item.groupLabel">
-                            <div class="label" x-text="item.groupLabel"></div>
-                        </template>
-                        <template x-if="!item.sep && !item.groupLabel">
-                            <div class="item" :class="item.danger ? 'danger' : ''" @click="ctxExec(item); ctxMenu = null">
-                                <template x-if="item.letter">
-                                    <span class="agent-letter" :style="`background: ${item.color}; --agent-color: ${item.color}`" x-text="item.letter"></span>
-                                </template>
-                                <span x-text="item.label"></span>
-                                <template x-if="item.kbd">
-                                    <span class="kbd" x-text="item.kbd"></span>
-                                </template>
-                            </div>
-                        </template>
-                    </template>
-                </div>
-
-                <!-- Drag Ghost -->
-                <div x-show="dragTask" x-cloak class="drag-ghost" :style="`left: ${dragGhost?.x}px; top: ${dragGhost?.y}px`">
-                    <span x-text="`${dragTask?.id}  ${dragTask?.title?.slice(0, 36)}`"></span>
-                </div>
-
-                <!-- Tweaks Panel -->
-                <div x-show="tweaksOpen" x-cloak class="fixed right-4 bottom-4 w-72 bg-[#1a1f2b] border border-border shadow-2xl rounded-xl z-[999] flex flex-col font-sans text-[13px] text-gray-300" @click.stop x-transition>
-                    <div class="px-4 py-3 border-b border-border flex justify-between items-center font-bold text-white tracking-wide uppercase text-[10px]">
-                        Tweaks
-                        <button @click="tweaksOpen = false" class="text-gray-500 hover:text-white"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M6 18L18 6"></path></svg></button>
-                    </div>
-                    <div class="p-4 flex flex-col gap-4">
-                        <div>
-                            <div class="text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-2">Theme</div>
-                            <div class="flex items-center justify-between mb-2">
-                                <span>Style</span>
-                                <div class="flex bg-[#0d0f14] rounded-md p-1 border border-border">
-                                    <button class="px-3 py-1 rounded text-xs" :class="consoleTheme === 'warp' ? 'bg-[#232938] text-white' : 'text-gray-400'" @click="consoleTheme = 'warp'; applyConsoleTheme(); saveTweaks()">Warp</button>
-                                    <button class="px-3 py-1 rounded text-xs" :class="consoleTheme === 'vscode' ? 'bg-[#232938] text-white' : 'text-gray-400'" @click="consoleTheme = 'vscode'; applyConsoleTheme(); saveTweaks()">VS Code</button>
-                                </div>
-                            </div>
-                            <div class="flex items-center justify-between">
-                                <span>Accent</span>
-                                <select class="bg-[#0d0f14] border border-border rounded text-xs py-1 px-2 text-white outline-none" x-model="consoleAccent" @change="applyConsoleTheme(); saveTweaks()">
-                                    <option value="purple">Purple</option>
-                                    <option value="cyan">Cyan</option>
-                                    <option value="amber">Amber</option>
-                                    <option value="green">Green</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="border-t border-border pt-4">
-                            <div class="text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-2">Layout</div>
-                            <div class="flex items-center justify-between mb-2">
-                                <span>Layout</span>
-                                <div class="flex bg-[#0d0f14] rounded-md p-1 border border-border">
-                                    <button class="px-2 py-1 rounded text-[11px]" :class="consoleLayout === 'balanced' ? 'bg-[#232938] text-white' : 'text-gray-400'" @click="consoleLayout = 'balanced'; applyConsoleTheme(); saveTweaks()">Balanced</button>
-                                    <button class="px-2 py-1 rounded text-[11px]" :class="consoleLayout === 'terminal-first' ? 'bg-[#232938] text-white' : 'text-gray-400'" @click="consoleLayout = 'terminal-first'; applyConsoleTheme(); saveTweaks()">Terminal-First</button>
-                                </div>
-                            </div>
-                            <div class="flex items-center justify-between">
-                                <span>Density</span>
-                                <div class="flex bg-[#0d0f14] rounded-md p-1 border border-border">
-                                    <button class="px-2 py-1 rounded text-[11px]" :class="consoleDensity === 'compact' ? 'bg-[#232938] text-white' : 'text-gray-400'" @click="consoleDensity = 'compact'; applyConsoleTheme(); saveTweaks()">Compact</button>
-                                    <button class="px-2 py-1 rounded text-[11px]" :class="consoleDensity === 'cozy' ? 'bg-[#232938] text-white' : 'text-gray-400'" @click="consoleDensity = 'cozy'; applyConsoleTheme(); saveTweaks()">Cozy</button>
-                                    <button class="px-2 py-1 rounded text-[11px]" :class="consoleDensity === 'comfy' ? 'bg-[#232938] text-white' : 'text-gray-400'" @click="consoleDensity = 'comfy'; applyConsoleTheme(); saveTweaks()">Comfy</button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Task Detail Overlay (Console) -->
-                <div x-show="showTaskDetail && selectedTask" x-cloak class="task-detail-overlay" @click.stop x-transition>
-                    <div class="td-header">
-                        <div class="td-row">
-                            <span class="td-id" x-text="selectedTask?.id"></span>
-                            <span class="td-status">
-                                <span class="status-dot" :class="selectedTask?.status"></span>
-                                <span x-text="selectedTask?.status"></span>
-                            </span>
-                            <span class="td-priority" :class="selectedTask?.priority" x-text="selectedTask?.priority"></span>
-                            <button class="td-close" @click="showTaskDetail = false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M6 18L18 6"></path></svg></button>
-                        </div>
-                        <div class="td-title" x-text="selectedTask?.title"></div>
-                        <div class="td-summary" x-text="selectedTask?.summary || selectedTask?.description"></div>
-                        <div class="td-meta-row">
-                            <template x-if="selectedTask?.module">
-                                <span class="module" x-text="'@' + selectedTask.module"></span>
-                            </template>
-                            <template x-for="s in (selectedTask?.services || [])" :key="s">
-                                <span class="svc" x-text="s"></span>
-                            </template>
-                            <span class="assignee" x-text="selectedTask?.assignee ? '→ ' + selectedTask.assignee : 'unassigned'"></span>
-                        </div>
-                    </div>
-                    <div class="td-actions">
-                        <span class="label">Run with</span>
-                        <div class="td-action-btns">
-                            <template x-for="a in ['Claude', 'Codex', 'Gemini']" :key="a">
-                                <button class="td-action" :data-agent="a.toLowerCase()" :style="`--agent-color: ${cmdkMeta[a.toLowerCase()]?.color || '#fb923c'}`" @click="spawnSession(a.toLowerCase(), { task: selectedTask })">
-                                    <span class="agent-letter" :style="`background: ${cmdkMeta[a.toLowerCase()]?.color || '#fb923c'}`" x-text="cmdkMeta[a.toLowerCase()]?.letter || a.charAt(0)"></span>
-                                    <span x-text="a"></span>
-                                </button>
-                            </template>
-                        </div>
-                        <div class="td-secondary-actions">
-                            <button class="td-sec" @click="showToast('Copied context envelope')">Copy context envelope</button>
-                            <button class="td-sec" @click="showToast('Opened terminal')">Open in terminal at @<span x-text="selectedTask?.module"></span></button>
-                            <select class="td-sec" :value="selectedTask?.status" @change="transitionTask(selectedTask.id, $event.target.value)">
-                                <template x-for="s in ['pending','assigned','in-progress','review','done']" :key="s">
-                                    <option :value="s" x-text="'→ ' + s"></option>
-                                </template>
-                            </select>
-                            <select class="td-sec" :value="selectedTask?.assignee || ''" @change="assignTaskTo(selectedTask.id, $event.target.value)">
-                                <option value="">unassigned</option>
-                                <option>Claude</option><option>Codex</option><option>Gemini</option><option>User</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="td-body">
-                        <template x-for="(blk, i) in (selectedTask?.body || [])" :key="i">
-                            <div>
-                                <h4 x-text="blk.h"></h4>
-                                <template x-if="blk.p"><p x-text="blk.p"></p></template>
-                                <template x-if="blk.list">
-                                    <ul>
-                                        <template x-for="(it, j) in blk.list" :key="j">
-                                            <li x-text="it"></li>
+                    <template x-if="subTab === 'entries' && activeEntryId">
+                        <div class="flex-1 flex flex-col overflow-hidden">
+                            <div class="p-6 border-b border-border bg-panel/10">
+                                <div class="flex justify-between items-start mb-4">
+                                    <div class="flex flex-wrap gap-2">
+                                        <span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded-sm" :style="`color: ${typeColor(activeEntry.type)}; background: ${typeColor(activeEntry.type)}10; border: 1px solid ${typeColor(activeEntry.type)}20`" x-text="activeEntry.type"></span>
+                                        <template x-if="activeEntry.module">
+                                            <span @click="viewModule({slug: activeEntry.module}); subTab = 'modules'" class="cursor-pointer text-[10px] font-bold uppercase px-2 py-0.5 rounded-sm bg-panel-light/30 text-gray-400 border border-border hover:border-gray-500" x-text="'@' + activeEntry.module"></span>
                                         </template>
-                                    </ul>
-                                </template>
-                                <template x-if="blk.code">
-                                    <pre style="background:var(--bg-2); border:1px solid var(--line); padding:10px; border-radius:6px; font-family:var(--font-mono); font-size:11.5px; color:var(--text-1); overflow:auto; margin:0;" x-text="blk.code"></pre>
-                                </template>
-                            </div>
-                        </template>
-                        <template x-if="!selectedTask?.body || selectedTask.body.length === 0">
-                            <p style="color:var(--text-3)">No description.</p>
-                        </template>
-
-                        <h4>Activity</h4>
-                        <div class="td-activity">
-                            <template x-for="(act, i) in (selectedTask?.activity || [])" :key="i">
-                                <div class="td-activity-item">
-                                    <span class="timestamp" x-text="act.t"></span>
-                                    <span>
-                                        <span class="actor" x-text="act.a"></span>
-                                        <span class="act" x-text="act.act"></span>
-                                    </span>
+                                    </div>
+                                    <div class="flex items-center space-x-3">
+                                        <div class="text-[10px] font-medium text-gray-500 text-right">
+                                            <div x-text="formatDateLong(activeEntry.created_at)"></div>
+                                        </div>
+                                        <div class="flex space-x-1 border-l border-border pl-3">
+                                            <button @click="editEntry()" class="p-1.5 text-gray-500 hover:text-white transition-colors"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 00 2 2h11a2 2 0 00 2-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg></button>
+                                            <button @click="deleteEntry(activeEntry.id)" class="p-1.5 text-gray-500 hover:text-danger transition-colors"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button>
+                                        </div>
+                                    </div>
                                 </div>
-                            </template>
-                            <template x-if="!selectedTask?.activity || selectedTask.activity.length === 0">
-                                <div style="color:var(--text-3); font-size:11.5px;">No activity yet.</div>
-                            </template>
+                                <h2 class="text-2xl font-bold text-white tracking-tight" x-text="activeEntry.title"></h2>
+                            </div>
+                            <div class="flex-1 overflow-y-auto p-8 custom-scrollbar">
+                                <div class="max-w-3xl mx-auto space-y-8">
+                                    <div class="bg-panel/20 border border-border p-5 rounded-md">
+                                        <div class="text-[10px] font-bold uppercase text-gray-500 mb-2">Summary</div>
+                                        <div class="text-base text-gray-300 leading-relaxed font-medium" x-text="activeEntry.summary"></div>
+                                    </div>
+                                    <div class="prose prose-invert max-w-none text-[15px] leading-relaxed text-gray-400 whitespace-pre-wrap font-normal" x-text="activeEntry.description"></div>
+                                </div>
+                            </div>
                         </div>
-                    </div>
-                </div>
-
-
-        <!-- Identity Modals -->
-        <!-- (Keep existing modals) -->
-        <div x-show="dialog === 'save-profile'" x-transition x-cloak class="fixed inset-0 z-[100] flex items-center justify-center bg-dark/90 backdrop-blur-xl p-6">
-            <div @click.away="dialog = null" class="bg-panel border border-border w-full max-w-xl rounded-[3rem] overflow-hidden shadow-[0_0_100px_rgba(88,166,255,0.15)]">
-                <div class="p-12">
-                    <h3 class="text-3xl font-black text-white italic tracking-tighter uppercase mb-10">Init Identity</h3>
-                    <div class="space-y-8">
-                        <div>
-                            <label class="block text-[10px] font-black uppercase text-gray-600 tracking-widest mb-3">Internal Identifier (Slug)</label>
-                            <input type="text" x-model="formData.name" class="w-full bg-dark border border-border rounded-2xl p-5 text-white font-mono outline-none focus:border-accent text-lg">
+                    </template>
+                    <template x-if="subTab === 'tasks' && activeTaskId">
+                        <div class="flex-1 flex flex-col overflow-hidden">
+                            <div class="p-6 border-b border-border bg-panel/10">
+                                <div class="flex justify-between items-start mb-4">
+                                    <span class="text-[10px] font-mono text-accent bg-accent/10 px-2 py-0.5 rounded-sm border border-accent/20" x-text="activeTask.id"></span>
+                                    <div class="flex items-center space-x-3">
+                                        <span class="text-[10px] font-bold uppercase text-gray-500" x-text="activeTask.status"></span>
+                                        <div class="flex space-x-1 border-l border-border pl-3">
+                                            <button @click="editTask()" class="p-1.5 text-gray-500 hover:text-white transition-colors"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 00 2 2h11a2 2 0 00 2-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg></button>
+                                            <button @click="deleteTask(activeTask.id)" class="p-1.5 text-gray-500 hover:text-danger transition-colors"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <h2 class="text-2xl font-bold text-white tracking-tight" x-text="activeTask.title"></h2>
+                            </div>
+                            <div class="flex-1 overflow-y-auto p-8 custom-scrollbar">
+                                <div class="max-w-3xl mx-auto space-y-8">
+                                    <div class="prose prose-invert max-w-none text-[15px] leading-relaxed text-gray-400 whitespace-pre-wrap font-normal" x-text="activeTask.description"></div>
+                                </div>
+                            </div>
                         </div>
-                        <div>
-                            <label class="block text-[10px] font-black uppercase text-gray-600 tracking-widest mb-3">Descriptive Label</label>
-                            <input type="text" x-model="formData.label" class="w-full bg-dark border border-border rounded-2xl p-5 text-white outline-none focus:border-accent text-lg">
+                    </template>
+                    <template x-if="subTab === 'modules' && activeModuleSlug">
+                        <div class="flex-1 flex flex-col overflow-hidden">
+                            <div class="p-6 border-b border-border bg-panel/10">
+                                <div class="flex justify-between items-start mb-4">
+                                    <h2 class="text-2xl font-bold text-white tracking-tight" x-text="'@' + activeModuleSlug"></h2>
+                                    <div class="flex space-x-1 border-l border-border pl-3">
+                                        <button @click="editModule()" class="p-1.5 text-gray-500 hover:text-white transition-colors"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 00 2 2h11a2 2 0 00 2-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg></button>
+                                        <button @click="deleteModule(activeModuleSlug)" class="p-1.5 text-gray-500 hover:text-danger transition-colors"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button>
+                                    </div>
+                                </div>
+                                <p class="text-sm text-gray-400" x-text="activeModule.name"></p>
+                            </div>
+                            <div class="flex-1 overflow-y-auto p-8 custom-scrollbar">
+                                <div class="max-w-3xl mx-auto space-y-10">
+                                    <div>
+                                        <div class="text-[10px] font-bold uppercase text-gray-500 mb-2">Current Goal</div>
+                                        <div class="bg-accent/5 border border-accent/20 p-4 rounded-md text-base font-semibold text-accent" x-text="activeModule.current_goal || 'No active goal set.'"></div>
+                                    </div>
+                                    <div>
+                                        <div class="text-[10px] font-bold uppercase text-gray-500 mb-2">Architecture Summary</div>
+                                        <div class="prose prose-invert max-w-none text-[15px] leading-relaxed text-gray-400 whitespace-pre-wrap font-normal" x-text="activeModule.description"></div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
-                    </div>
-                </div>
-                <div class="bg-panel-light p-8 flex justify-end space-x-6 border-t border-border/50">
-                    <button @click="dialog = null" class="px-8 py-3 text-[11px] font-black uppercase text-gray-500 hover:text-white">Abort</button>
-                    <button @click="saveCurrent()" class="px-10 py-3 bg-accent text-white rounded-2xl font-black uppercase shadow-2xl shadow-accent/30">Commit Identity</button>
+                    </template>
                 </div>
             </div>
         </div>
 
         <!-- Toasts -->
-        <div class="fixed bottom-12 right-12 z-[200] space-y-4 pointer-events-none">
+        <div class="fixed bottom-8 right-8 z-[200] space-y-3 pointer-events-none">
             <template x-for="t in toasts" :key="t.id">
-                <div x-transition class="flex items-center space-x-5 bg-panel border border-border pl-6 pr-8 py-5 rounded-3xl shadow-2xl pointer-events-auto min-w-[350px]"
-                     :class="t.type === 'err' ? 'border-danger/50 shadow-danger/20' : 'border-accent/50 shadow-accent/20'">
-                    <div class="w-3 h-3 rounded-full" :class="t.type === 'err' ? 'bg-danger' : 'bg-accent'"></div>
+                <div x-transition class="flex items-center space-x-4 bg-panel border border-border px-5 py-3.5 rounded-md shadow-xl pointer-events-auto min-w-[300px]">
+                    <div class="w-1.5 h-1.5 rounded-full" :class="t.type === 'err' ? 'bg-danger' : 'bg-success'"></div>
                     <div class="flex-1">
-                        <div class="text-[9px] font-black uppercase tracking-[0.2em] text-gray-500" x-text="t.type === 'err' ? 'Signal Error' : 'Signal Notice'"></div>
-                        <div class="text-xs font-bold text-white mt-1" x-text="t.msg"></div>
+                        <div class="text-[10px] font-bold uppercase text-gray-500" x-text="t.type === 'err' ? 'System Error' : 'System Notice'"></div>
+                        <div class="text-[13px] font-medium text-white mt-0.5" x-text="t.msg"></div>
                     </div>
                 </div>
             </template>
+        </div>
+
+        <!-- CRUD Modals -->
+        <div x-show="editMode" x-cloak class="fixed inset-0 z-[300] flex items-center justify-center p-4 backdrop-blur-xs bg-black/40">
+            <div @click.away="editMode = null" class="w-full max-w-xl bg-panel border border-border rounded-md shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+                <header class="px-6 py-4 border-b border-border flex justify-between items-center bg-panel-light/20">
+                    <h3 class="text-sm font-semibold text-white uppercase tracking-wider" x-text="editMode === 'entry' ? (entryForm.id ? 'Edit Entry' : 'New Entry') : (editMode === 'task' ? (taskForm.id ? 'Edit Task' : 'New Task') : (moduleForm.slug ? 'Edit Module' : 'New Module'))"></h3>
+                    <button @click="editMode = null" class="text-gray-500 hover:text-white transition-colors">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </button>
+                </header>
+
+                <div class="flex-1 overflow-y-auto p-6 custom-scrollbar">
+                    <!-- Entry Form -->
+                    <template x-if="editMode === 'entry'">
+                        <div class="space-y-5">
+                            <div class="grid grid-cols-2 gap-4">
+                                <div class="space-y-1.5">
+                                    <label class="text-[10px] font-bold uppercase text-gray-500">Type</label>
+                                    <select x-model="entryForm.type" class="w-full bg-dark border border-border rounded px-3 py-2 text-xs text-white focus:border-accent outline-none">
+                                        <option value="handoff">Handoff</option>
+                                        <option value="decision">Decision</option>
+                                        <option value="gotcha">Gotcha</option>
+                                        <option value="review">Review</option>
+                                        <option value="proposal">Proposal</option>
+                                        <option value="session-note">Session Note</option>
+                                        <option value="changelog">Changelog</option>
+                                    </select>
+                                </div>
+                                <div class="space-y-1.5">
+                                    <label class="text-[10px] font-bold uppercase text-gray-500">Module</label>
+                                    <select x-model="entryForm.module" class="w-full bg-dark border border-border rounded px-3 py-2 text-xs text-white focus:border-accent outline-none">
+                                        <option value="">(global)</option>
+                                        <template x-for="m in collabModules" :key="m.slug">
+                                            <option :value="m.slug" x-text="'@' + m.slug"></option>
+                                        </template>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="space-y-1.5">
+                                <label class="text-[10px] font-bold uppercase text-gray-500">Title</label>
+                                <input type="text" x-model="entryForm.title" placeholder="Title..." class="w-full bg-dark border border-border rounded px-3 py-2 text-xs text-white focus:border-accent outline-none">
+                            </div>
+                            <div class="space-y-1.5">
+                                <label class="text-[10px] font-bold uppercase text-gray-500">Summary</label>
+                                <textarea x-model="entryForm.summary" rows="2" placeholder="Brief summary..." class="w-full bg-dark border border-border rounded px-3 py-2 text-xs text-white focus:border-accent outline-none resize-none"></textarea>
+                            </div>
+                            <div class="space-y-1.5">
+                                <label class="text-[10px] font-bold uppercase text-gray-500">Description</label>
+                                <textarea x-model="entryForm.description" rows="6" placeholder="Details..." class="w-full bg-dark border border-border rounded px-3 py-2 text-xs text-white font-mono focus:border-accent outline-none custom-scrollbar"></textarea>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Task Form -->
+                    <template x-if="editMode === 'task'">
+                        <div class="space-y-5">
+                            <div class="space-y-1.5">
+                                <label class="text-[10px] font-bold uppercase text-gray-500">Title</label>
+                                <input type="text" x-model="taskForm.title" placeholder="Task title..." class="w-full bg-dark border border-border rounded px-3 py-2 text-xs text-white focus:border-accent outline-none">
+                            </div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div class="space-y-1.5">
+                                    <label class="text-[10px] font-bold uppercase text-gray-500">Status</label>
+                                    <select x-model="taskForm.status" class="w-full bg-dark border border-border rounded px-3 py-2 text-xs text-white focus:border-accent outline-none">
+                                        <option value="pending">Pending</option>
+                                        <option value="assigned">Assigned</option>
+                                        <option value="in-progress">In Progress</option>
+                                        <option value="review">Review</option>
+                                        <option value="done">Done</option>
+                                    </select>
+                                </div>
+                                <div class="space-y-1.5">
+                                    <label class="text-[10px] font-bold uppercase text-gray-500">Priority</label>
+                                    <select x-model="taskForm.priority" class="w-full bg-dark border border-border rounded px-3 py-2 text-xs text-white focus:border-accent outline-none">
+                                        <option value="low">Low</option>
+                                        <option value="medium">Medium</option>
+                                        <option value="high">High</option>
+                                        <option value="critical">Critical</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div class="space-y-1.5">
+                                    <label class="text-[10px] font-bold uppercase text-gray-500">Assignee</label>
+                                    <select x-model="taskForm.assignee" class="w-full bg-dark border border-border rounded px-3 py-2 text-xs text-white focus:border-accent outline-none">
+                                        <option :value="null">Unassigned</option>
+                                        <option value="Claude">Claude</option>
+                                        <option value="Codex">Codex</option>
+                                        <option value="Gemini">Gemini</option>
+                                        <option value="User">User</option>
+                                    </select>
+                                </div>
+                                <div class="space-y-1.5">
+                                    <label class="text-[10px] font-bold uppercase text-gray-500">Module</label>
+                                    <select x-model="taskForm.module" class="w-full bg-dark border border-border rounded px-3 py-2 text-xs text-white focus:border-accent outline-none">
+                                        <option value="">(global)</option>
+                                        <template x-for="m in collabModules" :key="m.slug">
+                                            <option :value="m.slug" x-text="'@' + m.slug"></option>
+                                        </template>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="space-y-1.5">
+                                <label class="text-[10px] font-bold uppercase text-gray-500">Summary</label>
+                                <input type="text" x-model="taskForm.summary" placeholder="Summary..." class="w-full bg-dark border border-border rounded px-3 py-2 text-xs text-white focus:border-accent outline-none">
+                            </div>
+                            <div class="space-y-1.5">
+                                <label class="text-[10px] font-bold uppercase text-gray-500">Technical Details</label>
+                                <textarea x-model="taskForm.description" rows="5" placeholder="Details..." class="w-full bg-dark border border-border rounded px-3 py-2 text-xs text-white font-mono focus:border-accent outline-none custom-scrollbar"></textarea>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Module Form -->
+                    <template x-if="editMode === 'module'">
+                        <div class="space-y-5">
+                            <div class="grid grid-cols-2 gap-4">
+                                <div class="space-y-1.5">
+                                    <label class="text-[10px] font-bold uppercase text-gray-500">Slug</label>
+                                    <input type="text" x-model="moduleForm.slug" :disabled="activeModuleSlug" placeholder="Slug..." class="w-full bg-dark border border-border rounded px-3 py-2 text-xs text-white focus:border-accent outline-none disabled:opacity-50">
+                                </div>
+                                <div class="space-y-1.5">
+                                    <label class="text-[10px] font-bold uppercase text-gray-500">Name</label>
+                                    <input type="text" x-model="moduleForm.name" placeholder="Name..." class="w-full bg-dark border border-border rounded px-3 py-2 text-xs text-white focus:border-accent outline-none">
+                                </div>
+                            </div>
+                            <div class="space-y-1.5">
+                                <label class="text-[10px] font-bold uppercase text-gray-500">Current Goal</label>
+                                <input type="text" x-model="moduleForm.current_goal" placeholder="Goal..." class="w-full bg-dark border border-border rounded px-3 py-2 text-xs text-white focus:border-accent outline-none">
+                            </div>
+                            <div class="space-y-1.5">
+                                <label class="text-[10px] font-bold uppercase text-gray-500">Description</label>
+                                <textarea x-model="moduleForm.description" rows="6" placeholder="Description..." class="w-full bg-dark border border-border rounded px-3 py-2 text-xs text-white font-mono focus:border-accent outline-none custom-scrollbar"></textarea>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <footer class="px-6 py-4 border-t border-border bg-panel-light/10 flex justify-end space-x-3">
+                    <button @click="editMode = null" class="text-[11px] font-semibold uppercase px-4 py-2 rounded border border-border text-gray-400 hover:text-white transition-all">Cancel</button>
+                    <button @click="editMode === 'entry' ? saveEntry() : (editMode === 'task' ? saveTask() : saveModule())" 
+                            class="text-[11px] font-semibold uppercase px-4 py-2 rounded bg-accent text-white hover:bg-accent/90 transition-all">
+                        Save Changes
+                    </button>
+                </footer>
+            </div>
         </div>
 
     </main>
 
 </body>
 </html>
-

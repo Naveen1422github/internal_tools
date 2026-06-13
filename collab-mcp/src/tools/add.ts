@@ -1,5 +1,6 @@
 import type { DB } from "../db.js";
 import { estimateTokens } from "../db.js";
+import { autoAdvanceTaskForEntry, type TaskStatus } from "./task.js";
 
 // ------------------------------------------------------------
 // Types
@@ -17,6 +18,7 @@ export type EntryType =
 
 export type Agent = "Claude" | "Codex" | "Gemini" | "User";
 export type RefType = "file" | "task" | "entry" | "url";
+export type Category = "Index" | "Reference" | "Activity";
 
 export interface RefInput {
   ref_type: RefType;
@@ -30,7 +32,9 @@ export interface AddEntryArgs {
   description?: string;
   status?: "draft" | "active";  // defaults to 'active'. resolved/deprecated set by other paths
   agent?: Agent;
-  module?: string;
+  module?: string;              // PRIMARY module (back-compat: written to entries.module)
+  modules?: string[];           // additional modules; many-to-many via entry_modules
+  category?: Category;          // omitted -> derived from type (see CATEGORY_BY_TYPE)
   task_id?: string;
   refs?: RefInput[];
 }
@@ -48,10 +52,29 @@ const KIND_BY_TYPE: Record<EntryType, "signal" | "log"> = {
   changelog: "log",
 };
 
+// category is the lifecycle/retrieval axis (0004 redesign, decision E-00163).
+// Derived from type when the caller doesn't set it explicitly: decisions/gotchas
+// are durable Reference truth; everything else is the archivable Activity trail.
+// (There is no 'index' type — Index is only ever set explicitly via `category`.)
+const CATEGORY_BY_TYPE: Record<EntryType, Category> = {
+  handoff: "Activity",
+  review: "Activity",
+  proposal: "Activity",
+  counter: "Activity",
+  decision: "Reference",
+  gotcha: "Reference",
+  rollup: "Activity",
+  "session-note": "Activity",
+  changelog: "Activity",
+};
+
 // ------------------------------------------------------------
 // addEntry
 // ------------------------------------------------------------
-export function addEntry(db: DB, args: AddEntryArgs): { id: number } {
+export function addEntry(
+  db: DB,
+  args: AddEntryArgs,
+): { id: number; taskTransition?: { id: string; from: TaskStatus; to: TaskStatus } } {
   if (!args.title || args.title.trim().length === 0) {
     throw new Error("title is required");
   }
@@ -66,15 +89,29 @@ export function addEntry(db: DB, args: AddEntryArgs): { id: number } {
   }
 
   const kind = KIND_BY_TYPE[args.type];
+  const category = args.category ?? CATEGORY_BY_TYPE[args.type];
   const tokens = estimateTokens(args.description);
+
+  // Build the ordered, de-duplicated module list. `module` (if given) is PRIMARY;
+  // otherwise the first of `modules` is primary. entries.module keeps the primary
+  // for back-compat; entry_modules is the new source of truth for multi-module reads.
+  const moduleCandidates = [
+    ...(args.module ? [args.module] : []),
+    ...(args.modules ?? []),
+  ];
+  const orderedModules: string[] = [];
+  for (const m of moduleCandidates) {
+    if (m && !orderedModules.includes(m)) orderedModules.push(m);
+  }
+  const primaryModule = orderedModules.length > 0 ? orderedModules[0] : null;
 
   const insertEntry = db.prepare(`
     INSERT INTO entries (
       type, kind, title, summary, description,
-      status, agent, module, task_id, tokens_estimate
+      status, agent, module, task_id, tokens_estimate, category
     ) VALUES (
       @type, @kind, @title, @summary, @description,
-      @status, @agent, @module, @task_id, @tokens_estimate
+      @status, @agent, @module, @task_id, @tokens_estimate, @category
     )
   `);
 
@@ -87,11 +124,27 @@ export function addEntry(db: DB, args: AddEntryArgs): { id: number } {
       description: a.description ?? null,
       status: a.status ?? "active",
       agent: a.agent ?? null,
-      module: a.module ?? null,
+      module: primaryModule,
       task_id: a.task_id ?? null,
       tokens_estimate: tokens,
+      category,
     });
     const id = Number(result.lastInsertRowid);
+
+    // entry_modules rows: primary gets is_primary=1, the rest 0. Positional
+    // (?, ?, ?) like the refs path; chunk to respect SQLite's 999-param limit.
+    if (orderedModules.length > 0) {
+      const MODULE_CHUNK_SIZE = 300; // each row uses 3 params
+      for (let i = 0; i < orderedModules.length; i += MODULE_CHUNK_SIZE) {
+        const chunk = orderedModules.slice(i, i + MODULE_CHUNK_SIZE);
+        const placeholders = chunk.map(() => "(?, ?, ?)").join(", ");
+        const params = chunk.flatMap((m) => [id, m, m === primaryModule ? 1 : 0]);
+        db.prepare(
+          `INSERT OR IGNORE INTO entry_modules (entry_id, module, is_primary) VALUES ${placeholders}`,
+        ).run(...params);
+      }
+    }
+
     if (a.refs && a.refs.length > 0) {
       // Chunking to respect SQLite's parameter limit (default 999).
       // Each ref has 3 params (entry_id, ref_type, ref_value).
@@ -108,5 +161,18 @@ export function addEntry(db: DB, args: AddEntryArgs): { id: number } {
     return id;
   });
 
-  return { id: tx(args) };
+  const id = tx(args);
+
+  // Lifecycle automation: advance the linked task when a completion-signal
+  // entry lands. Best-effort — a failure here must never fail the entry write.
+  let taskTransition;
+  if (args.task_id) {
+    try {
+      taskTransition = autoAdvanceTaskForEntry(db, args.type, args.task_id) ?? undefined;
+    } catch {
+      taskTransition = undefined;
+    }
+  }
+
+  return taskTransition ? { id, taskTransition } : { id };
 }

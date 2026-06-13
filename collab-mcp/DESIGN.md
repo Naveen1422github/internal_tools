@@ -184,6 +184,15 @@ Legal transitions (enforced by `collab.task.transition`):
 
 When a task transitions to `done`, the server cascades `status='resolved'` to all `active` handoffs and reviews linked to it. Nothing else cascades.
 
+#### Lifecycle automation on entry write (`collab.add`)
+
+Status no longer lags behind reality. When an entry carrying a `task_id` is added, the linked task auto-advances along the legal forward path:
+
+- `session-note` ("I started") → ensures the task is at least `in-progress`.
+- `changelog` ("I submitted") → advances the task to `review`.
+
+`review` is the terminal auto-state by design: a filed changelog means work was *submitted*, not *approved*. The `review → done` flip stays **manual and reviewer-owned**. Automation is lenient — it only takes legal forward steps, never throws, and no-ops when the task is already at/past the target or off-spine (e.g. `done`). A failure in this path never fails the entry write. The applied transition (if any) is surfaced in the `collab.add` response as `taskTransition: {id, from, to}`.
+
 ## 6. Tool surface (MCP)
 
 Named like a flat namespace so LLMs can pick them easily.

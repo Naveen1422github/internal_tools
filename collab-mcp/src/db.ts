@@ -76,11 +76,12 @@ export function migrate(db: DB = getDb()): string[] {
 }
 
 /**
- * Convenience: estimate tokens for a string.
- * Used by collab.add to populate entries.tokens_estimate.
- * Rough heuristic: ~4 chars per token. Off by ~15% vs real tokenizers; fine for budget caps.
+ * Estimate tokens for a string.
+ * Uses a heuristic: ~4 chars per token for prose, ~3.2 chars per token for code.
+ * Detects code by looking for triple backticks.
  */
 export function estimateTokens(text: string | null | undefined): number {
   if (!text) return 0;
-  return Math.ceil(text.length / 4);
+  const divisor = text.includes("```") ? 3.2 : 4.0;
+  return Math.ceil(text.length / divisor);
 }

@@ -85,6 +85,48 @@ module.exports.routes = {
     }
   },
 
+  'GET /api/collab/dispatches': async (req, res, send) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const agent = url.searchParams.get('agent');
+    const moduleFilter = url.searchParams.get('module');
+
+    if (!db) return send(500, { error: 'Database not available' });
+
+    try {
+      let query = `
+        SELECT * FROM dispatches
+        WHERE 1=1
+      `;
+      const params = [];
+      if (agent) {
+        query += ` AND agent = ?`;
+        params.push(agent);
+      }
+      if (moduleFilter) {
+        query += ` AND module = ?`;
+        params.push(moduleFilter);
+      }
+      query += ` ORDER BY created_at DESC LIMIT 100`;
+
+      const rows = db.prepare(query).all(...params);
+      
+      // Compute totals for analytics
+      const totals = db.prepare(`
+        SELECT 
+          COUNT(*) as count,
+          SUM(prompt_tokens_est) as total_prompt,
+          SUM(output_tokens) as total_output,
+          SUM(total_tokens) as total_raw,
+          SUM(wall_clock_ms) as total_time
+        FROM dispatches
+      `).get();
+
+      send(200, { results: rows, stats: totals });
+    } catch (err) {
+      send(500, { error: err.message });
+    }
+  },
+
   'GET /api/collab/entry': async (req, res, send) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const id = url.searchParams.get('id');

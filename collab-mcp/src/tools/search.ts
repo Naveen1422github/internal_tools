@@ -8,6 +8,7 @@ export interface SearchArgs {
   module?: string;
   task?: string;
   type?: string;
+  category?: "Index" | "Reference" | "Activity";
   kind: "signal" | "log" | "any";
   status?: string;
   since?: string;                 // "7d" | "2w" | "1m" | ISO date
@@ -85,11 +86,15 @@ export function searchEntries(db: DB, args: SearchArgs): SearchResult {
     where.push("e.kind = ?");
     params.push(args.kind);
   }
-  if (args.module)  { where.push("e.module = ?");   params.push(args.module); }
-  if (args.task)    { where.push("e.task_id = ?");  params.push(args.task); }
-  if (args.type)    { where.push("e.type = ?");     params.push(args.type); }
-  if (args.status)  { where.push("e.status = ?");   params.push(args.status); }
-  if (sinceIso)     { where.push("e.created_at >= ?"); params.push(sinceIso); }
+  // Module filter is many-to-many: match via entry_modules so multi-module
+  // entries appear for every module they belong to (subquery-IN keeps the
+  // positional param order and avoids row duplication).
+  if (args.module)   { where.push("e.id IN (SELECT entry_id FROM entry_modules WHERE module = ?)"); params.push(args.module); }
+  if (args.task)     { where.push("e.task_id = ?");  params.push(args.task); }
+  if (args.type)     { where.push("e.type = ?");     params.push(args.type); }
+  if (args.category) { where.push("e.category = ?"); params.push(args.category); }
+  if (args.status)   { where.push("e.status = ?");   params.push(args.status); }
+  if (sinceIso)      { where.push("e.created_at >= ?"); params.push(sinceIso); }
 
   let sql: string;
   if (hasQuery) {
@@ -157,6 +162,7 @@ export function searchEntries(db: DB, args: SearchArgs): SearchResult {
       module: args.module,
       task: args.task,
       type: args.type,
+      category: args.category,
       kind: args.kind,
       status: args.status,
       since: sinceIso,

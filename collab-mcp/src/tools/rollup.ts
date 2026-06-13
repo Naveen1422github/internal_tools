@@ -131,6 +131,20 @@ function groupEntries(
 }
 
 // ------------------------------------------------------------
+// moduleRollupSentinel
+//
+// The schema CHECK (0001_init.sql) requires every type='rollup' row to have a
+// non-null rollup_of_task. Module-grouped rollups (rollup --group-by module, and
+// all archive() output) have no task, so we store a self-documenting non-task
+// sentinel instead of NULL. Safe because rollup_of_task is decorative: it is only
+// written here and passed through export/get — nothing joins it to tasks (verified
+// 2026-06-12). The 'module:' prefix makes it unmistakably not a T- id.
+// ------------------------------------------------------------
+function moduleRollupSentinel(moduleSlug: string): string {
+  return `module:${moduleSlug}`;
+}
+
+// ------------------------------------------------------------
 // formatRollupBody
 //
 // Build the summary + description body stored on the new rollup entry.
@@ -223,7 +237,7 @@ export function rollup(db: DB, args: RollupArgs): RollupResult {
       agent: args.agent ?? null,
       module: group.kind === "module" ? group.key : null,
       task_id: group.kind === "task" ? group.key : null,
-      rollup_of_task: group.kind === "task" ? group.key : null,
+      rollup_of_task: group.kind === "task" ? group.key : moduleRollupSentinel(group.key),
       tokens_estimate: estimateTokens(description),
     });
     const newId = Number(result.lastInsertRowid);
@@ -253,6 +267,159 @@ export function rollup(db: DB, args: RollupArgs): RollupResult {
   for (const group of groups) {
     const newId = runGroup(group);
     created.push({ id: newId, group_key: group.key, group_kind: group.kind });
+    deprecated_count += group.entry_ids.length;
+  }
+
+  return { groups, created_entries: created, deprecated_count, dry_run: false };
+}
+
+// ------------------------------------------------------------
+// archive — type-aware cleanup of stale ephemeral entries
+//
+// Why this exists separately from rollup():
+//   - rollup() selects entries created SINCE a cutoff (a recent window) and has
+//     NO type filter — running it on a wide window would deprecate decisions and
+//     gotchas, the entries we most want to keep. That's why it was never run.
+//   - archive() inverts the age semantics (entries OLDER than the cutoff) and
+//     restricts to an explicit type allowlist, with a hard-coded protected set
+//     that is subtracted UNCONDITIONALLY. Canonical knowledge can never be
+//     deprecated through this path, even if a caller asks for it.
+//
+// rollup() is deliberately left untouched (it is the tested, working tool); the
+// persist/deprecate transaction below mirrors it rather than refactoring it.
+// ------------------------------------------------------------
+
+// Types that must NEVER be auto-archived (persistent / canonical knowledge).
+const ARCHIVE_PROTECTED: ReadonlySet<EntryType> = new Set<EntryType>([
+  "decision",
+  "gotcha",
+  "rollup",
+  "proposal",
+  "counter",
+]);
+
+export interface ArchiveArgs {
+  older_than?: string;     // ISO date | '7d' | '2w' | '1m'; entries OLDER than this. Default '30d'.
+  types?: EntryType[];     // OPTIONAL narrowing within Activity; protected types are removed unconditionally.
+  module?: string;         // optional: scope to one module
+  agent?: Agent;           // who initiated; stored on the rollup breadcrumb
+  dry_run?: boolean;       // defaults TRUE — preview before any deprecation
+}
+
+function selectArchiveEntries(db: DB, args: ArchiveArgs): RawEntryRow[] {
+  const cutoff = parseSince(args.older_than ?? "30d");
+
+  // Lifecycle gate is now CATEGORY (0004 redesign, decision E-00163): only the
+  // 'Activity' work-trail is archivable — Index/Reference are never in scope.
+  // The protected-type set is kept as a belt-and-suspenders SQL exclusion so a
+  // mis-categorized decision/gotcha/rollup/proposal/counter can never be swept,
+  // even if its category somehow ended up 'Activity'.
+  const protectedTypes = [...ARCHIVE_PROTECTED];
+  const protectedPlaceholders = protectedTypes.map(() => "?").join(", ");
+  // Only ACTIVE, non-deprecated rows older than the cutoff. Drafts/resolved are
+  // left for explicit handling; deprecated rows are already archived.
+  let sql =
+    `SELECT id, type, title, summary, agent, module, task_id, created_at
+     FROM entries
+     WHERE created_at < ?
+       AND deprecated = 0
+       AND status = 'active'
+       AND category = 'Activity'
+       AND type NOT IN (${protectedPlaceholders})`;
+  const params: Array<string> = [cutoff, ...protectedTypes];
+
+  // Optional: narrow to an explicit type allowlist (protected types removed).
+  if (args.types && args.types.length > 0) {
+    const allow = args.types.filter((t) => !ARCHIVE_PROTECTED.has(t));
+    if (allow.length === 0) {
+      throw new Error("no archivable types: every requested type is protected");
+    }
+    const allowPlaceholders = allow.map(() => "?").join(", ");
+    sql += ` AND type IN (${allowPlaceholders})`;
+    params.push(...allow);
+  }
+
+  if (args.module) {
+    // NOTE: still scopes on the primary entries.module; entry_modules-aware
+    // (many-to-many) scoping is a follow-up in the Phase-2 plumbing.
+    sql += " AND module = ?";
+    params.push(args.module);
+  }
+  sql += " ORDER BY created_at ASC";
+  return db.prepare(sql).all(...params) as RawEntryRow[];
+}
+
+export function archive(db: DB, args: ArchiveArgs): RollupResult {
+  const isDry = args.dry_run !== false; // SAFE DEFAULT: dry-run unless explicitly false
+
+  const rows = selectArchiveEntries(db, args);
+  if (rows.length === 0) {
+    return { groups: [], created_entries: [], deprecated_count: 0, dry_run: isDry };
+  }
+
+  // Always group by module (entries with no module are skipped by groupEntries).
+  const groups = groupEntries(rows, "module");
+
+  if (isDry) {
+    return { groups, created_entries: [], deprecated_count: 0, dry_run: true };
+  }
+
+  const insertRollup = db.prepare(`
+    INSERT INTO entries (
+      type, kind, title, summary, description,
+      status, agent, module, task_id, rollup_of_task, tokens_estimate
+    ) VALUES (
+      'rollup', 'signal', @title, @summary, @description,
+      'active', @agent, @module, NULL, @rollup_of_task, @tokens_estimate
+    )
+  `);
+
+  const runGroup = db.transaction((group: RollupGroup): number => {
+    const { summary, description } = formatRollupBody(group);
+    if (!summary || summary.trim().length === 0) {
+      throw new Error("formatRollupBody returned empty summary");
+    }
+    if (summary.length > 200) {
+      throw new Error(`formatRollupBody summary exceeds 200 chars (got ${summary.length})`);
+    }
+    const result = insertRollup.run({
+      title: `Archive: ${group.key} (${group.entry_ids.length} ephemeral entries)`,
+      summary,
+      description: description ?? null,
+      agent: args.agent ?? null,
+      module: group.key,
+      rollup_of_task: moduleRollupSentinel(group.key),
+      tokens_estimate: estimateTokens(description),
+    });
+    const newId = Number(result.lastInsertRowid);
+
+    // Link the breadcrumb to the originals it archived.
+    const REF_CHUNK_SIZE = 400;
+    for (let i = 0; i < group.entry_ids.length; i += REF_CHUNK_SIZE) {
+      const chunk = group.entry_ids.slice(i, i + REF_CHUNK_SIZE);
+      const placeholders = chunk.map(() => "(?, 'entry', ?)").join(", ");
+      const params = chunk.flatMap((id) => [newId, String(id)]);
+      db.prepare(`INSERT OR IGNORE INTO refs (entry_id, ref_type, ref_value) VALUES ${placeholders}`).run(
+        ...params,
+      );
+    }
+
+    // Deprecate the originals (they stay searchable with include_deprecated=true).
+    const DEPRECATE_CHUNK_SIZE = 900;
+    for (let i = 0; i < group.entry_ids.length; i += DEPRECATE_CHUNK_SIZE) {
+      const chunk = group.entry_ids.slice(i, i + DEPRECATE_CHUNK_SIZE);
+      const placeholders = chunk.map(() => "?").join(", ");
+      db.prepare(`UPDATE entries SET deprecated = 1 WHERE id IN (${placeholders})`).run(...chunk);
+    }
+
+    return newId;
+  });
+
+  const created: RollupResult["created_entries"] = [];
+  let deprecated_count = 0;
+  for (const group of groups) {
+    const newId = runGroup(group);
+    created.push({ id: newId, group_key: group.key, group_kind: "module" });
     deprecated_count += group.entry_ids.length;
   }
 

@@ -140,6 +140,60 @@ export function transitionTask(
 }
 
 // ------------------------------------------------------------
+// autoAdvanceTaskForEntry — lifecycle automation
+//
+// When a completion-signal entry lands against a task, advance the task's
+// status automatically so it never silently lags behind reality:
+//   session-note ("I started")  => ensure at least 'in-progress'
+//   changelog    ("I submitted") => advance to 'review'
+//
+// 'review' is the terminal auto-state on purpose: a filed changelog means work
+// was *submitted*, not *approved*. The '-> done' flip stays manual and
+// reviewer-owned. This is lenient — it only takes legal forward steps, never
+// throws, and no-ops when the task is already at/past the target or off-spine
+// (e.g. already 'done'). Adding the entry must never fail because of this.
+// ------------------------------------------------------------
+export function autoAdvanceTaskForEntry(
+  db: DB,
+  entryType: string,
+  taskId: string | null | undefined,
+): { id: string; from: TaskStatus; to: TaskStatus } | null {
+  if (!taskId) return null;
+  if (entryType !== "changelog" && entryType !== "session-note") return null;
+
+  const row = db.prepare(`SELECT status FROM tasks WHERE id = ?`).get(taskId) as
+    | { status: TaskStatus }
+    | undefined;
+  if (!row) return null;
+  const from = row.status;
+
+  // Forward steps toward the entry's implied milestone. Both 'pending' and
+  // 'assigned' advance directly to 'in-progress' (both legal); a changelog then
+  // continues to 'review'.
+  const steps: TaskStatus[] = [];
+  if (from === "pending" || from === "assigned") {
+    steps.push("in-progress");
+  }
+  if (entryType === "changelog" && from !== "review" && from !== "done") {
+    steps.push("review");
+  }
+  if (!steps.length) return null;
+
+  let status = from;
+  const tx = db.transaction(() => {
+    for (const next of steps) {
+      const legal = LEGAL_TRANSITIONS[status] ?? [];
+      if (!legal.includes(next)) break; // defensive; spine steps are always legal
+      db.prepare(`UPDATE tasks SET status = ? WHERE id = ?`).run(next, taskId);
+      status = next;
+    }
+  });
+  tx();
+
+  return status === from ? null : { id: taskId, from, to: status };
+}
+
+// ------------------------------------------------------------
 // assignTask — sets assignee; if task was 'pending', moves to 'assigned'
 // ------------------------------------------------------------
 export function assignTask(

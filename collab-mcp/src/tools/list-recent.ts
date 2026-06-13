@@ -6,6 +6,7 @@ export interface ListRecentArgs {
   type?: EntryType;
   module?: string;
   task?: string;
+  category?: "Index" | "Reference" | "Activity";
   since?: string;                       // default '7d'
   limit?: number;                       // default 10, max 50
   kind?: "signal" | "log" | "any";      // default 'signal'
@@ -23,6 +24,7 @@ export function listRecent(db: DB, args: ListRecentArgs): SearchResult {
     module: args.module,
     task: args.task,
     type: args.type,
+    category: args.category,
     kind: args.kind ?? "signal",
     status: undefined,
     since: args.since ?? "7d",

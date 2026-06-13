@@ -15,6 +15,7 @@ import { z } from "zod";
 import { getDb, migrate } from "./db.js";
 import { searchEntries } from "./tools/search.js";
 import { addEntry } from "./tools/add.js";
+import { updateEntry } from "./tools/update.js";
 import { getEntry } from "./tools/get.js";
 import { listRecent } from "./tools/list-recent.js";
 import {
@@ -27,7 +28,8 @@ import {
 } from "./tools/task.js";
 import { initModule, getModule } from "./tools/module.js";
 import { ingestDraft } from "./tools/ingest.js";
-import { rollup } from "./tools/rollup.js";
+import { rollup, archive } from "./tools/rollup.js";
+import { supersede } from "./tools/supersede.js";
 import { exportEntries } from "./tools/export.js";
 import { doctor } from "./tools/doctor.js";
 import { savingsReport, formatSavingsReport } from "./tools/savings.js";
@@ -67,6 +69,7 @@ const ENTRY_TYPE = z.enum([
 ]);
 const AGENT = z.enum(["Claude", "Codex", "Gemini", "User"]);
 const REF_TYPE = z.enum(["file", "task", "entry", "url"]);
+const CATEGORY = z.enum(["Index", "Reference", "Activity"]);
 const TASK_STATUS = z.enum(["pending", "assigned", "in-progress", "review", "done"]);
 const PRIORITY = z.enum(["critical", "high", "medium", "low"]);
 
@@ -94,9 +97,10 @@ server.registerTool(
       query: z
         .string()
         .describe("FTS5 query. Empty string = filter-only mode (no text matching)."),
-      module: z.string().optional().describe("Module slug, e.g. 'timesheet'"),
+      module: z.string().optional().describe("Module slug, e.g. 'timesheet'. Matched via entry_modules (multi-module aware)."),
       task: z.string().optional().describe("Task id, e.g. 'T-001'"),
       type: ENTRY_TYPE.optional(),
+      category: CATEGORY.optional().describe("Lifecycle bucket: Index | Reference | Activity"),
       kind: z.enum(["signal", "log", "any"]).optional().default("signal"),
       status: z.enum(["draft", "active", "resolved", "deprecated"]).optional(),
       since: z
@@ -119,6 +123,7 @@ server.registerTool(
       module: args.module,
       task: args.task,
       type: args.type,
+      category: args.category,
       kind: args.kind ?? "signal",
       status: args.status,
       since: args.since,
@@ -189,6 +194,7 @@ server.registerTool(
       type: ENTRY_TYPE.optional(),
       module: z.string().optional(),
       task: z.string().optional(),
+      category: CATEGORY.optional().describe("Lifecycle bucket: Index | Reference | Activity"),
       since: z.string().optional().default("7d"),
       limit: z.number().int().min(1).max(50).optional().default(10),
       kind: z.enum(["signal", "log", "any"]).optional().default("signal"),
@@ -206,6 +212,7 @@ server.registerTool(
       type: args.type,
       module: args.module,
       task: args.task,
+      category: args.category,
       since: args.since,
       limit: args.limit,
       kind: args.kind,
@@ -233,6 +240,11 @@ server.registerTool(
       "The 'tokens_estimate' is computed server-side from description length.",
       "The 'summary' must be <= 200 characters.",
       "",
+      "'category' (Index|Reference|Activity) is the lifecycle/retrieval bucket. If omitted it is",
+      "derived: decision/gotcha -> Reference; everything else -> Activity. Set 'Index' explicitly",
+      "for navigation hubs. 'module' is the PRIMARY module; pass 'modules' for additional ones",
+      "(many-to-many) — an entry then surfaces in every module it belongs to.",
+      "",
       "Refs are optional. Each ref is {ref_type: 'file'|'task'|'entry'|'url', ref_value: string}.",
       "For files, ref_value is the repo-relative path.",
     ].join("\n"),
@@ -243,7 +255,9 @@ server.registerTool(
       description: z.string().optional(),
       status: z.enum(["draft", "active"]).optional(),
       agent: AGENT.optional(),
-      module: z.string().optional(),
+      module: z.string().optional().describe("PRIMARY module slug (written to entries.module for back-compat)."),
+      modules: z.array(z.string()).optional().describe("Additional module slugs; many-to-many via entry_modules."),
+      category: CATEGORY.optional().describe("Index | Reference | Activity. Omitted -> derived from type."),
       task_id: z.string().optional(),
       refs: z
         .array(z.object({ ref_type: REF_TYPE, ref_value: z.string().min(1) }))
@@ -265,14 +279,65 @@ server.registerTool(
       status: args.status,
       agent: args.agent,
       module: args.module,
+      modules: args.modules,
+      category: args.category,
       task_id: args.task_id,
       refs: args.refs,
+    });
+    const tt = result.taskTransition;
+    const text = tt
+      ? `Added E-${String(result.id).padStart(5, "0")} (${args.type}). `
+        + `Auto-advanced ${tt.id}: ${tt.from} -> ${tt.to}.`
+      : `Added E-${String(result.id).padStart(5, "0")} (${args.type}).`;
+    return {
+      content: [{ type: "text", text }],
+      structuredContent: structured(result),
+    };
+  }
+);
+
+// ------------------------------------------------------------
+// Tool: collab.update
+// ------------------------------------------------------------
+server.registerTool(
+  "collab_update",
+  {
+    title: "Edit an existing collab entry",
+    description: [
+      "Edits an existing entry's title/summary/description in place (by id).",
+      "Use to CORRECT or CLARIFY durable entries (decisions, gotchas) — not to churn them.",
+      "",
+      "Provide at least one of title/summary/description. Omitted fields are left untouched.",
+      "The 'summary' must be <= 200 characters. 'tokens_estimate' is recomputed when description changes.",
+      "The FTS search index and updated_at are kept consistent automatically.",
+      "",
+      "Refs are NOT mutated here (future extension). To deprecate/roll up instead, use collab.rollup.",
+    ].join("\n"),
+    inputSchema: {
+      id: z.number().int().min(1).describe("Entry id (the integer inside E-NNNNN)"),
+      title: z.string().min(1).optional(),
+      summary: z.string().min(1).max(200).optional(),
+      description: z.string().optional(),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (args) => {
+    const result = updateEntry(db, {
+      id: args.id,
+      title: args.title,
+      summary: args.summary,
+      description: args.description,
     });
     return {
       content: [
         {
           type: "text",
-          text: `Added E-${String(result.id).padStart(5, "0")} (${args.type}).`,
+          text: `Updated E-${String(result.id).padStart(5, "0")} (${result.updated_fields.join(", ")}).`,
         },
       ],
       structuredContent: structured(result),
@@ -497,9 +562,10 @@ server.registerTool(
   {
     title: "Get a module card (module row + tasks + recent signals)",
     description: [
-      "Returns: {module, active_tasks, recent_decisions, top_gotchas, recent_handoffs}.",
+      "Returns: {module, active_tasks, indexes, recent_decisions, top_gotchas, recent_handoffs}.",
       "If the slug is unknown, module is null and all other fields are empty arrays.",
-      "Ordering: active_tasks by priority then recency; others by created_at DESC.",
+      "Membership is multi-module aware (entry_modules): an entry surfaces here if it belongs to this module.",
+      "Ordering: active_tasks by priority then recency; Index hubs first among knowledge sections, others by created_at DESC.",
     ].join("\n"),
     inputSchema: {
       slug: z.string().min(1),
@@ -532,6 +598,12 @@ server.registerTool(
       lines.push("\nActive tasks:");
       for (const t of result.active_tasks) {
         lines.push(`  [${t.id}] ${t.status}${t.priority ? ` (${t.priority})` : ""} - ${t.title}`);
+      }
+    }
+    if (result.indexes.length > 0) {
+      lines.push("\nIndexes:");
+      for (const ix of result.indexes) {
+        lines.push(`  [E-${String(ix.id).padStart(5, "0")}] ${ix.title}`);
       }
     }
     if (result.top_gotchas.length > 0) {
@@ -658,6 +730,115 @@ server.registerTool(
         : `Rollup created ${result.created_entries.length} entries across ${result.groups.length} groups, deprecated ${result.deprecated_count} originals (dry_run=${args.dry_run ?? false}).`;
     return {
       content: [{ type: "text", text }],
+      structuredContent: structured(result),
+    };
+  }
+);
+
+// ------------------------------------------------------------
+// Tool: collab.archive
+// ------------------------------------------------------------
+server.registerTool(
+  "collab_archive",
+  {
+    title: "Archive stale ephemeral entries (handoffs/reviews)",
+    description: [
+      "Type-aware cleanup: deprecates STALE, point-in-time signal entries and leaves one rollup",
+      "breadcrumb per module. Use this to keep search clean — handoffs/reviews pile up and age out.",
+      "",
+      "Selects: status='active' AND deprecated=0 AND category='Activity' AND created_at OLDER than 'older_than'.",
+      "Lifecycle is governed by CATEGORY (Index/Reference/Activity): only the Activity work-trail is archivable;",
+      "Index hubs and Reference (decisions/gotchas/canonical) are never in scope.",
+      "Note the inverted age vs collab.rollup: rollup groups entries SINCE a cutoff; archive targets entries OLDER than it.",
+      "",
+      "SAFETY:",
+      "  - dry_run defaults to TRUE — preview the groups before anything is deprecated. Pass dry_run=false to commit.",
+      "  - Belt-and-suspenders: the protected types {decision, gotcha, rollup, proposal, counter} are excluded in SQL",
+      "    too, so a mis-categorized canonical entry can never be archived through this tool.",
+      "  - 'types' is an OPTIONAL narrowing within Activity (e.g. ['handoff']); omit it to archive all Activity types.",
+      "  - Deprecated entries stay searchable with include_deprecated=true; nothing is hard-deleted.",
+      "",
+      "The 'older_than' param accepts ISO date or shorthand: '7d', '2w', '1m' (default '30d').",
+    ].join("\n"),
+    inputSchema: {
+      older_than: z
+        .string()
+        .optional()
+        .describe("Entries OLDER than this are archived. ISO date or '7d'/'2w'/'1m'. Default '30d'."),
+      types: z
+        .array(ENTRY_TYPE)
+        .optional()
+        .describe("Allowlist of types to archive. Default [handoff, review]. Protected types are always excluded."),
+      module: z.string().optional().describe("Scope to a single module slug."),
+      agent: AGENT.optional(),
+      dry_run: z.boolean().optional().default(true),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async (args) => {
+    const result = archive(db, {
+      older_than: args.older_than,
+      types: args.types,
+      module: args.module,
+      agent: args.agent,
+      dry_run: args.dry_run,
+    });
+    const totalEntries = result.groups.reduce((n, g) => n + g.entry_ids.length, 0);
+    const text = result.groups.length === 0
+      ? "No stale entries matched — nothing to archive."
+      : result.dry_run
+        ? `DRY RUN: would archive ${totalEntries} entr(ies) across ${result.groups.length} module group(s): `
+          + result.groups.map((g) => `${g.key}(${g.entry_ids.length})`).join(", ")
+          + ". Re-run with dry_run=false to commit."
+        : `Archived ${result.deprecated_count} entr(ies) into ${result.created_entries.length} rollup breadcrumb(s).`;
+    return {
+      content: [{ type: "text", text }],
+      structuredContent: structured(result),
+    };
+  }
+);
+
+// ------------------------------------------------------------
+// Tool: collab.supersede
+// ------------------------------------------------------------
+server.registerTool(
+  "collab_supersede",
+  {
+    title: "Supersede entries with a replacement",
+    description: [
+      "Marks one or more entries as replaced by a newer entry.",
+      "For each id: sets superseded_by = by AND deprecated = 1, so the originals drop out of",
+      "default retrieval (include_deprecated=false hides them) but remain as history.",
+      "",
+      "Validation: 'by' must exist and must NOT appear in 'ids'; every id in 'ids' must exist.",
+    ].join("\n"),
+    inputSchema: {
+      ids: z
+        .array(z.number().int().min(1))
+        .min(1)
+        .describe("Entry ids being replaced (the integers inside E-NNNNN)."),
+      by: z.number().int().min(1).describe("The entry id that replaces them."),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (args) => {
+    const result = supersede(db, { ids: args.ids, by: args.by });
+    const supersededIds = result.superseded
+      .map((id) => `E-${String(id).padStart(5, "0")}`)
+      .join(", ");
+    const byId = `E-${String(result.by).padStart(5, "0")}`;
+    return {
+      content: [{ type: "text", text: `Superseded ${supersededIds} → replaced by ${byId}.` }],
       structuredContent: structured(result),
     };
   }
@@ -800,16 +981,25 @@ function formatSearchResult(r: { results: any[]; auto_expanded: boolean; total_t
 function formatEntry(e: {
   id: number; type: string; title: string; summary: string;
   description: string | null; status: string; agent: string | null;
-  module: string | null; task_id: string | null;
+  module: string | null; modules?: string[]; category?: string;
+  superseded_by?: number | null; task_id: string | null;
   tokens_estimate: number; created_at: string;
   refs: Array<{ ref_type: string; ref_value: string }>;
 }): string {
   const head = `[E-${String(e.id).padStart(5, "0")}] ${e.type} - ${e.title}`;
+  const moduleBit =
+    e.modules && e.modules.length > 0
+      ? `modules=${e.modules.join(",")}`
+      : e.module
+        ? `module=${e.module}`
+        : null;
   const metaBits = [
-    e.module ? `module=${e.module}` : null,
+    e.category ? `category=${e.category}` : null,
+    moduleBit,
     e.task_id ? `task=${e.task_id}` : null,
     e.agent ? `agent=${e.agent}` : null,
     `status=${e.status}`,
+    e.superseded_by != null ? `superseded by E-${String(e.superseded_by).padStart(5, "0")}` : null,
     `tokens~${e.tokens_estimate}`,
     `created=${e.created_at}`,
   ].filter(Boolean);

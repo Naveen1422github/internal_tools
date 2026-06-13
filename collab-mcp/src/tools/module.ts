@@ -23,6 +23,7 @@ export interface ModuleRow {
 export interface ModuleCard {
   module: ModuleRow | null;
   active_tasks: Array<{ id: string; title: string; status: string; priority: string | null }>;
+  indexes: Array<{ id: number; title: string; summary: string }>;
   recent_decisions: Array<{ id: number; title: string; summary: string }>;
   top_gotchas: Array<{ id: number; summary: string }>;
   recent_handoffs: Array<{
@@ -78,6 +79,7 @@ export function getModule(db: DB, slug: string): ModuleCard {
     return {
       module: null,
       active_tasks: [],
+      indexes: [],
       recent_decisions: [],
       top_gotchas: [],
       recent_handoffs: [],
@@ -102,11 +104,26 @@ export function getModule(db: DB, slug: string): ModuleCard {
     )
     .all(slug) as ModuleCard["active_tasks"];
 
+  // Membership is now many-to-many: match any entry that has an entry_modules
+  // row for this slug (so multi-module entries surface in EVERY module they
+  // belong to), not just entries whose primary entries.module = slug.
+  const indexes = db
+    .prepare(
+      `
+    SELECT id, title, summary FROM entries
+    WHERE id IN (SELECT entry_id FROM entry_modules WHERE module = ?)
+      AND category = 'Index' AND deprecated = 0
+    ORDER BY created_at DESC LIMIT 5
+  `
+    )
+    .all(slug) as ModuleCard["indexes"];
+
   const recent_decisions = db
     .prepare(
       `
     SELECT id, title, summary FROM entries
-    WHERE module = ? AND type = 'decision' AND deprecated = 0
+    WHERE id IN (SELECT entry_id FROM entry_modules WHERE module = ?)
+      AND type = 'decision' AND deprecated = 0
     ORDER BY created_at DESC LIMIT 5
   `
     )
@@ -116,7 +133,8 @@ export function getModule(db: DB, slug: string): ModuleCard {
     .prepare(
       `
     SELECT id, summary FROM entries
-    WHERE module = ? AND type = 'gotcha' AND deprecated = 0
+    WHERE id IN (SELECT entry_id FROM entry_modules WHERE module = ?)
+      AND type = 'gotcha' AND deprecated = 0
     ORDER BY created_at DESC LIMIT 5
   `
     )
@@ -126,11 +144,12 @@ export function getModule(db: DB, slug: string): ModuleCard {
     .prepare(
       `
     SELECT id, title, summary, agent, created_at FROM entries
-    WHERE module = ? AND type = 'handoff' AND deprecated = 0
+    WHERE id IN (SELECT entry_id FROM entry_modules WHERE module = ?)
+      AND type = 'handoff' AND deprecated = 0
     ORDER BY created_at DESC LIMIT 3
   `
     )
     .all(slug) as ModuleCard["recent_handoffs"];
 
-  return { module, active_tasks, recent_decisions, top_gotchas, recent_handoffs };
+  return { module, active_tasks, indexes, recent_decisions, top_gotchas, recent_handoffs };
 }

@@ -17,6 +17,8 @@ const EXPECTED_TABLES = new Set([
   "refs",
   "tasks",
   "modules",
+  "dispatches",
+  "entry_modules",
   "schema_migrations",
   "entries_fts",
   "entries_fts_config",
@@ -34,12 +36,20 @@ const EXPECTED_INDEXES = new Set([
   "idx_entries_status",
   "idx_entries_task",
   "idx_entries_type",
+  "idx_entries_category",
+  "idx_entries_superseded",
+  "idx_entry_modules_module",
+  "idx_entry_modules_entry",
   "idx_refs_entry",
   "idx_refs_type",
   "idx_refs_value",
   "idx_tasks_assignee",
   "idx_tasks_module",
   "idx_tasks_status",
+  "idx_dispatches_agent",
+  "idx_dispatches_created",
+  "idx_dispatches_entry",
+  "idx_dispatches_module",
 ]);
 
 const EXPECTED_TRIGGERS = new Set([
@@ -50,6 +60,9 @@ const EXPECTED_TRIGGERS = new Set([
   "trg_modules_updated_at",
   "trg_refs_cascade_delete",
   "trg_tasks_updated_at",
+  "trg_entry_modules_cascade_delete",
+  "trg_dispatches_updated_at",
+  "trg_dispatches_updated_at_insert",
 ]);
 
 function toEntryId(id: number): string {
@@ -226,7 +239,54 @@ export function doctor(db: DB): DoctorResult {
     items: orphanTaskEntries.length > 0 ? orphanTaskEntries.map((r) => r.id) : undefined,
   });
 
-  // 8) fts.count_parity
+  // 8) data.dangling_superseded — superseded_by points to a non-existent entry
+  const danglingSuperseded = db
+    .prepare(
+      `
+        SELECT id, superseded_by
+        FROM entries
+        WHERE superseded_by IS NOT NULL
+          AND superseded_by NOT IN (SELECT id FROM entries)
+        ORDER BY id ASC
+      `,
+    )
+    .all() as Array<{ id: number; superseded_by: number }>;
+  checks.push({
+    name: "data.dangling_superseded",
+    severity: danglingSuperseded.length > 0 ? "warn" : "ok",
+    detail:
+      danglingSuperseded.length > 0
+        ? `found ${danglingSuperseded.length} entries with dangling superseded_by`
+        : "no dangling superseded_by",
+    items:
+      danglingSuperseded.length > 0
+        ? danglingSuperseded.map((r) => `${toEntryId(r.id)} -> ${toEntryId(r.superseded_by)}`)
+        : undefined,
+  });
+
+  // 9) data.entries_without_module — non-deprecated entries with no entry_modules row
+  const entriesWithoutModule = db
+    .prepare(
+      `
+        SELECT id
+        FROM entries
+        WHERE deprecated = 0
+          AND id NOT IN (SELECT entry_id FROM entry_modules)
+        ORDER BY id ASC
+      `,
+    )
+    .all() as Array<{ id: number }>;
+  checks.push({
+    name: "data.entries_without_module",
+    severity: entriesWithoutModule.length > 0 ? "warn" : "ok",
+    detail:
+      entriesWithoutModule.length > 0
+        ? `found ${entriesWithoutModule.length} non-deprecated entries with no module (informational)`
+        : "all non-deprecated entries have at least one module",
+    items: entriesWithoutModule.length > 0 ? entriesWithoutModule.map((r) => r.id) : undefined,
+  });
+
+  // 10) fts.count_parity
   const entryCount = (db.prepare("SELECT COUNT(*) AS c FROM entries").get() as { c: number }).c;
   const ftsCount = (db.prepare("SELECT COUNT(*) AS c FROM entries_fts").get() as { c: number }).c;
   const parityOk = entryCount === ftsCount;
@@ -238,7 +298,7 @@ export function doctor(db: DB): DoctorResult {
       : `entries=${entryCount}, entries_fts=${ftsCount}`,
   });
 
-  // 9) fts.rebuild_hint
+  // 11) fts.rebuild_hint
   checks.push({
     name: "fts.rebuild_hint",
     severity: parityOk ? "ok" : "warn",

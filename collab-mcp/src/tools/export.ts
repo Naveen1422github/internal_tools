@@ -26,12 +26,19 @@ interface ExportEntryRow {
   status: string | null;
   agent: string | null;
   module: string | null;
+  category: string;
+  superseded_by: number | null;
   task_id: string | null;
   tokens_estimate: number | null;
   rollup_of_task: string | null;
   deprecated: number;
   created_at: string;
   updated_at: string;
+}
+
+interface ModuleRow {
+  entry_id: number;
+  module: string;
 }
 
 interface RefRow {
@@ -76,7 +83,12 @@ function nonEmptyFilters(args: ExportArgs): Record<string, unknown> {
 function renderMarkdown(
   exportedAt: string,
   filters: Record<string, unknown>,
-  entries: Array<ExportEntryRow & { refs: Array<{ ref_type: string; ref_value: string }> }>,
+  entries: Array<
+    ExportEntryRow & {
+      modules: string[];
+      refs: Array<{ ref_type: string; ref_value: string }>;
+    }
+  >,
 ): string {
   const lines: string[] = [];
 
@@ -99,9 +111,12 @@ function renderMarkdown(
 
     const metaBits: string[] = [];
     if (e.agent) metaBits.push(`agent: ${e.agent}`);
-    if (e.module) metaBits.push(`module: ${e.module}`);
+    if (e.category) metaBits.push(`category: ${e.category}`);
+    if (e.modules.length > 0) metaBits.push(`modules: ${e.modules.join(", ")}`);
+    else if (e.module) metaBits.push(`module: ${e.module}`);
     if (e.task_id) metaBits.push(`task: ${e.task_id}`);
     if (e.status) metaBits.push(`status: ${e.status}`);
+    if (e.superseded_by != null) metaBits.push(`superseded by: ${toEntryId(e.superseded_by)}`);
     lines.push(
       `- created: ${e.created_at}${metaBits.length > 0 ? " | " + metaBits.join(" | ") : ""}`,
     );
@@ -149,7 +164,7 @@ export function exportEntries(db: DB, args: ExportArgs): ExportResult {
   const sql = `
     SELECT
       id, type, kind, title, summary, description, status, agent, module, task_id,
-      tokens_estimate, rollup_of_task, deprecated, created_at, updated_at
+      category, superseded_by, tokens_estimate, rollup_of_task, deprecated, created_at, updated_at
     FROM entries
     ${where.length ? "WHERE " + where.join(" AND ") : ""}
     ORDER BY created_at ASC, id ASC
@@ -158,6 +173,7 @@ export function exportEntries(db: DB, args: ExportArgs): ExportResult {
 
   const ids = rows.map((r) => r.id);
   const refsByEntryId = new Map<number, Array<{ ref_type: string; ref_value: string }>>();
+  const modulesByEntryId = new Map<number, string[]>();
   if (ids.length > 0) {
     const placeholders = ids.map(() => "?").join(",");
     const refRows = db
@@ -171,10 +187,23 @@ export function exportEntries(db: DB, args: ExportArgs): ExportResult {
       list.push({ ref_type: rr.ref_type, ref_value: rr.ref_value });
       refsByEntryId.set(rr.entry_id, list);
     }
+
+    const moduleRows = db
+      .prepare(
+        `SELECT entry_id, module FROM entry_modules WHERE entry_id IN (${placeholders}) ORDER BY entry_id ASC, is_primary DESC, module ASC`,
+      )
+      .all(...ids) as ModuleRow[];
+
+    for (const mr of moduleRows) {
+      const list = modulesByEntryId.get(mr.entry_id) ?? [];
+      list.push(mr.module);
+      modulesByEntryId.set(mr.entry_id, list);
+    }
   }
 
   const entries = rows.map((r) => ({
     ...r,
+    modules: modulesByEntryId.get(r.id) ?? [],
     refs: refsByEntryId.get(r.id) ?? [],
   }));
 
