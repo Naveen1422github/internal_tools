@@ -8,7 +8,7 @@ const __dirname = dirname(__filename);
 
 // Resolve paths relative to the collab package root, NOT cwd.
 // Layout:
-//   internal-tools/collab-mcp/
+//   internal-tools/mcp/
 //     migrations/*.sql
 //     src/db.ts      <- this file
 //     collab.db      <- runtime DB (gitignored)

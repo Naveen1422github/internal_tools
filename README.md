@@ -23,19 +23,20 @@ Open `http://127.0.0.1:7473/`.
 
 ```text
 internal-tools/
-|-- server.js              # http server + static + route dispatch
-|-- tools/
-|   `-- collab.js          # /api/collab/* - DB explorer (mirrors collab-mcp)
-|-- public/
-|   |-- index.html         # Alpine UI
-|   |-- app.js             # state + handlers
-|   |-- style.css          # Tailwind base
-|   |-- styles.css         # Dashboard theme
-|   `-- favicon.svg
-`-- collab-mcp/            # MCP server (separate; see its README)
+|-- core/                  # shared DB helpers and constants
+|-- server/                # http server, static assets, and route dispatch
+|   |-- server.js
+|   |-- tools/
+|   |   `-- collab.js      # /api/collab/* - DB explorer
+|   `-- public/
+|       |-- index.html
+|       |-- app.js
+|       |-- style.css
+|       `-- styles.css
+`-- mcp/                   # MCP server (separate; see its README)
 ```
 
 ## Notes
 
 - Localhost-only, no auth.
-- Dashboard reads/writes `collab-mcp/collab.db` directly via `better-sqlite3`. For automated/agent flows, prefer the `mcp__collab__*` MCP tools.
+- Dashboard reads/writes `mcp/collab.db` directly via `better-sqlite3`. For automated/agent flows, prefer the `mcp__collab__*` MCP tools.

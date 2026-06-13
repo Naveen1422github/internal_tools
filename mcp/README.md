@@ -11,7 +11,7 @@ SQLite-backed collaboration store for Claude + Codex + Gemini (+ Antigravity). T
 ### One-time setup (already done in this repo)
 
 ```bash
-cd internal-tools/collab-mcp
+cd internal-tools/mcp
 npm install
 npm run migrate         # creates collab.db (idempotent)
 ```
@@ -52,7 +52,7 @@ The `Stop` hook nudges you to write a handoff if you have uncommitted changes an
 | `/collab-dispatch <prompt>` | Sends a task to Codex, persists the result as a handoff. |
 | `/collab-done <task-id>` | Transitions a task to `done`. |
 
-Canonical bodies live at `internal-tools/collab-mcp/claude/commands/*.md`. The `.claude/commands/collab-*.md` files are tiny redirects so the source of truth stays inside this package.
+Canonical bodies live at `internal-tools/mcp/claude/commands/*.md`. The `.claude/commands/collab-*.md` files are tiny redirects so the source of truth stays inside this package.
 
 ---
 
@@ -124,7 +124,7 @@ The script pipes raw JSONL through `src/scripts/parse-codex-output.ts --save`, w
 ## File map
 
 ```
-internal-tools/collab-mcp/
+internal-tools/mcp/
 ├── DESIGN.md                  ← design v0.3 + build order (§15)
 ├── README.md                  ← this file
 ├── collab.db                  ← SQLite store (gitignored)
@@ -268,3 +268,4 @@ Use it for a few weeks first, then look at what was painful.
 - **2026-06-12:** Migration `0004_categories_modules_supersede` — knowledge-model redesign (decision E-00163). Adds `category` (Index/Reference/Activity), `superseded_by`, and the `entry_modules` junction table. Backfills existing data. See DESIGN.md §4 for details.
 - **2026-04-25:** Phase 1 archival. Legacy `.claude/collab/*.md` and `.claude/codex-tasks/*.md` removed. Two substantive handoffs (CR-004, Step 9) and the T-STEP8 task spec exemplar were ingested as entries `E-7`, `E-8`, `E-9`. The 11 BOARD tasks (all `review` status, work shipped) were not migrated — the work is done and was unlikely to be queried again. Backup tarball: `~/.claude-archives/frontend2-collab-cleanup-20260425.tar.gz`.
 - **2026-04-22:** Code moved from `.claude/mcp/collab/` to `internal-tools/collab-mcp/`.
+- **2026-06-14:** Package moved from `internal-tools/collab-mcp/` to `internal-tools/mcp/` as part of the internal-tools reorganization.

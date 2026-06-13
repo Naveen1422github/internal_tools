@@ -1,36 +1,7 @@
-const Database = require('better-sqlite3');
-const path = require('path');
+const { getDb, estimateTokens } = require('../../core/db');
+const { KIND_BY_TYPE, CATEGORY_BY_TYPE, SLUG_REGEX } = require('../../core/constants');
 
-const DB_PATH = path.join(__dirname, '..', 'collab-mcp', 'collab.db');
-
-// Mirrors KIND_BY_TYPE in internal-tools/collab-mcp/src/tools/add.ts.
-// Keep these in sync — the dashboard derives kind server-side so the UI
-// can't desync type and kind.
-const KIND_BY_TYPE = {
-  handoff: 'signal',
-  review: 'signal',
-  proposal: 'signal',
-  counter: 'signal',
-  decision: 'signal',
-  gotcha: 'signal',
-  rollup: 'signal',
-  'session-note': 'log',
-  changelog: 'log',
-};
-
-// Mirrors SLUG_REGEX in internal-tools/collab-mcp/src/tools/module.ts.
-const SLUG_REGEX = /^[a-z0-9][a-z0-9-]{0,59}$/;
-
-let db;
-try {
-  db = new Database(DB_PATH);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-} catch (err) {
-  console.error('[collab] Failed to open database:', err.message);
-}
-
-const estimateTokens = (text) => Math.ceil((text || '').length / 4);
+const db = getDb();
 
 module.exports.routes = {
   // --- ENTRIES ---
@@ -46,7 +17,7 @@ module.exports.routes = {
 
     try {
       let query = `
-        SELECT e.rowid as id, e.type, e.kind, e.title, e.summary, e.module, e.agent, e.created_at,
+        SELECT e.rowid as id, e.type, e.kind, e.category, e.title, e.summary, e.module, e.agent, e.created_at,
                snippet(entries_fts, -1, '[[HL]]', '[[/HL]]', '...', 10) as snippet
         FROM entries e
         JOIN entries_fts f ON e.rowid = f.rowid
@@ -63,7 +34,7 @@ module.exports.routes = {
         params.push(type);
       }
       if (module) {
-        query += ` AND e.module = ?`;
+        query += ` AND e.id IN (SELECT entry_id FROM entry_modules WHERE module = ?)`;
         params.push(module);
       }
       if (agent) {
@@ -134,20 +105,35 @@ module.exports.routes = {
       const entry = db.prepare('SELECT rowid as id, * FROM entries WHERE rowid = ?').get(id);
       if (!entry) return send(404, { error: 'Not found' });
       const refs = db.prepare('SELECT ref_type, ref_value FROM refs WHERE entry_id = ?').all(id);
-      send(200, { ...entry, refs });
+      const modules = db.prepare('SELECT module FROM entry_modules WHERE entry_id = ? ORDER BY is_primary DESC, module ASC').all(id).map(r => r.module);
+      send(200, { ...entry, refs, modules });
     } catch (err) {
       send(500, { error: err.message });
     }
   },
 
   'POST /api/collab/entry/upsert': async (req, res, send, body) => {
-    const { id, type, title, summary, description, agent, module, task_id, refs } = body;
+    const { id, type, title, summary, description, agent, module, modules, category, task_id, refs } = body;
     if (!type || !KIND_BY_TYPE[type]) return send(400, { error: `invalid type: ${type}` });
     if (type === 'rollup') return send(400, { error: 'rollup entries are system-generated; use collab.rollup' });
     if (!title || !title.trim()) return send(400, { error: 'title is required' });
     if (!summary || !summary.trim()) return send(400, { error: 'summary is required' });
     if (summary.length > 200) return send(400, { error: `summary exceeds 200 chars (got ${summary.length})` });
     const kind = KIND_BY_TYPE[type];
+    const resolvedCategory = category || CATEGORY_BY_TYPE[type];
+    if (!['Index', 'Reference', 'Activity'].includes(resolvedCategory)) {
+      return send(400, { error: `invalid category: ${resolvedCategory}` });
+    }
+    const moduleCandidates = [
+      ...(module ? [module] : []),
+      ...(Array.isArray(modules) ? modules : []),
+    ];
+    const orderedModules = [];
+    for (const m of moduleCandidates) {
+      const cleaned = typeof m === 'string' ? m.trim() : '';
+      if (cleaned && !orderedModules.includes(cleaned)) orderedModules.push(cleaned);
+    }
+    const primaryModule = orderedModules.length ? orderedModules[0] : null;
     try {
       const tokens = estimateTokens(description);
       let entryId = id;
@@ -155,22 +141,30 @@ module.exports.routes = {
       const tx = db.transaction(() => {
         if (id) {
           db.prepare(`
-            UPDATE entries SET type=?, kind=?, title=?, summary=?, description=?, agent=?, module=?, task_id=?, tokens_estimate=?
+            UPDATE entries SET type=?, kind=?, title=?, summary=?, description=?, agent=?, module=?, task_id=?, tokens_estimate=?, category=?
             WHERE rowid=?
-          `).run(type, kind, title, summary, description, agent, module, task_id, tokens, id);
+          `).run(type, kind, title, summary, description, agent, primaryModule, task_id, tokens, resolvedCategory, id);
           db.prepare('DELETE FROM refs WHERE entry_id = ?').run(id);
+          db.prepare('DELETE FROM entry_modules WHERE entry_id = ?').run(id);
         } else {
           const result = db.prepare(`
-            INSERT INTO entries (type, kind, title, summary, description, agent, module, task_id, tokens_estimate)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(type, kind, title, summary, description, agent, module, task_id, tokens);
+            INSERT INTO entries (type, kind, title, summary, description, agent, module, task_id, tokens_estimate, category)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(type, kind, title, summary, description, agent, primaryModule, task_id, tokens, resolvedCategory);
           entryId = result.lastInsertRowid;
+        }
+
+        if (orderedModules.length > 0) {
+          const stmt = db.prepare('INSERT OR IGNORE INTO entry_modules (entry_id, module, is_primary) VALUES (?, ?, ?)');
+          for (const moduleSlug of orderedModules) {
+            stmt.run(entryId, moduleSlug, moduleSlug === primaryModule ? 1 : 0);
+          }
         }
 
         if (refs && Array.isArray(refs)) {
           const stmt = db.prepare('INSERT INTO refs (entry_id, ref_type, ref_value) VALUES (?, ?, ?)');
           for (const ref of refs) {
-            stmt.run(entryId, ref.type, ref.value);
+            stmt.run(entryId, ref.ref_type || ref.type, ref.ref_value || ref.value);
           }
         }
       });
@@ -330,17 +324,17 @@ module.exports.routes = {
       `).all(slug);
       const recent_decisions = db.prepare(`
         SELECT rowid AS id, title, summary FROM entries
-        WHERE module=? AND type='decision' AND deprecated=0
+        WHERE id IN (SELECT entry_id FROM entry_modules WHERE module = ?) AND type='decision' AND deprecated=0
         ORDER BY created_at DESC LIMIT 5
       `).all(slug);
       const top_gotchas = db.prepare(`
         SELECT rowid AS id, title, summary FROM entries
-        WHERE module=? AND type='gotcha' AND deprecated=0
+        WHERE id IN (SELECT entry_id FROM entry_modules WHERE module = ?) AND type='gotcha' AND deprecated=0
         ORDER BY created_at DESC LIMIT 5
       `).all(slug);
       const recent_handoffs = db.prepare(`
         SELECT rowid AS id, title, summary, agent, created_at FROM entries
-        WHERE module=? AND type='handoff' AND deprecated=0
+        WHERE id IN (SELECT entry_id FROM entry_modules WHERE module = ?) AND type='handoff' AND deprecated=0
         ORDER BY created_at DESC LIMIT 5
       `).all(slug);
       send(200, { module, active_tasks, recent_decisions, top_gotchas, recent_handoffs });
@@ -349,9 +343,9 @@ module.exports.routes = {
 
   // --- DOCTOR (mirrors collab-mcp/src/tools/doctor.ts — keep in sync) ---
   'POST /api/collab/doctor': async (req, res, send) => {
-    const EXPECTED_TABLES = new Set(['entries','refs','tasks','modules','schema_migrations','entries_fts','entries_fts_config','entries_fts_data','entries_fts_docsize','entries_fts_idx','sqlite_sequence']);
-    const EXPECTED_INDEXES = new Set(['idx_entries_created','idx_entries_deprecated','idx_entries_kind','idx_entries_module','idx_entries_status','idx_entries_task','idx_entries_type','idx_refs_entry','idx_refs_type','idx_refs_value','idx_tasks_assignee','idx_tasks_module','idx_tasks_status']);
-    const EXPECTED_TRIGGERS = new Set(['trg_entries_fts_ad','trg_entries_fts_ai','trg_entries_fts_au','trg_entries_updated_at','trg_modules_updated_at','trg_refs_cascade_delete','trg_tasks_updated_at']);
+    const EXPECTED_TABLES = new Set(['entries','refs','tasks','modules','dispatches','entry_modules','schema_migrations','entries_fts','entries_fts_config','entries_fts_data','entries_fts_docsize','entries_fts_idx','sqlite_sequence']);
+    const EXPECTED_INDEXES = new Set(['idx_entries_created','idx_entries_deprecated','idx_entries_kind','idx_entries_module','idx_entries_status','idx_entries_task','idx_entries_type','idx_entries_category','idx_entries_superseded','idx_entry_modules_module','idx_entry_modules_entry','idx_refs_entry','idx_refs_type','idx_refs_value','idx_tasks_assignee','idx_tasks_module','idx_tasks_status','idx_dispatches_agent','idx_dispatches_created','idx_dispatches_entry','idx_dispatches_module']);
+    const EXPECTED_TRIGGERS = new Set(['trg_entries_fts_ad','trg_entries_fts_ai','trg_entries_fts_au','trg_entries_updated_at','trg_modules_updated_at','trg_refs_cascade_delete','trg_tasks_updated_at','trg_entry_modules_cascade_delete','trg_dispatches_updated_at','trg_dispatches_updated_at_insert']);
     const schemaCheck = (name, actual, expected, label) => {
       const missing = [...expected].filter(x => !actual.has(x)).sort();
       const extra = [...actual].filter(x => !expected.has(x)).sort();
@@ -376,6 +370,10 @@ module.exports.routes = {
       checks.push({ name: 'data.orphan_module.entries', severity: orphanModuleEntries.length ? 'warn' : 'ok', detail: orphanModuleEntries.length ? `${orphanModuleEntries.length} entries with unknown module` : 'no orphan module entries', items: orphanModuleEntries.length ? orphanModuleEntries.map(r=>r.id) : undefined });
       const orphanTaskEntries = db.prepare(`SELECT id FROM entries WHERE task_id IS NOT NULL AND task_id NOT IN (SELECT id FROM tasks) ORDER BY id`).all();
       checks.push({ name: 'data.orphan_task.entries', severity: orphanTaskEntries.length ? 'warn' : 'ok', detail: orphanTaskEntries.length ? `${orphanTaskEntries.length} entries with unknown task_id` : 'no orphan task entries', items: orphanTaskEntries.length ? orphanTaskEntries.map(r=>r.id) : undefined });
+      const danglingSuperseded = db.prepare(`SELECT id, superseded_by FROM entries WHERE superseded_by IS NOT NULL AND superseded_by NOT IN (SELECT id FROM entries) ORDER BY id`).all();
+      checks.push({ name: 'data.dangling_superseded', severity: danglingSuperseded.length ? 'warn' : 'ok', detail: danglingSuperseded.length ? `${danglingSuperseded.length} entries with dangling superseded_by` : 'no dangling superseded_by', items: danglingSuperseded.length ? danglingSuperseded.map(r=>`E-${String(r.id).padStart(5,'0')} -> E-${String(r.superseded_by).padStart(5,'0')}`) : undefined });
+      const entriesWithoutModule = db.prepare(`SELECT id FROM entries WHERE deprecated = 0 AND id NOT IN (SELECT entry_id FROM entry_modules) ORDER BY id`).all();
+      checks.push({ name: 'data.entries_without_module', severity: entriesWithoutModule.length ? 'warn' : 'ok', detail: entriesWithoutModule.length ? `${entriesWithoutModule.length} non-deprecated entries with no module (informational)` : 'all non-deprecated entries have at least one module', items: entriesWithoutModule.length ? entriesWithoutModule.map(r=>r.id) : undefined });
       const entryCount = db.prepare('SELECT COUNT(*) AS c FROM entries').get().c;
       const ftsCount = db.prepare('SELECT COUNT(*) AS c FROM entries_fts').get().c;
       const parityOk = entryCount === ftsCount;
@@ -393,14 +391,15 @@ module.exports.routes = {
     const since = url.searchParams.get('since'); // ISO date or sqlite-friendly
     if (!['json', 'markdown'].includes(format)) return send(400, { error: 'format must be json or markdown' });
     try {
-      let q = 'SELECT rowid AS id, type, kind, title, summary, description, status, agent, module, task_id, created_at FROM entries WHERE deprecated=0';
+      let q = 'SELECT rowid AS id, type, kind, category, title, summary, description, status, agent, module, task_id, superseded_by, created_at FROM entries WHERE deprecated=0';
       const params = [];
-      if (moduleFilter) { q += ' AND module=?'; params.push(moduleFilter); }
+      if (moduleFilter) { q += ' AND id IN (SELECT entry_id FROM entry_modules WHERE module=?)'; params.push(moduleFilter); }
       if (since) { q += ' AND created_at >= ?'; params.push(since); }
       q += ' ORDER BY created_at DESC';
       const entries = db.prepare(q).all(...params);
       for (const e of entries) {
         e.refs = db.prepare('SELECT ref_type, ref_value FROM refs WHERE entry_id=?').all(e.id);
+        e.modules = db.prepare('SELECT module FROM entry_modules WHERE entry_id=? ORDER BY is_primary DESC, module ASC').all(e.id).map(r => r.module);
       }
       if (format === 'json') {
         res.writeHead(200, {
@@ -416,7 +415,7 @@ module.exports.routes = {
       lines.push(`**Count:** ${entries.length}`, '');
       for (const e of entries) {
         lines.push(`## E-${String(e.id).padStart(5,'0')} — ${e.title}`);
-        lines.push(`- type: ${e.type} | agent: ${e.agent || '?'} | module: ${e.module || '-'} | task: ${e.task_id || '-'} | ${e.created_at}`);
+        lines.push(`- type: ${e.type} | category: ${e.category || '-'} | agent: ${e.agent || '?'} | modules: ${(e.modules || []).join(', ') || e.module || '-'} | task: ${e.task_id || '-'} | ${e.created_at}`);
         lines.push('', e.summary || '', '');
         if (e.description) lines.push(e.description, '');
         if (e.refs && e.refs.length) {

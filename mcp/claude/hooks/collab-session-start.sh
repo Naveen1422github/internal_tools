@@ -7,7 +7,7 @@ set +e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Prefer CLAUDE_PROJECT_DIR (set by Claude Code for hooks). Fall back to
 # computing relative to script: this file lives at
-# <repo>/internal-tools/collab-mcp/claude/hooks/, so go up 4 levels.
+# <repo>/internal-tools/mcp/claude/hooks/, so go up 4 levels.
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$SCRIPT_DIR/../../../.." && pwd)}"
 
 SESSION_DIR="$PROJECT_DIR/.claude/sessions"
@@ -21,7 +21,7 @@ slug="${slug#emp1st-}"
 slug="${slug#ingxt-}"
 
 out="$(
-  npm --prefix "$PROJECT_DIR/internal-tools/collab-mcp" run -s module-card -- --slug "$slug" 2>/dev/null
+  npm --prefix "$PROJECT_DIR/internal-tools/mcp" run -s module-card -- --slug "$slug" 2>/dev/null
 )"
 
 if [ -n "$out" ]; then
@@ -33,4 +33,3 @@ if [ -n "$out" ]; then
 fi
 
 exit 0
-

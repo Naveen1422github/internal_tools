@@ -2,11 +2,19 @@ const http = require('http');
 const fs = require('fs/promises');
 const path = require('path');
 
-const collab = require('./tools/collab');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+const { migrate } = require('../core/db');
 
 const PORT = Number(process.env.PORT || 7473);
 const HOST = '127.0.0.1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
+
+const appliedMigrations = migrate();
+if (appliedMigrations.length > 0) {
+  console.log(`[migrate] applied: ${appliedMigrations.join(', ')}`);
+}
+
+const collab = require('./tools/collab');
 
 // Add more tools by requiring their module and spreading its .routes here.
 const routes = {

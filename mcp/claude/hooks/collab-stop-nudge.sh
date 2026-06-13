@@ -7,7 +7,7 @@ set +e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Prefer CLAUDE_PROJECT_DIR (set by Claude Code for hooks). Fall back to
 # computing relative to script: this file lives at
-# <repo>/internal-tools/collab-mcp/claude/hooks/, so go up 4 levels.
+# <repo>/internal-tools/mcp/claude/hooks/, so go up 4 levels.
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$SCRIPT_DIR/../../../.." && pwd)}"
 
 SESSION_START_FILE="$PROJECT_DIR/.claude/sessions/.last-start"
@@ -27,12 +27,12 @@ fi
 
 count="$(printf "%s\n" "$changed" | sed '/^$/d' | wc -l | tr -d ' ')"
 
-checker_dist="$PROJECT_DIR/internal-tools/collab-mcp/dist/scripts/check-handoff-needed.js"
+checker_dist="$PROJECT_DIR/internal-tools/mcp/dist/scripts/check-handoff-needed.js"
 if [ -f "$checker_dist" ]; then
   node "$checker_dist" --since "$since" >/dev/null 2>&1
   rc=$?
 else
-  npm --prefix "$PROJECT_DIR/internal-tools/collab-mcp" exec -- tsx src/scripts/check-handoff-needed.ts --since "$since" >/dev/null 2>&1
+  npm --prefix "$PROJECT_DIR/internal-tools/mcp" exec -- tsx src/scripts/check-handoff-needed.ts --since "$since" >/dev/null 2>&1
   rc=$?
 fi
 
@@ -47,4 +47,3 @@ msg="Session has uncommitted changes in ${count} file(s) and no handoff recorded
 node -e 'process.stdout.write(JSON.stringify({ additionalContext: process.argv[1] }))' "$msg" 2>/dev/null
 
 exit 0
-

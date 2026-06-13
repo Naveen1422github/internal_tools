@@ -60,9 +60,9 @@ seeded.push(
     agent: "Claude",
     module: "collab-infra",
     refs: [
-      { ref_type: "file", ref_value: "internal-tools/collab-mcp/src/tools/add.ts" },
-      { ref_type: "file", ref_value: "internal-tools/collab-mcp/src/tools/get.ts" },
-      { ref_type: "file", ref_value: "internal-tools/collab-mcp/src/tools/list-recent.ts" },
+      { ref_type: "file", ref_value: "internal-tools/mcp/src/tools/add.ts" },
+      { ref_type: "file", ref_value: "internal-tools/mcp/src/tools/get.ts" },
+      { ref_type: "file", ref_value: "internal-tools/mcp/src/tools/list-recent.ts" },
     ],
   }).id
 );

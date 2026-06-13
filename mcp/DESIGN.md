@@ -40,7 +40,7 @@ All of them load fully even when the agent needs one line. The real cost isn't s
 
 | Area | Decision | Rationale |
 |---|---|---|
-| Stack | Node/TS in `internal-tools/collab-mcp/`, `better-sqlite3` + FTS5 | Matches repo stack; versioned with code |
+| Stack | Node/TS in `internal-tools/mcp/`, `better-sqlite3` + FTS5 | Matches repo stack; versioned with code |
 | Phase 1 scope | collab entries + codex-tasks + session notes + modules | Highest token pain; knowledge/ stays as files |
 | Team model | Single-dev, local `collab.db` (gitignored) + JSONL export hook | Clean exit door if multi-dev comes later |
 | Rollup | Manual only (`collab rollup <task>`) | No surprise compaction; deterministic |
@@ -266,7 +266,7 @@ collab.rollup(task_id)
 
 collab.export({since?, format='jsonl'})
   -> {path}
-  # Dumps to internal-tools/collab-mcp/export/*.jsonl — the "multi-dev exit door".
+  # Dumps to internal-tools/mcp/export/*.jsonl — the "multi-dev exit door".
 
 collab.doctor()
   -> {orphaned_tasks: [], unknown_modules: [], fts_drift: false, ...}
@@ -389,7 +389,7 @@ No LLM call. Deterministic. Good enough until it isn't.
 
 ## 12. Shared vs independent
 
-Single-dev is assumed for phase 1. DB lives at `internal-tools/collab-mcp/collab.db` (gitignored). Every ~N writes, a JSONL export lands at `internal-tools/collab-mcp/export/collab-YYYY-MM-DD.jsonl`. That file is the exit door — if multi-dev becomes real, import it into a hosted sqlite later.
+Single-dev is assumed for phase 1. DB lives at `internal-tools/mcp/collab.db` (gitignored). Every ~N writes, a JSONL export lands at `internal-tools/mcp/export/collab-YYYY-MM-DD.jsonl`. That file is the exit door — if multi-dev becomes real, import it into a hosted sqlite later.
 
 `collab.export --since=2026-04-15 --format=jsonl` can be run ad-hoc.
 
@@ -415,7 +415,7 @@ Single-dev is assumed for phase 1. DB lives at `internal-tools/collab-mcp/collab
 ## 15. Build order
 
 1. **This doc locked** → any blocker here is a re-design problem, cheap to fix on paper
-2. **Schema + migrations** → `internal-tools/collab-mcp/migrations/0001_init.sql`
+2. **Schema + migrations** → `internal-tools/mcp/migrations/0001_init.sql`
 3. **Tool stub + better-sqlite3 wiring** → minimum viable `collab.search`, `collab.get`, `collab.add`
 4. **Importer** → one-shot migration of existing `.md` files; run against a copy first
 5. **Remaining read tools** → `list_recent`, `task.get`, `module.get`
