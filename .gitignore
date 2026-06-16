@@ -1,3 +1,8 @@
+# Secrets — never commit (clean-room gate §5)
+.env
+.env.*
+!.env.example
+
 # Local DB — never commit
 collab.db
 collab.db-journal
@@ -12,3 +17,8 @@ node_modules/
 dist/
 *.tsbuildinfo
 data/sessions.json
+
+# Agent exhaust — logs, crash dumps, stray package caches
+*.log
+*.stackdump
+**/.npm-cache/

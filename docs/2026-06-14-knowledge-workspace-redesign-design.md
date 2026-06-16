@@ -94,8 +94,10 @@ You type → /api/ai/chat → server calls Grok (key in .env, never in browser)
 - API key lives only in server `.env`; never shipped to the browser.
 - The AI can call only **read** tools (search, get). It cannot mutate the DB.
 - Every change is a human-approved draft passing the same validation the MCP enforces.
-- Provider is Grok (xAI) for v1; the proxy is written so swapping providers
-  (OpenAI/Ollama/etc.) is a config change, not a rewrite — but multi-provider UI is out of
+- Provider is **Groq** (Llama, OpenAI-compatible — `api.groq.com`) for v1, confirmed
+  2026-06-15. (Earlier drafts wrote "Grok (xAI)" — that was a misnomer; the env key and the
+  proven `aiService.ts` reference are Groq.) The proxy is written so swapping providers
+  (xAI/OpenAI/Ollama/etc.) is a config change, not a rewrite — but multi-provider UI is out of
   scope for v1.
 
 ---
@@ -156,3 +158,22 @@ removed terminal feature) and employer-specific commit messages. The live `colla
 
 - **Product name** — "CollabOS" vs other; decide before the public repo is created.
 - **License choice** — MIT (permissive) is the default candidate; confirm in Phase 3.
+
+## 10. Backlog from external review (GPT / DeepSeek, 2026-06-14)
+
+Triaged; recorded here so they survive. Not in Phase 1A.
+
+- **`audit_log` table before open-sourcing** (migration 0005): `id, action, entity_type, entity_id, actor, created_at`; append a row on create/edit/delete/supersede/reassign. Cheap now, valuable for history + the future Team phase. **Adopt — do in 1B or a dedicated migration task.**
+- **Dashboard "recently modified / recently superseded"** (not just recently-created): extend `/api/collab/stats` with `recent_modified` (by `updated_at`) and `recent_superseded`. Cheap. **Adopt in 1B.**
+- **Saved Views** — named filter combos (e.g. `module:collab status:active category:Reference`) as first-class routes. Reserve concept; build after the Knowledge browser exists.
+- **Entry relationships** — typed `related_to` beyond supersede. Largely already covered by the existing `refs` table (`ref_type='entry'`); revisit only if a typed relation is needed.
+- **API versioning** `/api/v1/collab/*` — do during Phase 3 (open-source) to avoid churning the current dashboard + new routes now.
+
+**Claude Design brief inputs (from DeepSeek's screen detail — for Phase 1C visuals, not the mock-server approach):**
+- Per-type entry cards render differently (decision / gotcha / changelog / reference / constraint).
+- ⌘K command palette with typed filter tokens (`module:`, `type:`, `category:`, `since:`) + simple natural-language mapping.
+- Knowledge Health page = per-category actionable lists with one-click fixes (duplicates → side-by-side merge→supersede; missing summaries → inline edit; stale → AI summary; orphan tasks → link; unknown-module → bulk reassign).
+- Superseded entries show a banner "Superseded by E-00123" linking to the replacement.
+- Floating "Quick Capture" + an "AI-assisted capture" tab (paste text → extract decisions/tasks/gotchas as approvable drafts).
+
+**Rejected:** DeepSeek's disposable mock-server + fake-seed + hardcoded-AI prototype (contradicts the real shared-SQLite moat); workspace switcher and agent API-key/permissions screens (that's the deferred Team / orchestration scope, not v1).

@@ -6,8 +6,7 @@
  * Run:
  *   npx tsx src/scripts/seed.ts
  */
-import { getDb, migrate, closeDb } from "../db.js";
-import { addEntry } from "../tools/add.js";
+import { getDb, migrate, closeDb, addEntry } from "@emp1st/core";
 
 const db = getDb();
 migrate(db);

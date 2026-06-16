@@ -1,0 +1,33 @@
+{
+  "results": [
+    {
+      "id": "<id>",
+      "type": "decision",
+      "title": "Alpha decision",
+      "summary": "a",
+      "tokens_estimate": "<tok>",
+      "created_at": "<ts>",
+      "score": null,
+      "description": "d"
+    },
+    {
+      "id": "<id>",
+      "type": "changelog",
+      "title": "Beta change",
+      "summary": "b",
+      "tokens_estimate": "<tok>",
+      "created_at": "<ts>",
+      "score": null,
+      "description": "d"
+    }
+  ],
+  "auto_expanded": true,
+  "total_tokens": 2,
+  "filters_applied": {
+    "query": "",
+    "module": "demo",
+    "kind": "any",
+    "include_deprecated": false,
+    "limit": 50
+  }
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { getDb } from "../db.js";
+import { getDb } from "@emp1st/core";
 
 function readArgValue(args: string[], name: string): string | null {
   const eq = args.find((a) => a.startsWith(`${name}=`));

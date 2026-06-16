@@ -5,7 +5,7 @@
  * or
  *   npx tsx src/migrate.ts
  */
-import { getDb, migrate, closeDb } from "./db.js";
+import { getDb, migrate, closeDb } from "@emp1st/core";
 
 const db = getDb();
 const applied = migrate(db);

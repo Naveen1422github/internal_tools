@@ -1,0 +1,43 @@
+{
+  "results": [
+    {
+      "id": "<id>",
+      "type": "decision",
+      "title": "Alpha decision",
+      "summary": "a",
+      "tokens_estimate": "<tok>",
+      "created_at": "<ts>",
+      "score": null,
+      "description": "d"
+    },
+    {
+      "id": "<id>",
+      "type": "changelog",
+      "title": "Beta change",
+      "summary": "b",
+      "tokens_estimate": "<tok>",
+      "created_at": "<ts>",
+      "score": null,
+      "description": "d"
+    },
+    {
+      "id": "<id>",
+      "type": "gotcha",
+      "title": "Gamma gotcha",
+      "summary": "g",
+      "tokens_estimate": "<tok>",
+      "created_at": "<ts>",
+      "score": null,
+      "description": "d"
+    }
+  ],
+  "auto_expanded": true,
+  "total_tokens": 3,
+  "filters_applied": {
+    "query": "",
+    "kind": "any",
+    "since": "<since>",
+    "include_deprecated": false,
+    "limit": 10
+  }
+}

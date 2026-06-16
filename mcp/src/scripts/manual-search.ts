@@ -7,8 +7,7 @@
  *
  * Safe to re-run — idempotent seed (uses INSERT OR IGNORE on titles).
  */
-import { getDb, migrate, estimateTokens, closeDb } from "../db.js";
-import { searchEntries } from "../tools/search.js";
+import { getDb, migrate, estimateTokens, closeDb, searchEntries } from "@emp1st/core";
 
 const db = getDb();
 migrate(db);

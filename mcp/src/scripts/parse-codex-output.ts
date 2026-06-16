@@ -31,15 +31,15 @@
  *   --input <path>           read from file path instead of stdin
  */
 import { readFileSync } from "node:fs";
-import { getDb, migrate, closeDb } from "../db.js";
-import { addEntry } from "../tools/add.js";
+import { getDb, migrate, closeDb } from "@emp1st/core";
+import { addEntry } from "@emp1st/core";
 import {
   parseIntoDraft,
   type IngestArgs,
   type IngestContext,
   type IngestSource,
-} from "../tools/ingest.js";
-import type { EntryType, Agent, RefInput } from "../tools/add.js";
+} from "@emp1st/core";
+import type { EntryType, Agent, RefInput } from "@emp1st/core";
 
 // ------------------------------------------------------------
 // Arg parsing

@@ -12,27 +12,31 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { getDb, migrate } from "./db.js";
-import { searchEntries } from "./tools/search.js";
-import { addEntry } from "./tools/add.js";
-import { updateEntry } from "./tools/update.js";
-import { getEntry } from "./tools/get.js";
-import { listRecent } from "./tools/list-recent.js";
 import {
+  getDb,
+  migrate,
+  searchEntries,
+  addEntry,
+  updateEntry,
+  getEntry,
+  listRecent,
   createTask,
   transitionTask,
   assignTask,
   getTask,
   type TaskStatus,
   type Priority,
-} from "./tools/task.js";
-import { initModule, getModule } from "./tools/module.js";
-import { ingestDraft } from "./tools/ingest.js";
-import { rollup, archive } from "./tools/rollup.js";
-import { supersede } from "./tools/supersede.js";
-import { exportEntries } from "./tools/export.js";
-import { doctor } from "./tools/doctor.js";
-import { savingsReport, formatSavingsReport } from "./tools/savings.js";
+  initModule,
+  getModule,
+  ingestDraft,
+  rollup,
+  archive,
+  supersede,
+  exportEntries,
+  doctor,
+  savingsReport,
+  formatSavingsReport,
+} from "@emp1st/core";
 
 // ------------------------------------------------------------
 // Server boot

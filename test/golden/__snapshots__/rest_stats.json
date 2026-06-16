@@ -1,0 +1,57 @@
+{
+  "total": 3,
+  "by_category": {
+    "Activity": 1,
+    "Reference": 2
+  },
+  "by_type": {
+    "changelog": 1,
+    "decision": 1,
+    "gotcha": 1
+  },
+  "by_status": {
+    "active": 3
+  },
+  "top_modules": [
+    {
+      "module": "demo",
+      "count": 2
+    },
+    {
+      "module": "other",
+      "count": 1
+    }
+  ],
+  "recent": [
+    {
+      "id": "<id>",
+      "type": "decision",
+      "category": "Reference",
+      "title": "Alpha decision",
+      "summary": "S",
+      "agent": "Claude",
+      "module": "demo",
+      "created_at": "<ts>"
+    },
+    {
+      "id": "<id>",
+      "type": "changelog",
+      "category": "Activity",
+      "title": "Beta change",
+      "summary": "S",
+      "agent": "Claude",
+      "module": "demo",
+      "created_at": "<ts>"
+    },
+    {
+      "id": "<id>",
+      "type": "gotcha",
+      "category": "Reference",
+      "title": "Gamma gotcha",
+      "summary": "S",
+      "agent": "Claude",
+      "module": "other",
+      "created_at": "<ts>"
+    }
+  ]
+}

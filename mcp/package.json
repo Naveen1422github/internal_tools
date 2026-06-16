@@ -13,9 +13,11 @@
     "migrate": "tsx src/migrate.ts",
     "module-card": "tsx src/scripts/module-card.ts",
     "seed": "tsx src/scripts/seed.ts",
-    "test:search": "tsx src/scripts/manual-search.ts"
+    "test:search": "tsx src/scripts/manual-search.ts",
+    "test:golden": "tsx --test test/golden/tools.golden.test.ts"
   },
   "dependencies": {
+    "@emp1st/core": "*",
     "@modelcontextprotocol/sdk": "^1.0.4",
     "better-sqlite3": "^11.3.0",
     "zod": "^3.23.0"

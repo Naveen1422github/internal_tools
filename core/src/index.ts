@@ -1,0 +1,17 @@
+// Public surface of @emp1st/core. Transport adapters import from here.
+export * from './db.js';
+export * from './ops/search.js';
+export * from './ops/get.js';
+export * from './ops/list-recent.js';
+export * from './ops/add.js';
+export * from './ops/update.js';
+export * from './ops/supersede.js';
+export * from './ops/module.js';
+export * from './ops/doctor.js';
+export * from './ops/task.js';
+export * from './ops/rollup.js';
+export * from './ops/ingest.js';
+export * from './ops/export.js';
+export * from './ops/savings.js';
+export * from './constants.js';
+export * from './validate.js';

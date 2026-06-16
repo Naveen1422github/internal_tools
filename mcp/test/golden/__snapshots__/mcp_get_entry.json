@@ -1,0 +1,23 @@
+{
+  "id": "<id>",
+  "type": "decision",
+  "kind": "signal",
+  "title": "Alpha decision",
+  "summary": "a",
+  "description": "d",
+  "status": "active",
+  "agent": "Claude",
+  "module": "demo",
+  "task_id": null,
+  "tokens_estimate": "<tok>",
+  "rollup_of_task": null,
+  "deprecated": 0,
+  "created_at": "<ts>",
+  "updated_at": "<ts>",
+  "category": "Reference",
+  "superseded_by": null,
+  "modules": [
+    "demo"
+  ],
+  "refs": []
+}
