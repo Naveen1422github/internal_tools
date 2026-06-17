@@ -1,4 +1,4 @@
-import { getDb, addEntry } from "@emp1st/core";
+import { getDb, addEntry } from "@collab-mcp/core";
 
 const [type, title, summary, description, moduleName] = process.argv.slice(2);
 

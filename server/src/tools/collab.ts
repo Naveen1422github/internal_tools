@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { getDb, estimateTokens, KIND_BY_TYPE, CATEGORY_BY_TYPE, SLUG_REGEX, validateEntryInput } from '@emp1st/core';
+import { getDb, estimateTokens, KIND_BY_TYPE, CATEGORY_BY_TYPE, SLUG_REGEX, validateEntryInput } from '@collab-mcp/core';
 
 const db = getDb();
 

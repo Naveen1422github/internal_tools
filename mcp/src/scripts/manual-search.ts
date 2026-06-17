@@ -7,7 +7,7 @@
  *
  * Safe to re-run — idempotent seed (uses INSERT OR IGNORE on titles).
  */
-import { getDb, migrate, estimateTokens, closeDb, searchEntries } from "@emp1st/core";
+import { getDb, migrate, estimateTokens, closeDb, searchEntries } from "@collab-mcp/core";
 
 const db = getDb();
 migrate(db);

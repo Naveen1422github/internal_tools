@@ -6,7 +6,7 @@
  * Run:
  *   npx tsx src/scripts/seed.ts
  */
-import { getDb, migrate, closeDb, addEntry } from "@emp1st/core";
+import { getDb, migrate, closeDb, addEntry } from "@collab-mcp/core";
 
 const db = getDb();
 migrate(db);

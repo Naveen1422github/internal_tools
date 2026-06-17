@@ -4,7 +4,7 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
-import { migrate } from '@emp1st/core';
+import { migrate } from '@collab-mcp/core';
 import * as collab from './tools/collab.js';
 import * as ai from './tools/ai.js';
 

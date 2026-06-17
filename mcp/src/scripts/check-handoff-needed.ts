@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { getDb } from "@emp1st/core";
+import { getDb } from "@collab-mcp/core";
 
 function readArgValue(args: string[], name: string): string | null {
   const eq = args.find((a) => a.startsWith(`${name}=`));

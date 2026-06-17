@@ -1,5 +1,5 @@
 {
-  "name": "@emp1st/server",
+  "name": "@collab-mcp/server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "start": "node dist/server.js"
   },
   "dependencies": {
-    "@emp1st/core": "*",
+    "@collab-mcp/core": "*",
     "better-sqlite3": "^11.3.0",
     "dotenv": "^16.4.7"
   },

@@ -11,7 +11,7 @@ export async function startTestServer() {
   process.env.COLLAB_DB_PATH = tmpFile;
   // dynamic import AFTER env is set so the singleton binds to the temp DB
   const { start } = await import(pathToFileURL(path.join(__dirname, '..', '..', 'server', 'dist', 'server.js')).href);
-  const { getDb } = await import('@emp1st/core');
+  const { getDb } = await import('@collab-mcp/core');
   const { server, port } = await start(0, '127.0.0.1');
   const db = getDb();
   const baseUrl = `http://127.0.0.1:${port}`;

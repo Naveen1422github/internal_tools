@@ -1,4 +1,4 @@
-import { KIND_BY_TYPE, CATEGORY_BY_TYPE, SLUG_REGEX, getDb } from '@emp1st/core';
+import { KIND_BY_TYPE, CATEGORY_BY_TYPE, SLUG_REGEX, getDb } from '@collab-mcp/core';
 import { runSearch } from './collab.js';
 import http from 'node:http';
 

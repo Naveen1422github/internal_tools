@@ -4,7 +4,7 @@ import { freshDb } from './seed.js';
 import {
   searchEntries, type SearchArgs,
   getEntry, listRecent, getModule, doctor,
-} from '@emp1st/core';
+} from '@collab-mcp/core';
 
 const h = freshDb();
 after(() => h.close());

@@ -1,4 +1,4 @@
-// Public surface of @emp1st/core. Transport adapters import from here.
+// Public surface of @collab-mcp/core. Transport adapters import from here.
 export * from './db.js';
 export * from './ops/search.js';
 export * from './ops/get.js';

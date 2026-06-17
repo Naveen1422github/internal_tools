@@ -36,7 +36,7 @@ import {
   doctor,
   savingsReport,
   formatSavingsReport,
-} from "@emp1st/core";
+} from "@collab-mcp/core";
 
 // ------------------------------------------------------------
 // Server boot

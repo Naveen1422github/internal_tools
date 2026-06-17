@@ -2,7 +2,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { getDb, migrate, closeDb, addEntry } from '@emp1st/core';
+import { getDb, migrate, closeDb, addEntry } from '@collab-mcp/core';
 
 // Builds a fresh, isolated temp DB with a fixed seed for deterministic golden tests.
 // getDb() binds a module-level singleton to COLLAB_DB_PATH on first call, so this must

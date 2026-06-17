@@ -14,10 +14,10 @@
     "gemini-mcp"
   ],
   "scripts": {
-    "start": "npm -w @emp1st/server run build && node server/dist/server.js",
-    "dev": "npm -w @emp1st/server run dev",
-    "test": "npm -w @emp1st/server run build && tsx --test test/**/*.test.mts",
-    "build": "npm -w @emp1st/core run build && npm run build --workspaces --if-present",
+    "start": "npm -w @collab-mcp/server run build && node server/dist/server.js",
+    "dev": "npm -w @collab-mcp/server run dev",
+    "test": "npm -w @collab-mcp/server run build && tsx --test test/**/*.test.mts",
+    "build": "npm -w @collab-mcp/core run build && npm run build --workspaces --if-present",
     "test:all": "npm run test --workspaces --if-present && tsx --test test/**/*.test.mts",
     "lint": "eslint .",
     "format": "prettier --write .",
