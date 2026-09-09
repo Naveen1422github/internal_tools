@@ -1,5 +1,6 @@
 import type { DB } from "../db.js";
 import { estimateTokens } from "../db.js";
+import type { RefInput } from "./add.js";
 
 // ------------------------------------------------------------
 // Types
@@ -71,4 +72,67 @@ export function updateEntry(db: DB, args: UpdateEntryArgs): UpdateEntryResult {
   }
 
   return { id: args.id, updated_fields: updated };
+}
+
+// ------------------------------------------------------------
+// updateEntryRefs — add/remove structured refs on an EXISTING entry
+//
+// Fills a real gap: addEntry sets refs once at creation and updateEntry does NOT
+// touch them, so there was no way to wire a link after the fact (e.g. link a new
+// decision into the roadmap Index hub it extends). Without this, retro-wiring
+// falls back to prose mentions, which no machine/lint can traverse.
+//
+// Idempotent by design: add uses INSERT OR IGNORE (re-adding an existing ref is a
+// no-op), remove is a plain DELETE (removing a missing ref is a no-op). The
+// returned added/removed lists report what ACTUALLY changed, not what was asked —
+// so callers can tell a real edit from a no-op.
+// ------------------------------------------------------------
+export interface UpdateEntryRefsArgs {
+  id: number;
+  add?: RefInput[];
+  remove?: RefInput[];
+}
+
+export interface UpdateEntryRefsResult {
+  id: number;
+  added: RefInput[];
+  removed: RefInput[];
+}
+
+export function updateEntryRefs(db: DB, args: UpdateEntryRefsArgs): UpdateEntryRefsResult {
+  if (!Number.isInteger(args.id) || args.id < 1) {
+    throw new Error("id must be a positive integer");
+  }
+  const toAdd = args.add ?? [];
+  const toRemove = args.remove ?? [];
+  if (toAdd.length === 0 && toRemove.length === 0) {
+    throw new Error("nothing to do: provide at least one ref in 'add' or 'remove'");
+  }
+
+  const exists = db.prepare(`SELECT 1 FROM entries WHERE id = ?`).get(args.id);
+  if (!exists) throw new Error(`no entry found with id ${args.id}`);
+
+  const added: RefInput[] = [];
+  const removed: RefInput[] = [];
+
+  const insertRef = db.prepare(
+    `INSERT OR IGNORE INTO refs (entry_id, ref_type, ref_value) VALUES (?, ?, ?)`
+  );
+  const deleteRef = db.prepare(
+    `DELETE FROM refs WHERE entry_id = ? AND ref_type = ? AND ref_value = ?`
+  );
+
+  const tx = db.transaction(() => {
+    for (const r of toRemove) {
+      const info = deleteRef.run(args.id, r.ref_type, r.ref_value);
+      if (info.changes > 0) removed.push(r);
+    }
+    for (const r of toAdd) {
+      const info = insertRef.run(args.id, r.ref_type, r.ref_value);
+      if (info.changes > 0) added.push(r);
+    }
+  });
+  tx();
+
+  return { id: args.id, added, removed };
 }

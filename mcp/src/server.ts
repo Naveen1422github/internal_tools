@@ -18,12 +18,15 @@ import {
   searchEntries,
   addEntry,
   updateEntry,
+  updateEntryRefs,
   getEntry,
   listRecent,
   createTask,
   transitionTask,
   assignTask,
   getTask,
+  searchTasks,
+  updateTask,
   type TaskStatus,
   type Priority,
   initModule,
@@ -134,9 +137,22 @@ server.registerTool(
       include_deprecated: args.include_deprecated ?? false,
       limit: args.limit ?? 10,
     });
+    // Tasks live in their own table (not entries_fts), so a keyword search would
+    // otherwise miss them. When there's a real query, surface matching tasks as a
+    // side-array so "search collab for X" finds the task about X too. Only added
+    // when non-empty, so the entries-only result shape is unchanged otherwise.
+    const out: Record<string, unknown> = { ...result };
+    let taskNote = "";
+    if (args.query && args.query.trim().length > 0) {
+      const t = searchTasks(db, { query: args.query, module: args.module, limit: 5 });
+      if (t.results.length > 0) {
+        out.tasks = t.results;
+        taskNote = "\n\n" + formatTaskMatches(t.results);
+      }
+    }
     return {
-      content: [{ type: "text", text: formatSearchResult(result) }],
-      structuredContent: structured(result),
+      content: [{ type: "text", text: formatSearchResult(result) + taskNote }],
+      structuredContent: structured(out),
     };
   }
 );
@@ -350,6 +366,60 @@ server.registerTool(
 );
 
 // ------------------------------------------------------------
+// Tool: collab.update_refs
+// ------------------------------------------------------------
+server.registerTool(
+  "collab_update_refs",
+  {
+    title: "Add / remove refs on an existing entry",
+    description: [
+      "Mutates the structured refs (links) of an existing entry — the one thing collab.add",
+      "sets once and collab.update cannot touch. Use to wire a link AFTER creation, e.g. link",
+      "a new decision into the roadmap/Index hub it extends, instead of a prose mention.",
+      "",
+      "Provide 'add' and/or 'remove' arrays of {ref_type, ref_value}. Idempotent: re-adding an",
+      "existing ref or removing a missing one is a no-op. The response lists what ACTUALLY changed.",
+      "Each ref is {ref_type: 'file'|'task'|'entry'|'url', ref_value: string}. For an entry link,",
+      "ref_type='entry' and ref_value is the target entry id as a string (e.g. '304').",
+    ].join("\n"),
+    inputSchema: {
+      id: z.number().int().min(1).describe("Entry id whose refs to mutate (the integer inside E-NNNNN)."),
+      add: z
+        .array(z.object({ ref_type: REF_TYPE, ref_value: z.string().min(1) }))
+        .optional()
+        .describe("Refs to add (INSERT OR IGNORE)."),
+      remove: z
+        .array(z.object({ ref_type: REF_TYPE, ref_value: z.string().min(1) }))
+        .optional()
+        .describe("Refs to remove (DELETE)."),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (args) => {
+    const result = updateEntryRefs(db, { id: args.id, add: args.add, remove: args.remove });
+    const parts: string[] = [];
+    if (result.added.length > 0) {
+      parts.push(`+${result.added.map((r) => `${r.ref_type}:${r.ref_value}`).join(", ")}`);
+    }
+    if (result.removed.length > 0) {
+      parts.push(`-${result.removed.map((r) => `${r.ref_type}:${r.ref_value}`).join(", ")}`);
+    }
+    const change = parts.length > 0 ? parts.join(" | ") : "no change (all no-ops)";
+    return {
+      content: [
+        { type: "text", text: `E-${String(result.id).padStart(5, "0")} refs: ${change}.` },
+      ],
+      structuredContent: structured(result),
+    };
+  }
+);
+
+// ------------------------------------------------------------
 // Tool: collab.task.create
 // ------------------------------------------------------------
 server.registerTool(
@@ -512,6 +582,108 @@ server.registerTool(
         : "";
     return {
       content: [{ type: "text", text: `${header}\n  ${meta}${entries}` }],
+      structuredContent: structured(result),
+    };
+  }
+);
+
+// ------------------------------------------------------------
+// Tool: collab.task.list
+// ------------------------------------------------------------
+server.registerTool(
+  "collab_task_list",
+  {
+    title: "List / search tasks",
+    description: [
+      "Lists tasks with optional keyword match + filters. Fills the gap where collab.search",
+      "(which only covers entries) cannot find tasks: tasks live in their own table.",
+      "",
+      "'query' matches over task title/summary/description (tokenized; multi-word recalls).",
+      "Omit 'query' to browse recent tasks. Filter by module/status/assignee. Ordered by",
+      "most-recently-updated. Returns summaries; use collab.task.get for a task's full body + entries.",
+    ].join("\n"),
+    inputSchema: {
+      query: z.string().optional().describe("Keyword match over title/summary/description. Omit to list all."),
+      module: z.string().optional(),
+      status: TASK_STATUS.optional(),
+      assignee: AGENT.optional(),
+      limit: z.number().int().min(1).max(50).optional().default(20),
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (args) => {
+    const result = searchTasks(db, {
+      query: args.query,
+      module: args.module,
+      status: args.status as TaskStatus | undefined,
+      assignee: args.assignee,
+      limit: args.limit,
+    });
+    const text =
+      result.results.length === 0
+        ? "No tasks matched."
+        : `Found ${result.results.length} task(s):\n` +
+          result.results
+            .map(
+              (t) =>
+                `  [${t.id}] ${t.status}${t.priority ? ` (${t.priority})` : ""}` +
+                `${t.module ? ` {${t.module}}` : ""} - ${t.title}`
+            )
+            .join("\n");
+    return {
+      content: [{ type: "text", text }],
+      structuredContent: structured(result),
+    };
+  }
+);
+
+// ------------------------------------------------------------
+// Tool: collab.task.update
+// ------------------------------------------------------------
+server.registerTool(
+  "collab_task_update",
+  {
+    title: "Edit a task's content fields",
+    description: [
+      "Edits a task's title/summary/description/priority/module in place (by id).",
+      "",
+      "Status is NOT editable here — use collab.task.transition, which enforces the state machine.",
+      "Provide at least one field; omitted fields are left untouched. 'summary' must be <= 200 chars.",
+      "updated_at is refreshed automatically.",
+    ].join("\n"),
+    inputSchema: {
+      id: z.string().describe("Task id, e.g. 'T-001'"),
+      title: z.string().min(1).optional(),
+      summary: z.string().max(200).optional(),
+      description: z.string().optional(),
+      priority: PRIORITY.optional(),
+      module: z.string().optional(),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (args) => {
+    const result = updateTask(db, {
+      id: args.id,
+      title: args.title,
+      summary: args.summary,
+      description: args.description,
+      priority: args.priority as Priority | undefined,
+      module: args.module,
+    });
+    return {
+      content: [
+        { type: "text", text: `Updated ${result.id} (${result.updated_fields.join(", ")}).` },
+      ],
       structuredContent: structured(result),
     };
   }
@@ -980,6 +1152,17 @@ function formatSearchResult(r: { results: any[]; auto_expanded: boolean; total_t
     return `${head}\n${body}`;
   });
   return `${header}\n\n${lines.join("\n\n")}`;
+}
+
+function formatTaskMatches(
+  tasks: Array<{ id: string; title: string; status: string; priority: string | null; module: string | null }>
+): string {
+  const lines = tasks.map(
+    (t) =>
+      `  [${t.id}] ${t.status}${t.priority ? ` (${t.priority})` : ""}` +
+      `${t.module ? ` {${t.module}}` : ""} - ${t.title}`
+  );
+  return `Also ${tasks.length} matching task(s) (collab.task.get for detail):\n${lines.join("\n")}`;
 }
 
 function formatEntry(e: {

@@ -1,5 +1,13 @@
 # Collab v2 — SQLite + FTS5 + MCP Tools
 
+> ⚠️ **HISTORICAL DESIGN DOC — DO NOT TREAT AS CURRENT.** This is the original v0.1
+> rationale. The shipped system has since diverged: migrations 0002–0004 added the
+> `dispatches` table, the `category` (Index/Reference/Activity) axis, the `entry_modules`
+> many-to-many junction, and `superseded_by`; tools are named `collab_*` (not `collab.*`);
+> and all logic was extracted into the hexagonal `@collab-mcp/core` package.
+> **For the current schema, tool surface, and file map, read [README.md](./README.md).**
+> Kept for the *why* behind the original decisions.
+
 > **Status:** Draft v0.1 (2026-04-17) — design doc, no code yet
 > **Author:** Naveen + Claude
 > **Audience:** Naveen (single-dev today); future devs on this repo

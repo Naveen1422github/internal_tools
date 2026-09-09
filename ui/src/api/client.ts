@@ -94,3 +94,21 @@ export const tasks = () => getJson<{ results: any[] }>(`/api/collab/tasks`);
 export const modules = () => getJson<{ results: any[] }>(`/api/collab/modules`);
 export const moduleCard = (slug: string) =>
   getJson<any>(`/api/collab/module-card${qs({ slug })}`);
+
+// --- AI assistant ---
+export interface AiSearchTrail { query: string; filters: Record<string, unknown>; resultCount: number; }
+export interface AiAnswer { answer: string; searches: AiSearchTrail[]; }
+export interface AiDraft {
+  draft: Partial<Entry>;
+  validation: { ok: boolean; errors: string[] };
+  searches: AiSearchTrail[];
+}
+export type AiResponse = AiAnswer | AiDraft;
+export type ChatRole = 'user' | 'assistant';
+
+export const aiChat = (messages: Array<{ role: ChatRole; content: string }>) =>
+  postJson<AiResponse>(`/api/ai/chat`, { messages });
+
+export function isDraft(r: AiResponse): r is AiDraft {
+  return 'draft' in r;
+}

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import Sidebar from './Sidebar';
 import CommandPalette from './CommandPalette';
 import EntryDrawer from './EntryDrawer';
+import AiPanel from './AiPanel';
 import { useUi } from '../store/ui';
 
 export default function AppShell({ children }: { children: ReactNode }) {
@@ -16,11 +17,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         </header>
         <div className="flex-1 min-h-0 overflow-y-auto p-6">{children}</div>
       </main>
-      {aiPanelOpen && (
-        <aside className="w-96 shrink-0 border-l border-gray-200 dark:border-gray-800 p-4">
-          <div className="text-sm text-gray-400">AI Assistant panel — implemented in Phase 2.</div>
-        </aside>
-      )}
+      {aiPanelOpen && <AiPanel />}
       <CommandPalette />
       <EntryDrawer />
     </div>

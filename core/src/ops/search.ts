@@ -70,6 +70,24 @@ export function resolveSince(since: string | undefined): string | undefined {
 // ------------------------------------------------------------
 // Main
 // ------------------------------------------------------------
+/**
+ * Build a safe FTS5 MATCH expression from raw user input.
+ * - tokenizes on non-alphanumeric, so "custom-reports" -> custom, reports
+ * - escapes embedded quotes ("" ) and drops empty tokens
+ * - prefix-matches each token ("cus" -> "cus"*) so as-you-type / partial words recall
+ * - joins with AND (precise, the FTS default) or OR (recall fallback)
+ * Returns null when the input has no usable tokens — callers must then skip MATCH
+ * entirely rather than emit an empty/`*`-only expression (which FTS5 rejects).
+ */
+export function buildFtsMatch(query: string, join: "AND" | "OR" = "AND"): string | null {
+  const tokens = query
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+    .map((t) => `"${t.replace(/"/g, '""')}"*`);
+  if (tokens.length === 0) return null;
+  return tokens.join(join === "OR" ? " OR " : " ");
+}
+
 export function searchEntries(db: DB, args: SearchArgs): SearchResult {
   const hasQuery = args.query.trim().length > 0;
   const sinceIso = resolveSince(args.since);
@@ -96,18 +114,16 @@ export function searchEntries(db: DB, args: SearchArgs): SearchResult {
   if (args.status)   { where.push("e.status = ?");   params.push(args.status); }
   if (sinceIso)      { where.push("e.created_at >= ?"); params.push(sinceIso); }
 
-  let sql: string;
-  if (hasQuery) {
-    // FTS path — sanitize query: FTS5 is fragile with unescaped punctuation.
-    // Simple approach: wrap each token in quotes to avoid special-char bugs.
-    const ftsQuery = args.query
-      .split(/\s+/)
-      .filter(Boolean)
-      .map((t) => `"${t.replace(/"/g, "")}"`)
-      .join(" ");
+  // FTS path only when there's a query that yields usable tokens (all-punctuation
+  // input -> null -> fall through to the recency listing instead of a broken MATCH).
+  const ftsAnd = hasQuery ? buildFtsMatch(args.query, "AND") : null;
 
+  let sql: string;
+  let matchParamIndex = -1;
+  if (ftsAnd) {
+    matchParamIndex = params.length;
     where.push("entries_fts MATCH ?");
-    params.push(ftsQuery);
+    params.push(ftsAnd);
 
     sql = `
       SELECT
@@ -132,7 +148,20 @@ export function searchEntries(db: DB, args: SearchArgs): SearchResult {
   }
   params.push(args.limit);
 
-  const rows = db.prepare(sql).all(...params) as EntrySummary[];
+  const stmt = db.prepare(sql);
+  let rows = stmt.all(...params) as EntrySummary[];
+
+  // Recall fallback: a precise AND-of-prefixes can return nothing for odd phrasings
+  // (e.g. "customizable reports"). Retry the same filters with tokens OR-joined so the
+  // closest entries still surface, bm25-ranked. Single-token queries are unchanged
+  // (AND and OR produce the same expression), so this only fires for multi-word input.
+  if (rows.length === 0 && ftsAnd) {
+    const ftsOr = buildFtsMatch(args.query, "OR");
+    if (ftsOr && ftsOr !== ftsAnd) {
+      params[matchParamIndex] = ftsOr;
+      rows = stmt.all(...params) as EntrySummary[];
+    }
+  }
 
   // Auto-expand rule: count + total tokens both under caps.
   const totalTokens = rows.reduce((s, r) => s + (r.tokens_estimate ?? 0), 0);

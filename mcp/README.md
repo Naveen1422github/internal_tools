@@ -2,7 +2,7 @@
 
 SQLite-backed collaboration store for Claude + Codex + Gemini (+ Antigravity). Tasks, handoffs, reviews, decisions, gotchas, and module state — all queryable via MCP tools or `/collab-*` slash commands.
 
-**Status:** Phase 1 complete + knowledge-model redesign shipped (migration `0004`). Ready for daily use. See **[DESIGN.md](./DESIGN.md)** for the rationale and full design.
+**Status:** Phase 1 complete + knowledge-model redesign shipped (migration `0004`), then extracted to a hexagonal `@collab-mcp/core` + thin adapters. Ready for daily use. This README is the current source of truth; **[DESIGN.md](./DESIGN.md)** is the original v0.1 rationale (historical — the implemented schema/tools have since diverged).
 
 ---
 
@@ -85,7 +85,7 @@ All exposed as `mcp__collab__<name>`. 18 tools across 6 areas:
 - `collab_module_get { slug }` — module card: active_tasks, indexes, top_gotchas, recent_decisions, recent_handoffs. Multi-module aware via `entry_modules`.
 
 **System**
-- `collab_rollup { task_id? | (since + group_by), dry_run? }` — concatenates entries into a `rollup` entry; deprecates originals atomically per group. No LLM synthesis (D7=B locked in DESIGN.md).
+- `collab_rollup { task_id? | (since + group_by), dry_run? }` — concatenates entries into a `rollup` entry; deprecates originals atomically per group. No LLM synthesis — rollups are deterministic by design.
 - `collab_export { format: "json" | "markdown", filter? }` — returns `{format, entry_count, body}`. Caller writes to disk.
 - `collab_doctor` — runs health checks (schema, data integrity, FTS parity). Returns `{ok, checks[]}`.
 - `collab_savings_report { since?, group_by?, agent? }` — aggregates the dispatches table to show tokens displaced from Claude's window by sending work to Codex/Gemini.
@@ -123,42 +123,49 @@ The script pipes raw JSONL through `src/scripts/parse-codex-output.ts --save`, w
 
 ## File map
 
+Since the hexagonal refactor, **all tool logic lives in `@collab-mcp/core`** (`core/src/ops/`);
+this `mcp/` package is a thin stdio adapter that imports core and registers the tools.
+
 ```
-internal-tools/mcp/
-├── DESIGN.md                  ← design v0.3 + build order (§15)
-├── README.md                  ← this file
-├── collab.db                  ← SQLite store (gitignored)
-├── migrations/
-│   ├── 0001_init.sql                          ← base schema, indexes, FTS5 triggers, CHECKs
-│   ├── 0002_dispatches.sql                    ← dispatches table
-│   ├── 0002_fix_modules_slug_check.sql        ← slug validation fix
-│   ├── 0003_dispatches_updated_at.sql         ← add updated_at to dispatches
-│   └── 0004_categories_modules_supersede.sql  ← category, entry_modules, superseded_by
-├── src/
-│   ├── server.ts              ← MCP stdio entry (18 registerTool calls)
-│   ├── db.ts                  ← better-sqlite3 connection + migration runner
-│   ├── migrate.ts             ← migration CLI
-│   ├── tools/                 ← one file per tool:
-│   │   ├── search.ts          ← collab_search (FTS5 + category/module filters)
-│   │   ├── get.ts             ← collab_get
-│   │   ├── list-recent.ts     ← collab_list_recent
-│   │   ├── add.ts             ← collab_add (category derivation, entry_modules writes)
-│   │   ├── update.ts          ← collab_update (in-place title/summary/description edits)
-│   │   ├── ingest.ts          ← collab_ingest
-│   │   ├── supersede.ts       ← collab_supersede (superseded_by + deprecated)
-│   │   ├── task.ts            ← collab_task_create/transition/assign/get
-│   │   ├── module.ts          ← collab_module_init/get (multi-module aware)
-│   │   ├── rollup.ts          ← collab_rollup + collab_archive
-│   │   ├── export.ts          ← collab_export
-│   │   ├── doctor.ts          ← collab_doctor
-│   │   └── savings.ts         ← collab_savings_report
-│   └── scripts/
-│       ├── seed.ts            ← idempotent test data
-│       ├── manual-search.ts   ← MCP-less smoke test
-│       ├── module-card.ts     ← used by SessionStart hook
-│       ├── check-handoff-needed.ts  ← used by Stop hook
-│       └── parse-codex-output.ts    ← Codex/agy JSONL → collab.add
-└── claude/commands/           ← canonical slash command bodies
+internal-tools/
+├── core/                      ← @collab-mcp/core — domain logic (shared by mcp + server)
+│   └── src/
+│       ├── db.ts              ← better-sqlite3 connection + migration runner
+│       ├── constants.ts, validate.ts, index.ts
+│       └── ops/               ← one file per operation (the real implementations):
+│           ├── search.ts      ← collab_search (FTS5 + category/module filters)
+│           ├── get.ts         ← collab_get
+│           ├── list-recent.ts ← collab_list_recent
+│           ├── add.ts         ← collab_add (category derivation, entry_modules writes)
+│           ├── update.ts      ← collab_update (in-place title/summary/description edits)
+│           ├── ingest.ts      ← collab_ingest
+│           ├── supersede.ts   ← collab_supersede (superseded_by + deprecated)
+│           ├── task.ts        ← collab_task_create/transition/assign/get
+│           ├── module.ts      ← collab_module_init/get (multi-module aware)
+│           ├── rollup.ts      ← collab_rollup + collab_archive
+│           ├── export.ts      ← collab_export
+│           ├── doctor.ts      ← collab_doctor
+│           └── savings.ts     ← collab_savings_report
+└── mcp/                       ← @collab-mcp/mcp — this package
+    ├── DESIGN.md              ← original v0.1 design doc (historical; see banner inside)
+    ├── README.md              ← this file (current source of truth)
+    ├── collab.db              ← SQLite store (gitignored)
+    ├── migrations/
+    │   ├── 0001_init.sql                          ← base schema, indexes, FTS5 triggers, CHECKs
+    │   ├── 0002_dispatches.sql                    ← dispatches table
+    │   ├── 0002_fix_modules_slug_check.sql        ← slug validation fix
+    │   ├── 0003_dispatches_updated_at.sql         ← add updated_at to dispatches
+    │   └── 0004_categories_modules_supersede.sql  ← category, entry_modules, superseded_by
+    └── src/
+        ├── server.ts          ← MCP stdio entry (18 registerTool calls over core ops)
+        ├── migrate.ts         ← migration CLI
+        └── scripts/
+            ├── seed.ts            ← idempotent test data
+            ├── manual-search.ts   ← MCP-less smoke test
+            ├── module-card.ts     ← used by SessionStart hook
+            ├── check-handoff-needed.ts  ← used by Stop hook
+            └── parse-codex-output.ts    ← Codex/agy JSONL → collab_add
+    └── claude/commands/        ← canonical slash command bodies
                                   (.claude/commands/collab-*.md are redirects)
 ```
 
@@ -265,7 +272,7 @@ Use it for a few weeks first, then look at what was painful.
 
 ## Migration history
 
-- **2026-06-12:** Migration `0004_categories_modules_supersede` — knowledge-model redesign (decision E-00163). Adds `category` (Index/Reference/Activity), `superseded_by`, and the `entry_modules` junction table. Backfills existing data. See DESIGN.md §4 for details.
+- **2026-06-12:** Migration `0004_categories_modules_supersede` — knowledge-model redesign (decision E-00163). Adds `category` (Index/Reference/Activity), `superseded_by`, and the `entry_modules` junction table. Backfills existing data. See the **Data model (current)** section above for details.
 - **2026-04-25:** Phase 1 archival. Legacy `.claude/collab/*.md` and `.claude/codex-tasks/*.md` removed. Two substantive handoffs (CR-004, Step 9) and the T-STEP8 task spec exemplar were ingested as entries `E-7`, `E-8`, `E-9`. The 11 BOARD tasks (all `review` status, work shipped) were not migrated — the work is done and was unlikely to be queried again. Backup tarball: `~/.claude-archives/frontend2-collab-cleanup-20260425.tar.gz`.
 - **2026-04-22:** Code moved from `.claude/mcp/collab/` to `internal-tools/collab-mcp/`.
 - **2026-06-14:** Package moved from `internal-tools/collab-mcp/` to `internal-tools/mcp/` as part of the internal-tools reorganization.

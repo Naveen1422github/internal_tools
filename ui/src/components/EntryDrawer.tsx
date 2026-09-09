@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useUi } from '../store/ui';
 import { getEntry, upsertEntry, supersede, deleteEntry, type Entry } from '../api/client';
 import Drawer from './Drawer';
+import Markdown from './Markdown';
 
 export default function EntryDrawer() {
   const { drawerEntryId, closeDrawer, openDrawer } = useUi();
@@ -121,9 +122,9 @@ export default function EntryDrawer() {
           {!isEditing && entry.description && (
             <div className="space-y-2">
               <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Description</h3>
-              <div className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap font-serif leading-relaxed bg-gray-50 dark:bg-gray-900/50 p-3 rounded">
+              <Markdown className="text-sm text-gray-700 dark:text-gray-300 font-serif leading-relaxed bg-gray-50 dark:bg-gray-900/50 p-3 rounded">
                 {entry.description}
-              </div>
+              </Markdown>
             </div>
           )}
 

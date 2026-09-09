@@ -240,3 +240,160 @@ export function getTask(db: DB, id: string): TaskWithEntries {
 
   return { task, recent_entries: entries };
 }
+
+// ------------------------------------------------------------
+// searchTasks — keyword + filter over the tasks table
+//
+// Tasks live in their own table and are NOT in entries_fts, so a plain
+// collab_search misses them. This gives tasks a findable path.
+//
+// Matching mirrors buildFtsMatch's shape (search.ts): the query is tokenized
+// on non-alphanumeric boundaries, each token becomes a LIKE over
+// title/summary/description, tokens are AND-joined (precise), with an OR
+// fallback when AND yields nothing — so multi-word queries like
+// "hook search tool" still recall instead of silently returning zero.
+//
+// LIKE-not-FTS is deliberate: the tasks table is tiny (tens of rows), so a
+// dedicated tasks_fts virtual table + sync triggers would be pure ceremony.
+// The tokenizer strips % and _ (both non-alphanumeric), so LIKE wildcard
+// injection is impossible and no escaping is needed.
+// ------------------------------------------------------------
+export interface TaskSummary {
+  id: string;
+  title: string;
+  summary: string | null;
+  status: TaskStatus;
+  assignee: string | null;
+  priority: string | null;
+  module: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SearchTasksArgs {
+  query?: string;
+  module?: string;
+  status?: TaskStatus;
+  assignee?: string;
+  limit?: number; // default 20
+}
+
+export interface SearchTasksResult {
+  results: TaskSummary[];
+  filters_applied: Record<string, unknown>;
+}
+
+function tokenizeTaskQuery(q: string): string[] {
+  return q.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+
+export function searchTasks(db: DB, args: SearchTasksArgs): SearchTasksResult {
+  const baseWhere: string[] = [];
+  const baseParams: unknown[] = [];
+
+  if (args.module) { baseWhere.push("module = ?"); baseParams.push(args.module); }
+  if (args.status) { baseWhere.push("status = ?"); baseParams.push(args.status); }
+  if (args.assignee) { baseWhere.push("assignee = ?"); baseParams.push(args.assignee); }
+
+  const tokens = args.query ? tokenizeTaskQuery(args.query) : [];
+  const limit = args.limit ?? 20;
+
+  const runWith = (join: "AND" | "OR"): TaskSummary[] => {
+    const where = [...baseWhere];
+    const params = [...baseParams];
+    if (tokens.length > 0) {
+      const clauses = tokens.map(() => "(title LIKE ? OR summary LIKE ? OR description LIKE ?)");
+      where.push("(" + clauses.join(join === "OR" ? " OR " : " AND ") + ")");
+      for (const t of tokens) {
+        const like = `%${t}%`;
+        params.push(like, like, like);
+      }
+    }
+    const sql = `
+      SELECT id, title, summary, status, assignee, priority, module, created_at, updated_at
+      FROM tasks
+      ${where.length ? "WHERE " + where.join(" AND ") : ""}
+      ORDER BY updated_at DESC
+      LIMIT ?
+    `;
+    params.push(limit);
+    return db.prepare(sql).all(...params) as TaskSummary[];
+  };
+
+  let rows = runWith("AND");
+  // Recall fallback only helps multi-token queries (single-token AND==OR).
+  if (rows.length === 0 && tokens.length > 1) {
+    rows = runWith("OR");
+  }
+
+  return {
+    results: rows,
+    filters_applied: {
+      query: args.query ?? "",
+      module: args.module,
+      status: args.status,
+      assignee: args.assignee,
+      limit,
+    },
+  };
+}
+
+// ------------------------------------------------------------
+// updateTask — edit a task's CONTENT fields in place
+//
+// Mirrors updateEntry, with two deliberate differences:
+//   - status is NOT editable here — that belongs to transitionTask, which
+//     enforces the state machine. Editing it raw would bypass those rules.
+//   - no tokens_estimate (tasks aren't token-budgeted and aren't in FTS).
+// updated_at is refreshed automatically by trg_tasks_updated_at.
+// ------------------------------------------------------------
+export interface UpdateTaskArgs {
+  id: string;
+  title?: string;
+  summary?: string; // <= 200 chars
+  description?: string;
+  priority?: Priority;
+  module?: string;
+}
+
+export interface UpdateTaskResult {
+  id: string;
+  updated_fields: string[];
+}
+
+export function updateTask(db: DB, args: UpdateTaskArgs): UpdateTaskResult {
+  const sets: string[] = [];
+  const params: Record<string, string> = { id: args.id };
+  const updated: string[] = [];
+
+  if (args.title !== undefined) {
+    if (args.title.trim().length === 0) throw new Error("title cannot be blank");
+    sets.push("title = @title"); params.title = args.title; updated.push("title");
+  }
+  if (args.summary !== undefined) {
+    if (args.summary.length > 200) {
+      throw new Error(`summary exceeds 200 chars (got ${args.summary.length})`);
+    }
+    sets.push("summary = @summary"); params.summary = args.summary; updated.push("summary");
+  }
+  if (args.description !== undefined) {
+    sets.push("description = @description"); params.description = args.description; updated.push("description");
+  }
+  if (args.priority !== undefined) {
+    sets.push("priority = @priority"); params.priority = args.priority; updated.push("priority");
+  }
+  if (args.module !== undefined) {
+    sets.push("module = @module"); params.module = args.module; updated.push("module");
+  }
+
+  if (sets.length === 0) {
+    throw new Error(
+      "nothing to update: provide at least one of title/summary/description/priority/module"
+    );
+  }
+
+  const info = db.prepare(`UPDATE tasks SET ${sets.join(", ")} WHERE id = @id`).run(params);
+  if (info.changes === 0) throw new Error(`no task found with id ${args.id}`);
+
+  return { id: args.id, updated_fields: updated };
+}

@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { getDb, estimateTokens, KIND_BY_TYPE, CATEGORY_BY_TYPE, SLUG_REGEX, validateEntryInput } from '@collab-mcp/core';
+import { getDb, estimateTokens, KIND_BY_TYPE, CATEGORY_BY_TYPE, SLUG_REGEX, validateEntryInput, buildFtsMatch } from '@collab-mcp/core';
 
 const db = getDb();
 
@@ -39,15 +39,32 @@ export function runSearch(db: any, { q = '', type, module, agent, kind = 'signal
     query += ` AND e.created_at >= ?`;
     params.push(since);
   }
-  if (q.trim()) {
+  // Prefix-match + escape via the shared core helper so "cus" -> "cus"* recalls
+  // partial words and special chars can't throw FTS5 syntax errors.
+  const ftsAnd = q.trim() ? buildFtsMatch(q, 'AND') : null;
+  let matchParamIndex = -1;
+  if (ftsAnd) {
+    matchParamIndex = params.length;
     query += ` AND entries_fts MATCH ?`;
-    params.push(q);
+    params.push(ftsAnd);
     query += ` ORDER BY rank`;
   } else {
     query += ` ORDER BY e.created_at DESC`;
   }
 
-  return db.prepare(query + ' LIMIT 50').all(...params);
+  const stmt = db.prepare(query + ' LIMIT 50');
+  let rows = stmt.all(...params);
+
+  // Recall fallback: if the precise AND match found nothing, retry OR-joined so odd
+  // phrasings still surface the closest entries (single-token queries are unaffected).
+  if (rows.length === 0 && ftsAnd) {
+    const ftsOr = buildFtsMatch(q, 'OR');
+    if (ftsOr && ftsOr !== ftsAnd) {
+      params[matchParamIndex] = ftsOr;
+      rows = stmt.all(...params);
+    }
+  }
+  return rows;
 }
 
 export const routes: Record<string, (req: http.IncomingMessage, res: http.ServerResponse, send: (status: number, body: any) => void, body?: any) => Promise<any> | any> = {

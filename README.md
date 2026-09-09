@@ -21,25 +21,33 @@ Open `http://127.0.0.1:7473/`.
 
 ## Layout
 
+npm workspaces monorepo (TypeScript, ESM). Five packages:
+
 ```text
 internal-tools/
-|-- core/                  # shared DB helpers and constants
-|-- server/                # http server, static assets, and route dispatch
-|   |-- server.js
-|   |-- tools/
-|   |   `-- collab.js      # /api/collab/* - DB explorer
-|   `-- public/
-|       |-- index.html
-|       |-- app.js
-|       |-- style.css
-|       `-- styles.css
-`-- mcp/                   # MCP server (separate; see its README)
+├── core/         # @collab-mcp/core — all domain logic (DB + the collab ops)
+│   ├── src/db.ts
+│   └── src/ops/  # add, search, get, task, module, ingest, rollup, doctor,
+│                 #   export, savings, supersede, update, list-recent
+├── mcp/          # @collab-mcp/mcp — thin MCP stdio adapter over core (see its README)
+│   ├── src/server.ts   # registers the mcp__collab__* tools
+│   ├── migrations/     # 0001–0004 SQL — the schema lives here
+│   └── src/scripts/    # seed, codex-output parser, hook helpers
+├── server/       # @collab-mcp/server — HTTP host: REST API + serves the built UI
+│   └── src/tools/{collab,ai}.ts   # /api/collab/* and /api/ai/* routes
+├── ui/           # React + Vite SPA (Dashboard, Tasks, Modules, Knowledge, Health, AiPanel)
+├── gemini-mcp/   # Gemini skim/locate MCP server (separate; see its README)
+└── scripts/      # bundle.mjs (emits the shareable dist-share/), seed-starter.mjs
 ```
+
+Domain logic lives **only** in `core/src/ops/`; `mcp/` and `server/` are thin adapters
+(MCP stdio and REST) over it. The SQLite store is `mcp/collab.db` (gitignored).
 
 ## Notes
 
 - Localhost-only, no auth.
-- Dashboard reads/writes `mcp/collab.db` directly via `better-sqlite3`. For automated/agent flows, prefer the `mcp__collab__*` MCP tools.
+- The dashboard and `mcp__collab__*` tools share the same DB via `@collab-mcp/core`
+  (`better-sqlite3`). For automated/agent flows, prefer the MCP tools.
 
 ## UI (React SPA)
 
@@ -58,4 +66,5 @@ Two modes:
   node server/server.js        # serves ui/dist at http://127.0.0.1:7473/
   ```
 
-If `ui/dist` is absent, the server falls back to the legacy `server/public` dashboard.
+The server serves the built UI from `ui/dist`. If it's absent, static routes return
+`503 — UI not built. Run npm run ui:build first.` (there is no legacy dashboard fallback).

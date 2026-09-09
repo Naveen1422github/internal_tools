@@ -15,6 +15,7 @@ export/
 # Build artifacts
 node_modules/
 dist/
+dist-share/
 *.tsbuildinfo
 data/sessions.json
 
@@ -22,3 +23,8 @@ data/sessions.json
 *.log
 *.stackdump
 **/.npm-cache/
+
+# Backup snapshots — local/Drive only, never git
+backups/
+*.db.gz
+*.db.tmp
