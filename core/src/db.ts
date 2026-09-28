@@ -6,33 +6,93 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Resolve paths relative to the collab package root, NOT cwd.
+// Migrations ship WITH the code, so they are resolved relative to the package.
 // Layout:
 //   internal-tools/mcp/
 //     migrations/*.sql
 //     src/db.ts      <- this file
-//     collab.db      <- runtime DB (gitignored)
 const MIGRATIONS_DIR = join(__dirname, "../../mcp/migrations");
-const DEFAULT_DB_PATH = process.env.COLLAB_DB_PATH ?? join(__dirname, "../../mcp/collab.db");
 
 export type DB = Database.Database;
 
-let _db: DB | null = null;
+export type DbPathSource = "argument" | "COLLAB_DB_PATH" | "cwd-fallback";
 
-export function getDb(dbPath: string = DEFAULT_DB_PATH): DB {
-  if (_db) return _db;
-  const db = new Database(dbPath);
+export interface DbPathResolution {
+  path: string;
+  source: DbPathSource;
+}
+
+/**
+ * Decide which SQLite file to open, in priority order:
+ *   1. an explicit path argument
+ *   2. $COLLAB_DB_PATH
+ *   3. ./collab.db, relative to the CURRENT WORKING DIRECTORY
+ *
+ * Step 3 is deliberately cwd-relative and must NEVER resolve inside the
+ * installation directory. A package-relative default is shared by every
+ * project pointed at that install, which silently merges unrelated knowledge
+ * bases into one file: see collab E-550, where a second workspace spent days
+ * writing its entries into this repo's collab.db with no error and no warning.
+ *
+ * Contrast with MIGRATIONS_DIR above, which is package-relative on purpose.
+ * Code belongs to the install; data belongs to the project.
+ */
+export function resolveDbPath(explicit?: string): DbPathResolution {
+  if (explicit) return { path: explicit, source: "argument" };
+
+  const fromEnv = process.env.COLLAB_DB_PATH;
+  if (fromEnv) return { path: fromEnv, source: "COLLAB_DB_PATH" };
+
+  return { path: join(process.cwd(), "collab.db"), source: "cwd-fallback" };
+}
+
+let _db: DB | null = null;
+let _dbPath: string | null = null;
+
+export function getDb(dbPath?: string): DB {
+  if (_db) {
+    // The connection is a module-level singleton, so a later caller asking for a
+    // DIFFERENT file would silently receive the first one. Refuse instead: a
+    // request for the wrong knowledge base must never look like it succeeded.
+    if (dbPath && _dbPath && dbPath !== _dbPath) {
+      throw new Error(
+        `[collab-mcp] getDb("${dbPath}") requested, but "${_dbPath}" is already open. ` +
+          `Call closeDb() before switching databases.`,
+      );
+    }
+    return _db;
+  }
+
+  const { path, source } = resolveDbPath(dbPath);
+
+  // The fallback is safe (per-project) but implicit, so say so out loud.
+  // stderr keeps this off the MCP stdio channel.
+  if (source === "cwd-fallback") {
+    console.error(
+      `[collab-mcp] COLLAB_DB_PATH is not set - opening ${path}\n` +
+        `[collab-mcp] Set COLLAB_DB_PATH to pin this project to a specific knowledge base.`,
+    );
+  }
+
+  const db = new Database(path);
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
   db.pragma("foreign_keys = ON");
   _db = db;
+  _dbPath = path;
   return db;
+}
+
+/** Absolute path of the currently-open database, or null if none is open. */
+export function getDbPath(): string | null {
+  return _dbPath;
 }
 
 export function closeDb(): void {
   if (_db) {
     _db.close();
     _db = null;
+    _dbPath = null;
   }
 }
 
