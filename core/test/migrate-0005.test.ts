@@ -8,6 +8,9 @@ import Database from 'better-sqlite3';
 import { migrate as migrateProd, migrateTo } from '../src/db.js';
 import { parseEntryRef } from '../src/ulid.js';
 import { backfillUlids } from '../src/backfill.js';
+import { addEntry } from '../src/ops/add.js';
+import { updateEntry } from '../src/ops/update.js';
+import { rollup } from '../src/ops/rollup.js';
 
 // Tests exercise the staged 0005; production callers never pass includeStaged.
 const migrate = (db: Database.Database) => migrateProd(db, { includeStaged: true });
@@ -440,5 +443,62 @@ test('a forward link resolves once its target exists (Review Focus #3)', () => {
     insertEntry(db, 9, 'U9');
     backfillUlids(db);
     assert.equal((db.prepare(`SELECT target_ulid t FROM refs`).get() as any).t, 'U9');
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('addEntry stamps ulid and author, and triggers key its refs/modules', () => {
+  const { db, dir } = tempDb();
+  try {
+    migrate(db);
+    process.env.COLLAB_AUTHOR = 'tester';
+    const target = addEntry(db, { type: 'decision', title: 'target', summary: 's', module: 'demo' });
+    const { id } = addEntry(db, {
+      type: 'gotcha', title: 'x', summary: 's', module: 'demo',
+      refs: [{ ref_type: 'entry', ref_value: `E-${String(target.id).padStart(5, '0')}` }],
+    });
+    const row = db.prepare(`SELECT ulid, author FROM entries WHERE id = ?`).get(id) as any;
+    assert.match(row.ulid, /^[0-9A-HJKMNP-TV-Z]{26}$/);
+    assert.equal(row.author, 'tester');
+    const ref = db.prepare(`SELECT entry_ulid, target_ulid FROM refs WHERE entry_id = ?`).get(id) as any;
+    assert.equal(ref.entry_ulid, row.ulid);
+    assert.equal(ref.target_ulid, (db.prepare(`SELECT ulid FROM entries WHERE id = ?`).get(target.id) as any).ulid);
+  } finally { delete process.env.COLLAB_AUTHOR; db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a real edit writes a root + child revision; an identical rewrite writes none (Review Focus #5)', () => {
+  const { db, dir } = tempDb();
+  try {
+    migrate(db);
+    const { id } = addEntry(db, { type: 'decision', title: 'v1', summary: 's1', module: 'demo' });
+    const count = () => (db.prepare(`SELECT COUNT(*) c FROM entry_revisions`).get() as any).c;
+
+    db.prepare(`UPDATE entries SET title = title, summary = summary, description = description WHERE id = ?`).run(id);
+    assert.equal(count(), 0);
+
+    updateEntry(db, { id, title: 'v2' });
+    const revs = db.prepare(`SELECT title, parent_rev_id FROM entry_revisions ORDER BY created_at, rowid`).all() as any[];
+    assert.equal(revs.length, 2);
+    assert.deepEqual([revs[0].title, revs[0].parent_rev_id], ['v1', null]);   // root = pre-edit text
+    assert.equal(revs[1].title, 'v2');
+    assert.ok(revs[1].parent_rev_id);
+
+    updateEntry(db, { id, summary: 's3' });
+    assert.equal(count(), 3);                                                  // no second root
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('rollup inserts get a ulid and author', () => {
+  const { db, dir } = tempDb();
+  try {
+    migrate(db);
+    // Insert rollup-eligible rows directly (addEntry's task auto-advance needs a tasks row we don't care about here).
+    for (const t of ['a', 'b']) {
+      db.prepare(`INSERT INTO entries (type, kind, title, summary, task_id, module, ulid) VALUES ('session-note', 'log', ?, 's', 'T-900', 'demo', ?)`)
+        .run(t, 'U' + t);
+    }
+    const result = rollup(db, { task_id: 'T-900', agent: 'Claude' });
+    assert.ok(result.created_entries.length > 0, 'rollup created nothing: check which types/kinds it groups');
+    const nulls = (db.prepare(`SELECT COUNT(*) c FROM entries WHERE type = 'rollup' AND (ulid IS NULL OR author IS NULL)`).get() as any).c;
+    assert.equal(nulls, 0);
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });

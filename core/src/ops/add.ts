@@ -1,6 +1,8 @@
 import type { DB } from "../db.js";
 import { estimateTokens } from "../db.js";
 import { autoAdvanceTaskForEntry, type TaskStatus } from "./task.js";
+import { newUlid } from "../ulid.js";
+import { resolveAuthor } from "../author.js";
 
 // ------------------------------------------------------------
 // Types
@@ -127,10 +129,10 @@ export function addEntry(
   const insertEntry = db.prepare(`
     INSERT INTO entries (
       type, kind, title, summary, description,
-      status, agent, module, task_id, tokens_estimate, category
+      status, agent, module, task_id, tokens_estimate, category, ulid, author
     ) VALUES (
       @type, @kind, @title, @summary, @description,
-      @status, @agent, @module, @task_id, @tokens_estimate, @category
+      @status, @agent, @module, @task_id, @tokens_estimate, @category, @ulid, @author
     )
   `);
 
@@ -147,6 +149,8 @@ export function addEntry(
       task_id: a.task_id ?? null,
       tokens_estimate: tokens,
       category,
+      ulid: newUlid(),
+      author: resolveAuthor(),
     });
     const id = Number(result.lastInsertRowid);
 

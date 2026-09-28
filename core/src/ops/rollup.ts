@@ -1,6 +1,8 @@
 import type { DB } from "../db.js";
 import { estimateTokens } from "../db.js";
 import type { EntryType, Agent, RefInput } from "./add.js";
+import { newUlid } from "../ulid.js";
+import { resolveAuthor } from "../author.js";
 
 // ------------------------------------------------------------
 // Public types
@@ -213,10 +215,10 @@ export function rollup(db: DB, args: RollupArgs): RollupResult {
   const insertRollup = db.prepare(`
     INSERT INTO entries (
       type, kind, title, summary, description,
-      status, agent, module, task_id, rollup_of_task, tokens_estimate
+      status, agent, module, task_id, rollup_of_task, tokens_estimate, ulid, author
     ) VALUES (
       'rollup', 'signal', @title, @summary, @description,
-      'active', @agent, @module, @task_id, @rollup_of_task, @tokens_estimate
+      'active', @agent, @module, @task_id, @rollup_of_task, @tokens_estimate, @ulid, @author
     )
   `);
 
@@ -239,6 +241,8 @@ export function rollup(db: DB, args: RollupArgs): RollupResult {
       task_id: group.kind === "task" ? group.key : null,
       rollup_of_task: group.kind === "task" ? group.key : moduleRollupSentinel(group.key),
       tokens_estimate: estimateTokens(description),
+      ulid: newUlid(),
+      author: resolveAuthor(),
     });
     const newId = Number(result.lastInsertRowid);
 
@@ -367,10 +371,10 @@ export function archive(db: DB, args: ArchiveArgs): RollupResult {
   const insertRollup = db.prepare(`
     INSERT INTO entries (
       type, kind, title, summary, description,
-      status, agent, module, task_id, rollup_of_task, tokens_estimate
+      status, agent, module, task_id, rollup_of_task, tokens_estimate, ulid, author
     ) VALUES (
       'rollup', 'signal', @title, @summary, @description,
-      'active', @agent, @module, NULL, @rollup_of_task, @tokens_estimate
+      'active', @agent, @module, NULL, @rollup_of_task, @tokens_estimate, @ulid, @author
     )
   `);
 
@@ -390,6 +394,8 @@ export function archive(db: DB, args: ArchiveArgs): RollupResult {
       module: group.key,
       rollup_of_task: moduleRollupSentinel(group.key),
       tokens_estimate: estimateTokens(description),
+      ulid: newUlid(),
+      author: resolveAuthor(),
     });
     const newId = Number(result.lastInsertRowid);
 
