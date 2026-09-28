@@ -10,7 +10,7 @@ import { parseEntryRef } from '../src/ulid.js';
 import { backfillUlids } from '../src/backfill.js';
 import { addEntry } from '../src/ops/add.js';
 import { updateEntry } from '../src/ops/update.js';
-import { rollup } from '../src/ops/rollup.js';
+import { rollup, archive } from '../src/ops/rollup.js';
 
 // Tests exercise the staged 0005; production callers never pass includeStaged.
 const migrate = (db: Database.Database) => migrateProd(db, { includeStaged: true });
@@ -498,6 +498,23 @@ test('rollup inserts get a ulid and author', () => {
     }
     const result = rollup(db, { task_id: 'T-900', agent: 'Claude' });
     assert.ok(result.created_entries.length > 0, 'rollup created nothing: check which types/kinds it groups');
+    const nulls = (db.prepare(`SELECT COUNT(*) c FROM entries WHERE type = 'rollup' AND (ulid IS NULL OR author IS NULL)`).get() as any).c;
+    assert.equal(nulls, 0);
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('archive stamps ulid and author on its rollup insert (Task 5 review)', () => {
+  const { db, dir } = tempDb();
+  try {
+    migrate(db);
+    // Smallest set archive() will actually pick up: an unprotected type, default
+    // status='active' + category='Activity', module set (archive always groups by
+    // module), created_at well before the 'older_than' cutoff.
+    db.prepare(
+      `INSERT INTO entries (type, kind, title, summary, module, created_at) VALUES ('session-note', 'log', 'old note', 's', 'demo', '2020-01-01 00:00:00')`,
+    ).run();
+    const result = archive(db, { older_than: '7d', module: 'demo', dry_run: false });
+    assert.ok(result.created_entries.length > 0, 'archive created nothing: check which rows selectArchiveEntries() picks up');
     const nulls = (db.prepare(`SELECT COUNT(*) c FROM entries WHERE type = 'rollup' AND (ulid IS NULL OR author IS NULL)`).get() as any).c;
     assert.equal(nulls, 0);
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
