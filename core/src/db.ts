@@ -118,6 +118,21 @@ function listSql(dir: string): Pending[] {
     .map((f) => ({ version: f.replace(/\.sql$/, ""), file: join(dir, f) }));
 }
 
+/**
+ * A version present in both the released folder and staged/ (e.g. copied
+ * instead of moved at go-live) is refused rather than silently resolved,
+ * because the two copies could differ and picking one would be a guess.
+ */
+export class DuplicateMigrationError extends Error {
+  constructor(version: string, corePath: string, stagedPath: string) {
+    super(
+      `[collab-mcp] migration version "${version}" exists in both ${corePath} and ${stagedPath}. ` +
+        `Delete the staged copy before migrating.`,
+    );
+    this.name = "DuplicateMigrationError";
+  }
+}
+
 function pendingMigrations(db: DB, upTo: string | undefined, opts: MigrateOptions): Pending[] {
   // Bootstrap the bookkeeping table (also created by 0001_init, but we need it
   // before we can read from it).
@@ -130,8 +145,14 @@ function pendingMigrations(db: DB, upTo: string | undefined, opts: MigrateOption
   const applied = new Set(
     db.prepare("SELECT version FROM schema_migrations").all().map((r: any) => r.version as string),
   );
-  return [...listSql(MIGRATIONS_DIR), ...(opts.includeStaged ? listSql(STAGED_DIR) : [])]
-    .sort((a, b) => (a.version < b.version ? -1 : 1))
+  const core = listSql(MIGRATIONS_DIR);
+  const staged = opts.includeStaged ? listSql(STAGED_DIR) : [];
+  for (const s of staged) {
+    const dup = core.find((c) => c.version === s.version);
+    if (dup) throw new DuplicateMigrationError(s.version, dup.file, s.file);
+  }
+  return [...core, ...staged]
+    .sort((a, b) => (a.version < b.version ? -1 : a.version > b.version ? 1 : 0))
     .filter((m) => !applied.has(m.version) && (upTo === undefined || m.version.slice(0, 4) <= upTo));
 }
 
@@ -160,7 +181,16 @@ function applyMigrations(db: DB, pending: Pending[]): string[] {
   // Runs every startup, not only when 0005 applies: it repairs rows written by
   // paths that bypass core (scripts, the REST server). Cheap: WHERE ... IS NULL.
   const hasUlid = (db.prepare(`SELECT 1 FROM pragma_table_info('entries') WHERE name = 'ulid'`).get());
-  if (hasUlid) backfillUlids(db);
+  if (hasUlid) {
+    // Must never be able to stop startup: only the backfill call is guarded.
+    // Migration SQL above is intentionally left to throw.
+    try {
+      backfillUlids(db);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[collab-mcp] backfill failed: ${message}; run collab_doctor`);
+    }
+  }
   return pending.map((m) => m.version);
 }
 
