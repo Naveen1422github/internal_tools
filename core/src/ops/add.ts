@@ -1,5 +1,5 @@
 import type { DB } from "../db.js";
-import { estimateTokens } from "../db.js";
+import { estimateTokens, hasUlidColumns } from "../db.js";
 import { autoAdvanceTaskForEntry, type TaskStatus } from "./task.js";
 import { newUlid } from "../ulid.js";
 import { resolveAuthor } from "../author.js";
@@ -126,18 +126,32 @@ export function addEntry(
   }
   const primaryModule = orderedModules.length > 0 ? orderedModules[0] : null;
 
-  const insertEntry = db.prepare(`
-    INSERT INTO entries (
+  // Pre-0005 DBs (staged migration not yet applied) have no `ulid`/`author`
+  // columns on `entries`; naming them unconditionally throws "table entries
+  // has no column named ulid". Checked fresh per call (never cached) because
+  // migrate() can add the columns between two addEntry() calls on the same
+  // open handle. See core/src/db.ts:hasUlidColumns.
+  const withUlid = hasUlidColumns(db);
+  const insertEntry = db.prepare(
+    withUlid
+      ? `INSERT INTO entries (
       type, kind, title, summary, description,
       status, agent, module, task_id, tokens_estimate, category, ulid, author
     ) VALUES (
       @type, @kind, @title, @summary, @description,
       @status, @agent, @module, @task_id, @tokens_estimate, @category, @ulid, @author
-    )
-  `);
+    )`
+      : `INSERT INTO entries (
+      type, kind, title, summary, description,
+      status, agent, module, task_id, tokens_estimate, category
+    ) VALUES (
+      @type, @kind, @title, @summary, @description,
+      @status, @agent, @module, @task_id, @tokens_estimate, @category
+    )`,
+  );
 
   const tx = db.transaction((a: AddEntryArgs) => {
-    const result = insertEntry.run({
+    const baseParams = {
       type: a.type,
       kind,
       title: a.title,
@@ -149,9 +163,10 @@ export function addEntry(
       task_id: a.task_id ?? null,
       tokens_estimate: tokens,
       category,
-      ulid: newUlid(),
-      author: resolveAuthor(),
-    });
+    };
+    const result = insertEntry.run(
+      withUlid ? { ...baseParams, ulid: newUlid(), author: resolveAuthor() } : baseParams,
+    );
     const id = Number(result.lastInsertRowid);
 
     // entry_modules rows: primary gets is_primary=1, the rest 0. Positional

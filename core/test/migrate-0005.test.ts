@@ -565,3 +565,61 @@ test('doctor is migration-aware: a pre-0005 DB never throws and reports skipped 
     }
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ------------------------------------------------------------
+// Final review C1: on a pre-0005 DB, entries has no ulid/author columns yet.
+// Every core insert site (addEntry, rollup, archive) must gate those two
+// columns on hasUlidColumns() instead of naming them unconditionally, or
+// every insert throws "table entries has no column named ulid".
+// ------------------------------------------------------------
+
+test('addEntry succeeds on a pre-0005 DB and returns an id (C1)', () => {
+  const { db, dir } = tempDb();
+  try {
+    migrateProd(db); // NO staged: pre-0005
+    const result = addEntry(db, { type: 'decision', title: 'pre-0005 add', summary: 's', module: 'demo' });
+    assert.ok(Number.isInteger(result.id));
+    const row = db.prepare(`SELECT title FROM entries WHERE id = ?`).get(result.id) as any;
+    assert.equal(row.title, 'pre-0005 add');
+    // entries.ulid does not exist yet on this DB -- confirm the columns really are absent,
+    // so this test cannot pass by accident once 0005 ships.
+    const cols = db.prepare(`SELECT name FROM pragma_table_info('entries')`).all().map((r: any) => r.name);
+    assert.ok(!cols.includes('ulid'));
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('rollup succeeds on a pre-0005 DB (C1)', () => {
+  const { db, dir } = tempDb();
+  try {
+    migrateProd(db); // NO staged: pre-0005
+    // Seeded with a raw INSERT that has no ulid column, mirroring what scripts
+    // and the REST server do (and all a pre-0005 entries table can accept).
+    for (const t of ['a', 'b']) {
+      db.prepare(
+        `INSERT INTO entries (type, kind, title, summary, task_id, module) VALUES ('session-note', 'log', ?, 's', 'T-900', 'demo')`,
+      ).run(t);
+    }
+    const result = rollup(db, { task_id: 'T-900', agent: 'Claude' });
+    assert.ok(result.created_entries.length > 0, 'rollup created nothing: check which types/kinds it groups');
+    const row = db.prepare(`SELECT id FROM entries WHERE type = 'rollup'`).get();
+    assert.ok(row, 'no rollup row created');
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('archive succeeds on a pre-0005 DB (C1)', () => {
+  const { db, dir } = tempDb();
+  try {
+    migrateProd(db); // NO staged: pre-0005
+    // Raw INSERT, no ulid column: an unprotected type, default status='active' +
+    // category='Activity', module set (archive always groups by module), and
+    // created_at well before the 'older_than' cutoff -- mirrors the post-0005
+    // archive test's qualifying row, minus the columns that don't exist yet.
+    db.prepare(
+      `INSERT INTO entries (type, kind, title, summary, module, created_at) VALUES ('session-note', 'log', 'old note', 's', 'demo', '2020-01-01 00:00:00')`,
+    ).run();
+    const result = archive(db, { older_than: '7d', module: 'demo', dry_run: false });
+    assert.ok(result.created_entries.length > 0, 'archive created nothing: check which rows selectArchiveEntries() picks up');
+    const row = db.prepare(`SELECT id FROM entries WHERE type = 'rollup'`).get();
+    assert.ok(row, 'no rollup row created');
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});

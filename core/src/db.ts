@@ -94,6 +94,19 @@ export function getDbPath(): string | null {
   return _dbPath;
 }
 
+/**
+ * True once migration 0005 has added `entries.ulid` (and, with it, `author`).
+ * Cheap per-call pragma check — deliberately NOT cached, because `migrate()`
+ * can run between two calls on the same open handle (e.g. a pre-0005 DB that
+ * gets upgraded mid-session), and a stale cached `false` would silently stop
+ * stamping ulid/author forever. Shared by the backfill gate below and by every
+ * core insert site that writes `entries` (add.ts, rollup.ts) so a pre-0005 DB
+ * never sees `table entries has no column named ulid`.
+ */
+export function hasUlidColumns(db: DB): boolean {
+  return !!db.prepare(`SELECT 1 FROM pragma_table_info('entries') WHERE name = 'ulid'`).get();
+}
+
 export function closeDb(): void {
   if (_db) {
     _db.close();
@@ -180,8 +193,7 @@ function applyMigrations(db: DB, pending: Pending[]): string[] {
   }
   // Runs every startup, not only when 0005 applies: it repairs rows written by
   // paths that bypass core (scripts, the REST server). Cheap: WHERE ... IS NULL.
-  const hasUlid = (db.prepare(`SELECT 1 FROM pragma_table_info('entries') WHERE name = 'ulid'`).get());
-  if (hasUlid) {
+  if (hasUlidColumns(db)) {
     // Must never be able to stop startup: only the backfill call is guarded.
     // Migration SQL above is intentionally left to throw.
     try {

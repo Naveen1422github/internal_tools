@@ -1,5 +1,5 @@
 import type { DB } from "../db.js";
-import { estimateTokens } from "../db.js";
+import { estimateTokens, hasUlidColumns } from "../db.js";
 import type { EntryType, Agent, RefInput } from "./add.js";
 import { newUlid } from "../ulid.js";
 import { resolveAuthor } from "../author.js";
@@ -212,15 +212,26 @@ export function rollup(db: DB, args: RollupArgs): RollupResult {
 
   // rollup.ts owns its own insert path because addEntry() rejects type='rollup'
   // (that guard exists to prevent callers creating rollups via the public API).
-  const insertRollup = db.prepare(`
-    INSERT INTO entries (
+  // See core/src/db.ts:hasUlidColumns for why this is gated (pre-0005 DBs have
+  // no ulid/author columns) and checked fresh per call.
+  const withUlid = hasUlidColumns(db);
+  const insertRollup = db.prepare(
+    withUlid
+      ? `INSERT INTO entries (
       type, kind, title, summary, description,
       status, agent, module, task_id, rollup_of_task, tokens_estimate, ulid, author
     ) VALUES (
       'rollup', 'signal', @title, @summary, @description,
       'active', @agent, @module, @task_id, @rollup_of_task, @tokens_estimate, @ulid, @author
-    )
-  `);
+    )`
+      : `INSERT INTO entries (
+      type, kind, title, summary, description,
+      status, agent, module, task_id, rollup_of_task, tokens_estimate
+    ) VALUES (
+      'rollup', 'signal', @title, @summary, @description,
+      'active', @agent, @module, @task_id, @rollup_of_task, @tokens_estimate
+    )`,
+  );
 
   // Wrap each group's (insert rollup + refs + deprecate originals) in a transaction
   // so a mid-write failure can't leave originals deprecated without a rollup entry.
@@ -232,7 +243,7 @@ export function rollup(db: DB, args: RollupArgs): RollupResult {
     if (summary.length > 200) {
       throw new Error(`formatRollupBody summary exceeds 200 chars (got ${summary.length})`);
     }
-    const result = insertRollup.run({
+    const rollupParams = {
       title: `Rollup: ${group.kind}=${group.key} (${group.entry_ids.length} entries)`,
       summary,
       description: description ?? null,
@@ -241,9 +252,10 @@ export function rollup(db: DB, args: RollupArgs): RollupResult {
       task_id: group.kind === "task" ? group.key : null,
       rollup_of_task: group.kind === "task" ? group.key : moduleRollupSentinel(group.key),
       tokens_estimate: estimateTokens(description),
-      ulid: newUlid(),
-      author: resolveAuthor(),
-    });
+    };
+    const result = insertRollup.run(
+      withUlid ? { ...rollupParams, ulid: newUlid(), author: resolveAuthor() } : rollupParams,
+    );
     const newId = Number(result.lastInsertRowid);
 
     // 1. Batch insert refs to original entries
@@ -368,15 +380,25 @@ export function archive(db: DB, args: ArchiveArgs): RollupResult {
     return { groups, created_entries: [], deprecated_count: 0, dry_run: true };
   }
 
-  const insertRollup = db.prepare(`
-    INSERT INTO entries (
+  // See core/src/db.ts:hasUlidColumns for why this is gated and checked fresh per call.
+  const withUlid = hasUlidColumns(db);
+  const insertRollup = db.prepare(
+    withUlid
+      ? `INSERT INTO entries (
       type, kind, title, summary, description,
       status, agent, module, task_id, rollup_of_task, tokens_estimate, ulid, author
     ) VALUES (
       'rollup', 'signal', @title, @summary, @description,
       'active', @agent, @module, NULL, @rollup_of_task, @tokens_estimate, @ulid, @author
-    )
-  `);
+    )`
+      : `INSERT INTO entries (
+      type, kind, title, summary, description,
+      status, agent, module, task_id, rollup_of_task, tokens_estimate
+    ) VALUES (
+      'rollup', 'signal', @title, @summary, @description,
+      'active', @agent, @module, NULL, @rollup_of_task, @tokens_estimate
+    )`,
+  );
 
   const runGroup = db.transaction((group: RollupGroup): number => {
     const { summary, description } = formatRollupBody(group);
@@ -386,7 +408,7 @@ export function archive(db: DB, args: ArchiveArgs): RollupResult {
     if (summary.length > 200) {
       throw new Error(`formatRollupBody summary exceeds 200 chars (got ${summary.length})`);
     }
-    const result = insertRollup.run({
+    const archiveParams = {
       title: `Archive: ${group.key} (${group.entry_ids.length} ephemeral entries)`,
       summary,
       description: description ?? null,
@@ -394,9 +416,10 @@ export function archive(db: DB, args: ArchiveArgs): RollupResult {
       module: group.key,
       rollup_of_task: moduleRollupSentinel(group.key),
       tokens_estimate: estimateTokens(description),
-      ulid: newUlid(),
-      author: resolveAuthor(),
-    });
+    };
+    const result = insertRollup.run(
+      withUlid ? { ...archiveParams, ulid: newUlid(), author: resolveAuthor() } : archiveParams,
+    );
     const newId = Number(result.lastInsertRowid);
 
     // Link the breadcrumb to the originals it archived.
