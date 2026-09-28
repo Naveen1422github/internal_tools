@@ -1,7 +1,8 @@
 import Database from "better-sqlite3";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { backfillUlids } from "./backfill.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -12,6 +13,11 @@ const __dirname = dirname(__filename);
 //     migrations/*.sql
 //     src/db.ts      <- this file
 const MIGRATIONS_DIR = join(__dirname, "../../mcp/migrations");
+
+// Migrations written but not yet released. Only tests and rehearsals read them
+// (includeStaged). Going live = moving the file up one folder, after every
+// server is stopped, because every running build scans MIGRATIONS_DIR.
+const STAGED_DIR = join(MIGRATIONS_DIR, "staged");
 
 export type DB = Database.Database;
 
@@ -96,12 +102,23 @@ export function closeDb(): void {
   }
 }
 
-/**
- * Apply any un-applied migrations in lexical order.
- * Idempotent: safe to call on every startup.
- * Returns the list of versions applied in this call.
- */
-export function migrate(db: DB = getDb()): string[] {
+export interface MigrateOptions {
+  includeStaged?: boolean;
+}
+
+interface Pending {
+  version: string;
+  file: string;
+}
+
+function listSql(dir: string): Pending[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".sql"))
+    .map((f) => ({ version: f.replace(/\.sql$/, ""), file: join(dir, f) }));
+}
+
+function pendingMigrations(db: DB, upTo: string | undefined, opts: MigrateOptions): Pending[] {
   // Bootstrap the bookkeeping table (also created by 0001_init, but we need it
   // before we can read from it).
   db.exec(`
@@ -110,28 +127,51 @@ export function migrate(db: DB = getDb()): string[] {
       applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
-
   const applied = new Set(
-    db.prepare("SELECT version FROM schema_migrations").all().map((r: any) => r.version as string)
+    db.prepare("SELECT version FROM schema_migrations").all().map((r: any) => r.version as string),
   );
+  return [...listSql(MIGRATIONS_DIR), ...(opts.includeStaged ? listSql(STAGED_DIR) : [])]
+    .sort((a, b) => (a.version < b.version ? -1 : 1))
+    .filter((m) => !applied.has(m.version) && (upTo === undefined || m.version.slice(0, 4) <= upTo));
+}
 
-  const files = readdirSync(MIGRATIONS_DIR)
-    .filter((f) => f.endsWith(".sql"))
-    .sort();
+/**
+ * Copy the DB aside before changing its schema. Skipped for in-memory DBs and
+ * for brand-new files (no entries table yet = nothing to lose).
+ * VACUUM INTO writes a consistent snapshot even with WAL, and never touches
+ * the source's rowids.
+ */
+function backupBeforeMigrating(db: DB, firstPending: string): void {
+  if (db.memory) return;
+  const hasEntries = db
+    .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entries'`)
+    .get();
+  if (!hasEntries) return;
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  db.prepare("VACUUM INTO ?").run(`${db.name}.bak-${firstPending}-${stamp}`);
+}
 
-  const newlyApplied: string[] = [];
-
-  for (const file of files) {
-    const version = file.replace(/\.sql$/, "");
-    if (applied.has(version)) continue;
-
-    const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf-8");
+function applyMigrations(db: DB, pending: Pending[]): string[] {
+  if (pending.length > 0) backupBeforeMigrating(db, pending[0].version);
+  for (const m of pending) {
     // Each migration file owns its BEGIN/COMMIT; we just exec.
-    db.exec(sql);
-    newlyApplied.push(version);
+    db.exec(readFileSync(m.file, "utf-8"));
   }
+  // Runs every startup, not only when 0005 applies: it repairs rows written by
+  // paths that bypass core (scripts, the REST server). Cheap: WHERE ... IS NULL.
+  const hasUlid = (db.prepare(`SELECT 1 FROM pragma_table_info('entries') WHERE name = 'ulid'`).get());
+  if (hasUlid) backfillUlids(db);
+  return pending.map((m) => m.version);
+}
 
-  return newlyApplied;
+/** Apply any un-applied migrations in lexical order. Idempotent. */
+export function migrate(db: DB = getDb(), opts: MigrateOptions = {}): string[] {
+  return applyMigrations(db, pendingMigrations(db, undefined, opts));
+}
+
+/** Test helper: apply migrations whose 4-digit prefix is <= `upTo` (e.g. "0004"). */
+export function migrateTo(db: DB, upTo: string, opts: MigrateOptions = {}): string[] {
+  return applyMigrations(db, pendingMigrations(db, upTo, opts));
 }
 
 /**
