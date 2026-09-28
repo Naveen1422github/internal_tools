@@ -74,7 +74,7 @@ export function ulidFromLegacy(id: number, createdAt: string, title: string): st
  * parse the same way on both sides. MUST stay in lockstep; a parity test
  * guards this.
  */
-const REF_WHITESPACE = " \t\n\u000B\f\r ";
+const REF_WHITESPACE = " \t\n\u000B\f\r\u00a0";
 const TRIM_REF_RE = new RegExp(`^[${REF_WHITESPACE}]+|[${REF_WHITESPACE}]+$`, "g");
 
 export function parseEntryRef(value: string): number | null {

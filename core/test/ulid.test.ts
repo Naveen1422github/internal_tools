@@ -53,7 +53,7 @@ test('parseEntryRef accepts every legacy format seen in the real DB', () => {
 });
 
 test('parseEntryRef rejects junk', () => {
-  for (const input of ['', '0', 'E-', 'abc', '12a', 'T-011', '-5', '1.5', ' 214']) {
+  for (const input of ['', '0', 'E-', 'abc', '12a', 'T-011', '-5', '1.5', '\u2003214']) {
     assert.equal(parseEntryRef(input), null, input);
   }
 });

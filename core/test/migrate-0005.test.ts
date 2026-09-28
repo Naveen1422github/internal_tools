@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { migrate as migrateProd, migrateTo } from '../src/db.js';
 import { parseEntryRef } from '../src/ulid.js';
+import { backfillUlids } from '../src/backfill.js';
 
 // Tests exercise the staged 0005; production callers never pass includeStaged.
 const migrate = (db: Database.Database) => migrateProd(db, { includeStaged: true });
@@ -136,7 +137,7 @@ test('refs trigger fills entry_ulid and target_ulid for every legacy link format
       // Task 3 review: shared whitespace set (space,\t,\n,\v,\f,\r,NBSP) must strip
       // identically on both sides; U+2003 em space is NOT in that set and must
       // fail to parse on both sides.
-      '\t214', '214\n', 'E-214\r', ' 214', ' 214',
+      '\t214', '214\n', 'E-214\r', '\u00a0214', '\u2003214',
     ];
     const ins = db.prepare(`INSERT INTO refs (entry_id, ref_type, ref_value) VALUES (1, 'entry', ?)`);
     for (const v of values) ins.run(v);
@@ -315,5 +316,129 @@ test('entry_revisions records one root plus one child per real edit, in parent o
     db.prepare(`UPDATE entries SET title = 'changed' WHERE id = 2`).run();
     const total = (db.prepare(`SELECT COUNT(*) AS c FROM entry_revisions`).get() as any).c;
     assert.equal(total, 4);
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+function seedLegacy(db: Database.Database) {
+  // Build a pre-0005 DB with realistic data, then migrate it.
+  migrateTo(db, '0004');
+  const ins = db.prepare(`INSERT INTO entries (id, type, kind, title, summary, created_at) VALUES (?, 'decision', 'signal', ?, 's', ?)`);
+  ins.run(1, 'first', '2026-04-22 20:14:14');
+  ins.run(2, 'same second', '2026-04-22 20:14:14');
+  ins.run(5, 'later', '2026-05-01 09:00:00');           // ids 3,4 "deleted"
+  db.prepare(`INSERT INTO refs (entry_id, ref_type, ref_value) VALUES (5, 'entry', 'E-00001'), (5, 'entry', '#2'), (5, 'entry', '3'), (5, 'file', 'a.ts')`).run();
+  db.prepare(`INSERT INTO entry_modules (entry_id, module, is_primary) VALUES (1, 'demo', 1), (5, 'demo', 1)`).run();
+  db.prepare(`UPDATE entries SET superseded_by = 5, deprecated = 1 WHERE id = 1`).run();
+}
+
+test('migrating a legacy DB assigns every ULID and every link key', () => {
+  const { db, dir } = tempDb();
+  try {
+    seedLegacy(db);
+    migrate(db);
+    const q = (sql: string) => (db.prepare(sql).get() as any).c;
+    assert.equal(q(`SELECT COUNT(*) c FROM entries WHERE ulid IS NULL`), 0);
+    assert.equal(q(`SELECT COUNT(*) c FROM entries WHERE author IS NULL`), 0);
+    assert.equal(q(`SELECT COUNT(*) c FROM refs WHERE entry_ulid IS NULL`), 0);
+    assert.equal(q(`SELECT COUNT(*) c FROM entry_modules WHERE entry_ulid IS NULL`), 0);
+    const u = (id: number) => (db.prepare(`SELECT ulid FROM entries WHERE id = ?`).get(id) as any).ulid;
+    assert.equal((db.prepare(`SELECT superseded_by_ulid s FROM entries WHERE id = 1`).get() as any).s, u(5));
+    const t = (v: string) => (db.prepare(`SELECT target_ulid t FROM refs WHERE ref_value = ?`).get(v) as any).t;
+    assert.equal(t('E-00001'), u(1));
+    assert.equal(t('#2'), u(2));
+    assert.equal(t('3'), null);                         // points at a deleted entry: kept, unresolved
+    assert.equal(t('a.ts'), null);
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('ULID order equals E-number order (D1)', () => {
+  const { db, dir } = tempDb();
+  try {
+    seedLegacy(db);
+    migrate(db);
+    const byUlid = db.prepare(`SELECT id FROM entries ORDER BY ulid`).all().map((r: any) => r.id);
+    const byId = db.prepare(`SELECT id FROM entries ORDER BY id`).all().map((r: any) => r.id);
+    assert.deepEqual(byUlid, byId);
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('two separate copies migrate to identical ULIDs (Review Focus #4)', () => {
+  const a = tempDb(), b = tempDb();
+  try {
+    seedLegacy(a.db); seedLegacy(b.db);
+    migrate(a.db); migrate(b.db);
+    const all = (db: Database.Database) => db.prepare(`SELECT id, ulid FROM entries ORDER BY id`).all();
+    assert.deepEqual(all(a.db), all(b.db));
+  } finally {
+    a.db.close(); b.db.close();
+    rmSync(a.dir, { recursive: true, force: true }); rmSync(b.dir, { recursive: true, force: true });
+  }
+});
+
+test('backfill is idempotent and reports unresolved links', () => {
+  const { db, dir } = tempDb();
+  try {
+    seedLegacy(db);
+    migrate(db);
+    const snapshot = db.prepare(`SELECT id, ulid FROM entries ORDER BY id`).all();
+    const report = backfillUlids(db);
+    assert.equal(report.entries, 0);
+    assert.deepEqual(report.unresolvedEntryRefs, [{ entry_id: 5, ref_value: '3' }]);
+    assert.deepEqual(db.prepare(`SELECT id, ulid FROM entries ORDER BY id`).all(), snapshot);
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('backfill preserves updated_at; a real edit still bumps it (D6)', () => {
+  const { db, dir } = tempDb();
+  try {
+    migrateTo(db, '0004');
+    db.prepare(`INSERT INTO entries (id, type, kind, title, summary, created_at, updated_at) VALUES (1, 'decision', 'signal', 't', 's', '2026-04-22 20:14:14', '2026-04-23 08:00:00')`).run();
+    migrate(db);
+    assert.equal((db.prepare(`SELECT updated_at u FROM entries WHERE id = 1`).get() as any).u, '2026-04-23 08:00:00');
+    db.prepare(`UPDATE entries SET title = 't2' WHERE id = 1`).run();
+    assert.notEqual((db.prepare(`SELECT updated_at u FROM entries WHERE id = 1`).get() as any).u, '2026-04-23 08:00:00');
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('backfill repairs a row inserted without a ulid (Review Focus #1)', () => {
+  const { db, dir } = tempDb();
+  try {
+    migrate(db);
+    // What log-collab.ts and the REST server do: raw insert, no ulid.
+    db.prepare(`INSERT INTO entries (id, type, kind, title, summary) VALUES (7, 'gotcha', 'signal', 'raw', 's')`).run();
+    db.prepare(`INSERT INTO refs (entry_id, ref_type, ref_value) VALUES (7, 'file', 'x.ts')`).run();
+    db.prepare(`INSERT INTO entry_modules (entry_id, module, is_primary) VALUES (7, 'demo', 1)`).run();
+    const report = backfillUlids(db);
+    assert.equal(report.entries, 1);
+    const ulid = (db.prepare(`SELECT ulid FROM entries WHERE id = 7`).get() as any).ulid;
+    assert.match(ulid, /^[0-9A-HJKMNP-TV-Z]{26}$/);
+    assert.equal((db.prepare(`SELECT entry_ulid e FROM refs WHERE entry_id = 7`).get() as any).e, ulid);
+    assert.equal((db.prepare(`SELECT entry_ulid e FROM entry_modules WHERE entry_id = 7`).get() as any).e, ulid);
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('an unparseable created_at is skipped and reported, never thrown', () => {
+  const { db, dir } = tempDb();
+  try {
+    migrate(db);
+    db.prepare(`INSERT INTO entries (id, type, kind, title, summary, created_at) VALUES (3, 'gotcha', 'signal', 'odd', 's', '22/04/2026')`).run();
+    db.prepare(`INSERT INTO entries (id, type, kind, title, summary) VALUES (4, 'gotcha', 'signal', 'fine', 's')`).run();
+    const report = backfillUlids(db);                       // must not throw
+    assert.deepEqual(report.skippedEntries.map((s) => s.id), [3]);
+    assert.equal(report.entries, 1);                        // entry 4 still filled
+    assert.doesNotThrow(() => migrate(db));                 // and startup keeps working
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a forward link resolves once its target exists (Review Focus #3)', () => {
+  const { db, dir } = tempDb();
+  try {
+    migrate(db);
+    insertEntry(db, 1, 'U1');
+    db.prepare(`INSERT INTO refs (entry_id, ref_type, ref_value) VALUES (1, 'entry', 'E-9')`).run();
+    assert.equal((db.prepare(`SELECT target_ulid t FROM refs`).get() as any).t, null);
+    insertEntry(db, 9, 'U9');
+    backfillUlids(db);
+    assert.equal((db.prepare(`SELECT target_ulid t FROM refs`).get() as any).t, 'U9');
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });
