@@ -19,7 +19,6 @@ const EXPECTED_TABLES = new Set([
   "modules",
   "dispatches",
   "entry_modules",
-  "entry_revisions",
   "schema_migrations",
   "entries_fts",
   "entries_fts_config",
@@ -39,16 +38,11 @@ const EXPECTED_INDEXES = new Set([
   "idx_entries_type",
   "idx_entries_category",
   "idx_entries_superseded",
-  "idx_entries_ulid",
   "idx_entry_modules_module",
   "idx_entry_modules_entry",
-  "idx_entry_modules_entry_ulid",
-  "idx_entry_revisions_entry",
   "idx_refs_entry",
   "idx_refs_type",
   "idx_refs_value",
-  "idx_refs_entry_ulid",
-  "idx_refs_target_ulid",
   "idx_tasks_assignee",
   "idx_tasks_module",
   "idx_tasks_status",
@@ -63,17 +57,37 @@ const EXPECTED_TRIGGERS = new Set([
   "trg_entries_fts_ai",
   "trg_entries_fts_au",
   "trg_entries_updated_at",
-  "trg_entries_revision",
-  "trg_entries_fill_superseded_ulid",
   "trg_modules_updated_at",
   "trg_refs_cascade_delete",
-  "trg_refs_fill_ulids",
   "trg_tasks_updated_at",
   "trg_entry_modules_cascade_delete",
-  "trg_entry_modules_fill_ulid",
   "trg_dispatches_updated_at",
   "trg_dispatches_updated_at_insert",
 ]);
+
+// Migration 0005 (staged): objects that exist only once 0005 has been applied.
+// trg_entries_updated_at and trg_entries_fts_au are re-created under their same
+// names by 0005, so they stay in the base EXPECTED_TRIGGERS above, not here.
+const EXPECTED_TABLES_0005 = new Set(["entry_revisions"]);
+
+const EXPECTED_INDEXES_0005 = new Set([
+  "idx_entries_ulid",
+  "idx_refs_entry_ulid",
+  "idx_refs_target_ulid",
+  "idx_entry_modules_entry_ulid",
+  "idx_entry_revisions_entry",
+]);
+
+const EXPECTED_TRIGGERS_0005 = new Set([
+  "trg_refs_fill_ulids",
+  "trg_entry_modules_fill_ulid",
+  "trg_entries_fill_superseded_ulid",
+  "trg_entries_revision",
+]);
+
+function union(a: Set<string>, b: Set<string>): Set<string> {
+  return new Set([...a, ...b]);
+}
 
 function toEntryId(id: number): string {
   return `E-${String(id).padStart(5, "0")}`;
@@ -108,6 +122,20 @@ function schemaCheck(
 export function doctor(db: DB): DoctorResult {
   const checks: DoctorCheck[] = [];
 
+  // Migration-aware: a DB that hasn't applied staged 0005 yet must never see its
+  // objects reported as missing (or its data checks throw on not-yet-existing
+  // columns). Guarded: schema_migrations itself may not exist on a very old DB.
+  let has0005 = false;
+  try {
+    has0005 = !!db.prepare(`SELECT 1 FROM schema_migrations WHERE version = '0005_ulid_expand'`).get();
+  } catch {
+    has0005 = false;
+  }
+
+  const expectedTables = has0005 ? union(EXPECTED_TABLES, EXPECTED_TABLES_0005) : EXPECTED_TABLES;
+  const expectedIndexes = has0005 ? union(EXPECTED_INDEXES, EXPECTED_INDEXES_0005) : EXPECTED_INDEXES;
+  const expectedTriggers = has0005 ? union(EXPECTED_TRIGGERS, EXPECTED_TRIGGERS_0005) : EXPECTED_TRIGGERS;
+
   // 1) schema.tables
   const tableRows = db
     .prepare(
@@ -123,7 +151,7 @@ export function doctor(db: DB): DoctorResult {
     )
     .all() as Array<{ name: string }>;
   const actualTables = new Set(tableRows.map((r) => r.name));
-  checks.push(schemaCheck("schema.tables", actualTables, EXPECTED_TABLES, "tables"));
+  checks.push(schemaCheck("schema.tables", actualTables, expectedTables, "tables"));
 
   // 2) schema.indexes
   const indexRows = db
@@ -137,7 +165,7 @@ export function doctor(db: DB): DoctorResult {
     )
     .all() as Array<{ name: string }>;
   const actualIndexes = new Set(indexRows.map((r) => r.name));
-  checks.push(schemaCheck("schema.indexes", actualIndexes, EXPECTED_INDEXES, "indexes"));
+  checks.push(schemaCheck("schema.indexes", actualIndexes, expectedIndexes, "indexes"));
 
   // 3) schema.triggers
   const triggerRows = db
@@ -150,7 +178,7 @@ export function doctor(db: DB): DoctorResult {
     )
     .all() as Array<{ name: string }>;
   const actualTriggers = new Set(triggerRows.map((r) => r.name));
-  checks.push(schemaCheck("schema.triggers", actualTriggers, EXPECTED_TRIGGERS, "triggers"));
+  checks.push(schemaCheck("schema.triggers", actualTriggers, expectedTriggers, "triggers"));
 
   // 4) data.orphan_refs.task
   const orphanTaskRefs = db
@@ -296,31 +324,49 @@ export function doctor(db: DB): DoctorResult {
     items: entriesWithoutModule.length > 0 ? entriesWithoutModule.map((r) => r.id) : undefined,
   });
 
-  // 10) data.entries_without_ulid -- should be 0 after migrate()'s backfill
-  const noUlid = db.prepare(`SELECT id FROM entries WHERE ulid IS NULL ORDER BY id`).all() as Array<{ id: number }>;
-  checks.push({
-    name: "data.entries_without_ulid",
-    severity: noUlid.length > 0 ? "error" : "ok",
-    detail: noUlid.length > 0
-      ? `found ${noUlid.length} entries without a ulid; restart the server (migrate() backfills them)`
-      : "every entry has a ulid",
-    items: noUlid.length > 0 ? noUlid.map((r) => toEntryId(r.id)) : undefined,
-  });
+  // 10) data.entries_without_ulid -- should be 0 after migrate()'s backfill.
+  // Never queries the ulid column until 0005 has actually added it.
+  if (has0005) {
+    const noUlid = db.prepare(`SELECT id FROM entries WHERE ulid IS NULL ORDER BY id`).all() as Array<{ id: number }>;
+    checks.push({
+      name: "data.entries_without_ulid",
+      severity: noUlid.length > 0 ? "error" : "ok",
+      detail: noUlid.length > 0
+        ? `found ${noUlid.length} entries without a ulid; restart the server (migrate() backfills them)`
+        : "every entry has a ulid",
+      items: noUlid.length > 0 ? noUlid.map((r) => toEntryId(r.id)) : undefined,
+    });
+  } else {
+    checks.push({
+      name: "data.entries_without_ulid",
+      severity: "ok",
+      detail: "skipped: migration 0005 not applied",
+    });
+  }
 
-  // 11) data.unresolved_entry_refs -- entry links whose target could not be matched (kept, never deleted)
-  const unresolved = db.prepare(`
-    SELECT entry_id, ref_value FROM refs
-     WHERE ref_type = 'entry' AND target_ulid IS NULL
-     ORDER BY entry_id, ref_value
-  `).all() as Array<{ entry_id: number; ref_value: string }>;
-  checks.push({
-    name: "data.unresolved_entry_refs",
-    severity: unresolved.length > 0 ? "warn" : "ok",
-    detail: unresolved.length > 0
-      ? `found ${unresolved.length} entry links that point at no existing entry`
-      : "every entry link resolves",
-    items: unresolved.length > 0 ? unresolved.map((r) => `${toEntryId(r.entry_id)} -> ${JSON.stringify(r.ref_value)}`) : undefined,
-  });
+  // 11) data.unresolved_entry_refs -- entry links whose target could not be matched (kept, never deleted).
+  // Never queries the target_ulid column until 0005 has actually added it.
+  if (has0005) {
+    const unresolved = db.prepare(`
+      SELECT entry_id, ref_value FROM refs
+       WHERE ref_type = 'entry' AND target_ulid IS NULL
+       ORDER BY entry_id, ref_value
+    `).all() as Array<{ entry_id: number; ref_value: string }>;
+    checks.push({
+      name: "data.unresolved_entry_refs",
+      severity: unresolved.length > 0 ? "warn" : "ok",
+      detail: unresolved.length > 0
+        ? `found ${unresolved.length} entry links that point at no existing entry`
+        : "every entry link resolves",
+      items: unresolved.length > 0 ? unresolved.map((r) => `${toEntryId(r.entry_id)} -> ${JSON.stringify(r.ref_value)}`) : undefined,
+    });
+  } else {
+    checks.push({
+      name: "data.unresolved_entry_refs",
+      severity: "ok",
+      detail: "skipped: migration 0005 not applied",
+    });
+  }
 
   // 12) fts.count_parity
   const entryCount = (db.prepare("SELECT COUNT(*) AS c FROM entries").get() as { c: number }).c;

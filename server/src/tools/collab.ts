@@ -466,9 +466,16 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
 
   // --- DOCTOR (mirrors collab-mcp/src/tools/doctor.ts — keep in sync) ---
   'POST /api/collab/doctor': async (req, res, send) => {
-    const EXPECTED_TABLES = new Set(['entries','refs','tasks','modules','dispatches','entry_modules','entry_revisions','schema_migrations','entries_fts','entries_fts_config','entries_fts_data','entries_fts_docsize','entries_fts_idx','sqlite_sequence']);
-    const EXPECTED_INDEXES = new Set(['idx_entries_created','idx_entries_deprecated','idx_entries_kind','idx_entries_module','idx_entries_status','idx_entries_task','idx_entries_type','idx_entries_category','idx_entries_superseded','idx_entries_ulid','idx_entry_modules_module','idx_entry_modules_entry','idx_entry_modules_entry_ulid','idx_entry_revisions_entry','idx_refs_entry','idx_refs_type','idx_refs_value','idx_refs_entry_ulid','idx_refs_target_ulid','idx_tasks_assignee','idx_tasks_module','idx_tasks_status','idx_dispatches_agent','idx_dispatches_created','idx_dispatches_entry','idx_dispatches_module']);
-    const EXPECTED_TRIGGERS = new Set(['trg_entries_fts_ad','trg_entries_fts_ai','trg_entries_fts_au','trg_entries_updated_at','trg_entries_revision','trg_entries_fill_superseded_ulid','trg_modules_updated_at','trg_refs_cascade_delete','trg_refs_fill_ulids','trg_tasks_updated_at','trg_entry_modules_cascade_delete','trg_entry_modules_fill_ulid','trg_dispatches_updated_at','trg_dispatches_updated_at_insert']);
+    const EXPECTED_TABLES = new Set(['entries','refs','tasks','modules','dispatches','entry_modules','schema_migrations','entries_fts','entries_fts_config','entries_fts_data','entries_fts_docsize','entries_fts_idx','sqlite_sequence']);
+    const EXPECTED_INDEXES = new Set(['idx_entries_created','idx_entries_deprecated','idx_entries_kind','idx_entries_module','idx_entries_status','idx_entries_task','idx_entries_type','idx_entries_category','idx_entries_superseded','idx_entry_modules_module','idx_entry_modules_entry','idx_refs_entry','idx_refs_type','idx_refs_value','idx_tasks_assignee','idx_tasks_module','idx_tasks_status','idx_dispatches_agent','idx_dispatches_created','idx_dispatches_entry','idx_dispatches_module']);
+    const EXPECTED_TRIGGERS = new Set(['trg_entries_fts_ad','trg_entries_fts_ai','trg_entries_fts_au','trg_entries_updated_at','trg_modules_updated_at','trg_refs_cascade_delete','trg_tasks_updated_at','trg_entry_modules_cascade_delete','trg_dispatches_updated_at','trg_dispatches_updated_at_insert']);
+    // Migration 0005 (staged): objects that exist only once 0005 has been applied.
+    // trg_entries_updated_at / trg_entries_fts_au are re-created under their same
+    // names by 0005, so they stay in the base EXPECTED_TRIGGERS above, not here.
+    const EXPECTED_TABLES_0005 = new Set(['entry_revisions']);
+    const EXPECTED_INDEXES_0005 = new Set(['idx_entries_ulid','idx_refs_entry_ulid','idx_refs_target_ulid','idx_entry_modules_entry_ulid','idx_entry_revisions_entry']);
+    const EXPECTED_TRIGGERS_0005 = new Set(['trg_refs_fill_ulids','trg_entry_modules_fill_ulid','trg_entries_fill_superseded_ulid','trg_entries_revision']);
+    const union = (a: Set<string>, b: Set<string>) => new Set([...a, ...b]);
     const schemaCheck = (name: string, actual: Set<string>, expected: Set<string>, label: string) => {
       const missing = [...expected].filter(x => !actual.has(x)).sort();
       const extra = [...actual].filter(x => !expected.has(x)).sort();
@@ -478,13 +485,20 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       return { name, severity, detail, items };
     };
     try {
+      let has0005 = false;
+      try {
+        has0005 = !!db.prepare(`SELECT 1 FROM schema_migrations WHERE version = '0005_ulid_expand'`).get();
+      } catch { has0005 = false; }
+      const expectedTables = has0005 ? union(EXPECTED_TABLES, EXPECTED_TABLES_0005) : EXPECTED_TABLES;
+      const expectedIndexes = has0005 ? union(EXPECTED_INDEXES, EXPECTED_INDEXES_0005) : EXPECTED_INDEXES;
+      const expectedTriggers = has0005 ? union(EXPECTED_TRIGGERS, EXPECTED_TRIGGERS_0005) : EXPECTED_TRIGGERS;
       const checks: any[] = [];
       const tables = new Set(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND (name NOT LIKE 'sqlite_%' OR name='sqlite_sequence')`).all().map((r: any)=>r.name));
-      checks.push(schemaCheck('schema.tables', tables, EXPECTED_TABLES, 'tables'));
+      checks.push(schemaCheck('schema.tables', tables, expectedTables, 'tables'));
       const indexes = new Set(db.prepare(`SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_autoindex_%'`).all().map((r: any)=>r.name));
-      checks.push(schemaCheck('schema.indexes', indexes, EXPECTED_INDEXES, 'indexes'));
+      checks.push(schemaCheck('schema.indexes', indexes, expectedIndexes, 'indexes'));
       const triggers = new Set(db.prepare(`SELECT name FROM sqlite_master WHERE type='trigger'`).all().map((r: any)=>r.name));
-      checks.push(schemaCheck('schema.triggers', triggers, EXPECTED_TRIGGERS, 'triggers'));
+      checks.push(schemaCheck('schema.triggers', triggers, expectedTriggers, 'triggers'));
       const orphanTaskRefs = db.prepare(`SELECT entry_id, ref_value FROM refs WHERE ref_type='task' AND ref_value NOT IN (SELECT id FROM tasks)`).all();
       checks.push({ name: 'data.orphan_refs.task', severity: orphanTaskRefs.length ? 'warn' : 'ok', detail: orphanTaskRefs.length ? `${orphanTaskRefs.length} orphan task ref(s)` : 'no orphan task refs', items: orphanTaskRefs.length ? orphanTaskRefs.map((r: any)=>`E-${String(r.entry_id).padStart(5,'0')} -> ${r.ref_value}`) : undefined });
       const orphanEntryRefs = db.prepare(`SELECT entry_id, ref_value FROM refs WHERE ref_type='entry' AND CAST(ref_value AS INTEGER) NOT IN (SELECT id FROM entries)`).all();

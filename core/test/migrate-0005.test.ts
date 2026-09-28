@@ -547,3 +547,21 @@ test('doctor flags unresolved entry links and missing ulids', () => {
     assert.equal(r.checks.find((x) => x.name === 'data.entries_without_ulid')?.severity, 'error');
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('doctor is migration-aware: a pre-0005 DB never throws and reports skipped data checks', () => {
+  const { db, dir } = tempDb();
+  try {
+    migrateProd(db); // NO staged: what every production DB looks like before 0005 goes live
+    let r: ReturnType<typeof doctor> | undefined;
+    assert.doesNotThrow(() => { r = doctor(db); });
+    for (const name of ['schema.tables', 'schema.indexes', 'schema.triggers']) {
+      const c = r!.checks.find((x) => x.name === name);
+      assert.equal(c?.severity, 'ok', `${name}: ${JSON.stringify(c?.items)}`);
+    }
+    for (const name of ['data.entries_without_ulid', 'data.unresolved_entry_refs']) {
+      const c = r!.checks.find((x) => x.name === name);
+      assert.equal(c?.severity, 'ok', name);
+      assert.match(c?.detail ?? '', /skipped/);
+    }
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
