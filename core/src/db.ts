@@ -96,7 +96,7 @@ export function getDbPath(): string | null {
 
 /**
  * True once migration 0005 has added `entries.ulid` (and, with it, `author`).
- * Cheap per-call pragma check — deliberately NOT cached, because `migrate()`
+ * Cheap per-call pragma check - deliberately NOT cached, because `migrate()`
  * can run between two calls on the same open handle (e.g. a pre-0005 DB that
  * gets upgraded mid-session), and a stale cached `false` would silently stop
  * stamping ulid/author forever. Shared by the backfill gate below and by every
