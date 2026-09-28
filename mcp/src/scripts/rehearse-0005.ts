@@ -21,16 +21,24 @@ const source = process.argv[2];
 if (!source) throw new Error("usage: rehearse-0005.ts <path-to-collab.db>");
 
 const dir = mkdtempSync(join(tmpdir(), "rehearse-0005-"));
-const src = new Database(source, { readonly: true, fileMustExist: true });
 const copyA = join(dir, "a.db"), copyB = join(dir, "b.db");
+
+// ONE snapshot of the source, taken once, read-only. copyB is then derived
+// from copyA (not from the source a second time) so there is no window for a
+// live writer to make copyA and copyB diverge before either is migrated.
+const src = new Database(source, { readonly: true, fileMustExist: true });
 src.prepare("VACUUM INTO ?").run(copyA);
-src.prepare("VACUUM INTO ?").run(copyB);
-const beforeUpdatedAt = new Map(
-  (src.prepare("SELECT id, updated_at FROM entries").all() as any[]).map((r) => [r.id, r.updated_at]),
-);
 src.close();
 
-const a = new Database(copyA), b = new Database(copyB);
+const a = new Database(copyA);
+a.prepare("VACUUM INTO ?").run(copyB);
+// Read BEFORE migrating either copy, and from copyA (the frozen snapshot),
+// not the live source.
+const beforeUpdatedAt = new Map(
+  (a.prepare("SELECT id, updated_at FROM entries").all() as any[]).map((r) => [r.id, r.updated_at]),
+);
+
+const b = new Database(copyB);
 const hits = (db: Database.Database) =>
   Object.fromEntries(
     PROBE_TERMS.map((t) => [
@@ -56,22 +64,60 @@ const deterministic =
 const updatedAtChanged = (a.prepare("SELECT id, updated_at FROM entries").all() as any[])
   .filter((r) => beforeUpdatedAt.get(r.id) !== r.updated_at).length;
 
+const entriesWithoutUlid = one(a, "SELECT COUNT(*) c FROM entries WHERE ulid IS NULL");
+const refsWithoutEntryUlid = one(a, "SELECT COUNT(*) c FROM refs WHERE entry_ulid IS NULL");
+const entryModulesWithoutUlid = one(a, "SELECT COUNT(*) c FROM entry_modules WHERE entry_ulid IS NULL");
+const entryLinksUnresolved = one(a, "SELECT COUNT(*) c FROM refs WHERE ref_type='entry' AND target_ulid IS NULL");
+const supersededResolvedCount = one(a, "SELECT COUNT(*) c FROM entries WHERE superseded_by_ulid IS NOT NULL");
+const supersededTotalCount = one(a, "SELECT COUNT(*) c FROM entries WHERE superseded_by IS NOT NULL");
+const revisionsAfterMigrate = one(a, "SELECT COUNT(*) c FROM entry_revisions");
+const searchUnchanged = JSON.stringify(searchBefore) === JSON.stringify(searchAfter);
+const doctorChecks = doctor(a).checks;
+const doctorErrors = doctorChecks.filter((c) => c.severity === "error");
+
 const report = {
   applied: appliedA,
   entries: one(a, "SELECT COUNT(*) c FROM entries"),
-  entriesWithoutUlid: one(a, "SELECT COUNT(*) c FROM entries WHERE ulid IS NULL"),
-  refsWithoutEntryUlid: one(a, "SELECT COUNT(*) c FROM refs WHERE entry_ulid IS NULL"),
-  entryModulesWithoutUlid: one(a, "SELECT COUNT(*) c FROM entry_modules WHERE entry_ulid IS NULL"),
+  entriesWithoutUlid,
+  refsWithoutEntryUlid,
+  entryModulesWithoutUlid,
   entryLinks: one(a, "SELECT COUNT(*) c FROM refs WHERE ref_type='entry'"),
-  entryLinksUnresolved: one(a, "SELECT COUNT(*) c FROM refs WHERE ref_type='entry' AND target_ulid IS NULL"),
-  supersededResolved: `${one(a, "SELECT COUNT(*) c FROM entries WHERE superseded_by_ulid IS NOT NULL")} / ${one(a, "SELECT COUNT(*) c FROM entries WHERE superseded_by IS NOT NULL")}`,
+  entryLinksUnresolved,
+  supersededResolved: `${supersededResolvedCount} / ${supersededTotalCount}`,
   ulidOrderEqualsIdOrder: same,
   deterministicAcrossCopies: deterministic,
   updatedAtChanged,
+  revisionsAfterMigrate,
   ftsIntegrity,
-  searchUnchanged: JSON.stringify(searchBefore) === JSON.stringify(searchAfter),
-  doctor: doctor(a).checks.filter((c) => c.severity !== "ok").map((c) => ({ name: c.name, severity: c.severity, detail: c.detail, items: c.items?.slice(0, 20) })),
+  searchUnchanged,
+  doctor: doctorChecks.filter((c) => c.severity !== "ok").map((c) => ({ name: c.name, severity: c.severity, detail: c.detail, items: c.items?.slice(0, 20) })),
   copies: dir,
 };
+
+// ------------------------------------------------------------
+// Pass/fail summary. Anything false here means the rehearsal did NOT prove
+// 0005 is safe to release, regardless of how the raw numbers above read.
+// ------------------------------------------------------------
+const criteria: Array<[string, boolean]> = [
+  ["entriesWithoutUlid", entriesWithoutUlid === 0],
+  ["refsWithoutEntryUlid", refsWithoutEntryUlid === 0],
+  ["entryModulesWithoutUlid", entryModulesWithoutUlid === 0],
+  ["entryLinksUnresolved", entryLinksUnresolved === 0],
+  ["ulidOrderEqualsIdOrder", same === true],
+  ["deterministicAcrossCopies", deterministic === true],
+  ["supersededResolved", supersededResolvedCount === supersededTotalCount],
+  ["updatedAtChanged", updatedAtChanged === 0],
+  ["ftsIntegrity", ftsIntegrity === "ok"],
+  ["searchUnchanged", searchUnchanged === true],
+  ["revisionsAfterMigrate", revisionsAfterMigrate === 0],
+  ["doctorNoErrors", doctorErrors.length === 0],
+];
+const failed = criteria.filter(([, pass]) => !pass).map(([name]) => name);
+
 console.log(JSON.stringify(report, null, 2));
+console.log(JSON.stringify({ failed }, null, 2));
+if (failed.length > 0) {
+  process.exitCode = 1;
+}
+
 a.close(); b.close();

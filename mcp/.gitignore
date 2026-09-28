@@ -3,6 +3,7 @@ collab.db
 collab.db-journal
 collab.db-wal
 collab.db-shm
+collab.db.bak-*
 
 # Exports — gitignored by default; promote to git if you want team sharing
 export/

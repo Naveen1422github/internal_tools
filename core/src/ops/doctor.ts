@@ -330,7 +330,11 @@ export function doctor(db: DB): DoctorResult {
     const noUlid = db.prepare(`SELECT id FROM entries WHERE ulid IS NULL ORDER BY id`).all() as Array<{ id: number }>;
     checks.push({
       name: "data.entries_without_ulid",
-      severity: noUlid.length > 0 ? "error" : "ok",
+      // "warn", not "error": rows written by scripts or older builds that
+      // insert straight into entries (bypassing addEntry/rollup) legitimately
+      // lack a ulid until the next migrate() backfills them. That's expected
+      // transient state, not corruption.
+      severity: noUlid.length > 0 ? "warn" : "ok",
       detail: noUlid.length > 0
         ? `found ${noUlid.length} entries without a ulid; restart the server (migrate() backfills them)`
         : "every entry has a ulid",

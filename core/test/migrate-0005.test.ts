@@ -544,7 +544,9 @@ test('doctor flags unresolved entry links and missing ulids', () => {
     const unresolved = r.checks.find((x) => x.name === 'data.unresolved_entry_refs');
     assert.equal(unresolved?.severity, 'warn');
     assert.deepEqual(unresolved?.items, ['E-00001 -> "E-404"']);
-    assert.equal(r.checks.find((x) => x.name === 'data.entries_without_ulid')?.severity, 'error');
+    // "warn", not "error" (final review M1): rows written by scripts or older
+    // builds legitimately lack a ulid until the next migrate() backfills them.
+    assert.equal(r.checks.find((x) => x.name === 'data.entries_without_ulid')?.severity, 'warn');
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -622,4 +624,34 @@ test('archive succeeds on a pre-0005 DB (C1)', () => {
     const row = db.prepare(`SELECT id FROM entries WHERE type = 'rollup'`).get();
     assert.ok(row, 'no rollup row created');
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ------------------------------------------------------------
+// Final review M6: migrate() must survive a throwing backfill, not just a
+// throwing migration file. The backfill call inside applyMigrations() is
+// wrapped in try/catch specifically so one bad table can never stop startup.
+// ------------------------------------------------------------
+
+test('migrate() survives a throwing backfill and logs, instead of throwing (M6)', () => {
+  const { db, dir } = tempDb();
+  const originalConsoleError = console.error;
+  const logged: string[] = [];
+  try {
+    migrate(db); // apply 0005 normally first
+    db.exec('DROP TABLE entry_modules'); // backfill's UPDATE on entry_modules will now throw
+    db.prepare(`INSERT INTO entries (id, type, kind, title, summary, ulid) VALUES (99, 'decision', 'signal', 'broken', 's', NULL)`).run();
+
+    console.error = (...args: unknown[]) => { logged.push(args.map(String).join(' ')); };
+    let result: string[] | undefined;
+    assert.doesNotThrow(() => { result = migrate(db); });
+    assert.deepEqual(result, []); // already at latest version; nothing pending
+    assert.ok(
+      logged.some((line) => line.includes('[collab-mcp] backfill failed:')),
+      `expected a "[collab-mcp] backfill failed:" line, got: ${JSON.stringify(logged)}`,
+    );
+  } finally {
+    console.error = originalConsoleError;
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
