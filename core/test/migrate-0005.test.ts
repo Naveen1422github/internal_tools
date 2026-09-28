@@ -11,6 +11,7 @@ import { backfillUlids } from '../src/backfill.js';
 import { addEntry } from '../src/ops/add.js';
 import { updateEntry } from '../src/ops/update.js';
 import { rollup, archive } from '../src/ops/rollup.js';
+import { doctor } from '../src/ops/doctor.js';
 
 // Tests exercise the staged 0005; production callers never pass includeStaged.
 const migrate = (db: Database.Database) => migrateProd(db, { includeStaged: true });
@@ -517,5 +518,32 @@ test('archive stamps ulid and author on its rollup insert (Task 5 review)', () =
     assert.ok(result.created_entries.length > 0, 'archive created nothing: check which rows selectArchiveEntries() picks up');
     const nulls = (db.prepare(`SELECT COUNT(*) c FROM entries WHERE type = 'rollup' AND (ulid IS NULL OR author IS NULL)`).get() as any).c;
     assert.equal(nulls, 0);
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('doctor on a fresh 0005 DB reports no schema drift', () => {
+  const { db, dir } = tempDb();
+  try {
+    migrate(db);
+    const r = doctor(db);
+    for (const name of ['schema.tables', 'schema.indexes', 'schema.triggers']) {
+      const c = r.checks.find((x) => x.name === name);
+      assert.equal(c?.severity, 'ok', `${name}: ${JSON.stringify(c?.items)}`);
+    }
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('doctor flags unresolved entry links and missing ulids', () => {
+  const { db, dir } = tempDb();
+  try {
+    migrate(db);
+    insertEntry(db, 1, 'U1');
+    db.prepare(`INSERT INTO refs (entry_id, ref_type, ref_value) VALUES (1, 'entry', 'E-404')`).run();
+    insertEntry(db, 2, null);
+    const r = doctor(db);
+    const unresolved = r.checks.find((x) => x.name === 'data.unresolved_entry_refs');
+    assert.equal(unresolved?.severity, 'warn');
+    assert.deepEqual(unresolved?.items, ['E-00001 -> "E-404"']);
+    assert.equal(r.checks.find((x) => x.name === 'data.entries_without_ulid')?.severity, 'error');
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });

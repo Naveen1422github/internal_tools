@@ -19,6 +19,7 @@ const EXPECTED_TABLES = new Set([
   "modules",
   "dispatches",
   "entry_modules",
+  "entry_revisions",
   "schema_migrations",
   "entries_fts",
   "entries_fts_config",
@@ -38,11 +39,16 @@ const EXPECTED_INDEXES = new Set([
   "idx_entries_type",
   "idx_entries_category",
   "idx_entries_superseded",
+  "idx_entries_ulid",
   "idx_entry_modules_module",
   "idx_entry_modules_entry",
+  "idx_entry_modules_entry_ulid",
+  "idx_entry_revisions_entry",
   "idx_refs_entry",
   "idx_refs_type",
   "idx_refs_value",
+  "idx_refs_entry_ulid",
+  "idx_refs_target_ulid",
   "idx_tasks_assignee",
   "idx_tasks_module",
   "idx_tasks_status",
@@ -57,10 +63,14 @@ const EXPECTED_TRIGGERS = new Set([
   "trg_entries_fts_ai",
   "trg_entries_fts_au",
   "trg_entries_updated_at",
+  "trg_entries_revision",
+  "trg_entries_fill_superseded_ulid",
   "trg_modules_updated_at",
   "trg_refs_cascade_delete",
+  "trg_refs_fill_ulids",
   "trg_tasks_updated_at",
   "trg_entry_modules_cascade_delete",
+  "trg_entry_modules_fill_ulid",
   "trg_dispatches_updated_at",
   "trg_dispatches_updated_at_insert",
 ]);
@@ -286,7 +296,33 @@ export function doctor(db: DB): DoctorResult {
     items: entriesWithoutModule.length > 0 ? entriesWithoutModule.map((r) => r.id) : undefined,
   });
 
-  // 10) fts.count_parity
+  // 10) data.entries_without_ulid -- should be 0 after migrate()'s backfill
+  const noUlid = db.prepare(`SELECT id FROM entries WHERE ulid IS NULL ORDER BY id`).all() as Array<{ id: number }>;
+  checks.push({
+    name: "data.entries_without_ulid",
+    severity: noUlid.length > 0 ? "error" : "ok",
+    detail: noUlid.length > 0
+      ? `found ${noUlid.length} entries without a ulid; restart the server (migrate() backfills them)`
+      : "every entry has a ulid",
+    items: noUlid.length > 0 ? noUlid.map((r) => toEntryId(r.id)) : undefined,
+  });
+
+  // 11) data.unresolved_entry_refs -- entry links whose target could not be matched (kept, never deleted)
+  const unresolved = db.prepare(`
+    SELECT entry_id, ref_value FROM refs
+     WHERE ref_type = 'entry' AND target_ulid IS NULL
+     ORDER BY entry_id, ref_value
+  `).all() as Array<{ entry_id: number; ref_value: string }>;
+  checks.push({
+    name: "data.unresolved_entry_refs",
+    severity: unresolved.length > 0 ? "warn" : "ok",
+    detail: unresolved.length > 0
+      ? `found ${unresolved.length} entry links that point at no existing entry`
+      : "every entry link resolves",
+    items: unresolved.length > 0 ? unresolved.map((r) => `${toEntryId(r.entry_id)} -> ${JSON.stringify(r.ref_value)}`) : undefined,
+  });
+
+  // 12) fts.count_parity
   const entryCount = (db.prepare("SELECT COUNT(*) AS c FROM entries").get() as { c: number }).c;
   const ftsCount = (db.prepare("SELECT COUNT(*) AS c FROM entries_fts").get() as { c: number }).c;
   const parityOk = entryCount === ftsCount;
@@ -298,7 +334,7 @@ export function doctor(db: DB): DoctorResult {
       : `entries=${entryCount}, entries_fts=${ftsCount}`,
   });
 
-  // 11) fts.rebuild_hint
+  // 13) fts.rebuild_hint
   checks.push({
     name: "fts.rebuild_hint",
     severity: parityOk ? "ok" : "warn",
