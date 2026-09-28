@@ -48,12 +48,12 @@ test('ulidFromLegacy time part sorts across seconds', () => {
 test('parseEntryRef accepts every legacy format seen in the real DB', () => {
   for (const [input, want] of [
     ['214', 214], ['E-214', 214], ['E-00214', 214], ['e-214', 214], ['#116', 116],
-    [' 214 ', 214], ['E214', 214],
+    [' 214 ', 214], ['E214', 214], ['\t214', 214],
   ] as const) assert.equal(parseEntryRef(input), want, input);
 });
 
 test('parseEntryRef rejects junk', () => {
-  for (const input of ['', '0', 'E-', 'abc', '12a', 'T-011', '-5', '1.5']) {
+  for (const input of ['', '0', 'E-', 'abc', '12a', 'T-011', '-5', '1.5', ' 214']) {
     assert.equal(parseEntryRef(input), null, input);
   }
 });

@@ -66,12 +66,20 @@ export function ulidFromLegacy(id: number, createdAt: string, title: string): st
 
 /**
  * Legacy entry-link value -> E-number, or null. Accepts "214", "E-214",
- * "E-00214", "E214", "#116" (any case, surrounding spaces). MUST stay in
- * lockstep with the SQL parser in 0005's trg_refs_fill_ulids; a parity test
+ * "E-00214", "E214", "#116" (any case). Surrounding whitespace is stripped
+ * only from this explicit set: space, tab, LF, VT, FF, CR, NBSP (code point
+ * 00A0) -- mirrors the SQL parser's trim(x, ' ' || char(9,10,11,12,13,160))
+ * in 0005's trg_refs_fill_ulids exactly, so other Unicode whitespace (e.g.
+ * the em space, code point 2003) is deliberately NOT stripped and fails to
+ * parse the same way on both sides. MUST stay in lockstep; a parity test
  * guards this.
  */
+const REF_WHITESPACE = " \t\n\u000B\f\r ";
+const TRIM_REF_RE = new RegExp(`^[${REF_WHITESPACE}]+|[${REF_WHITESPACE}]+$`, "g");
+
 export function parseEntryRef(value: string): number | null {
-  const m = /^(?:#|E-?)?(\d+)$/i.exec(value.trim());
+  const trimmed = value.replace(TRIM_REF_RE, "");
+  const m = /^(?:#|E-?)?(\d+)$/i.exec(trimmed);
   if (!m) return null;
   const n = Number(m[1]);
   return Number.isSafeInteger(n) && n > 0 ? n : null;
