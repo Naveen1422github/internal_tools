@@ -2597,8 +2597,65 @@ Then (user builds the server first) regenerate: `cd internal-tools && UPDATE_GOL
 
 - [ ] **Step 5: Checkpoint: user commits** (suggested: `test(mcp): 0006 real-DB rehearsal with cr-sqlite probe; golden snapshots EOL-safe`)
 
+#### Rehearsal result (2026-09-29, Task 9)
+
+`CRSQLITE_PATH=<spike>/crspike/bin/crsqlite npx tsx src/scripts/rehearse-0006.ts <live collab.db>` on a `VACUUM INTO` copy of the live DB. The live file was 4349952 bytes, with mtime 2026-09-29 01:48:38, both before and after the run.
+
+- `failed: []`, `applied: ["0006_ulid_contract"]`, `migrateMs: 98`
+- The counter is 693, which equals `max(seq, max(id))`. The DB has 688 entries, so the numbers deleted earlier are not reused.
+- Row counts were identical before and after, and so was the row content, including `updated_at`:
+
+  | Table | Rows |
+  |---|---|
+  | entries | 688 |
+  | refs | 2140 |
+  | entry_modules | 798 |
+  | tasks | 11 |
+  | modules | 14 |
+  | entry_revisions | 2 |
+
+- Search gave identical ids for all five probe terms. `migration` and `timesheet` hit the limit of 50, so their tie ordering at the cutoff can flap on a future run (a parked minor).
+- `crr`: `crsql_as_crr` returned ok on all six synced tables, and `crsql_finalize` also succeeded.
+- Doctor (core source) reported no errors:
+  - ok: `schema.tables` (16), `schema.indexes` (22), `schema.triggers` (14), `data.orphan_refs.task`, `data.orphan_refs.entry`, `data.dangling_superseded`, `data.entries_without_ulid`, `data.unresolved_entry_refs`, `data.duplicate_entry_ids`, `data.tombstones` (0), `fts.integrity` (strict, rank=1), `fts.count_parity` (688 = 688), `fts.rebuild_hint`
+  - warn: `data.orphan_module.entries` (69), `data.orphan_task.entries` (3), `data.entries_without_module` (24, informational). All three predate 0006 and are T-011 territory.
+
+#### Pre-merge checks (the user runs these; they were deferred because agents may not build)
+
+Agents only verified against core **source**. `node_modules/@collab-mcp/core` resolves to a stale `core/dist` until you build. Run these checks from the worktree root, in order:
+
+1. Full build, core first: `npm run build`. The root script builds core, then the workspaces. Then run `npm --prefix mcp run build`, and confirm that `mcp/dist/server.js` exists. The rehearse scripts are excluded from mcp's tsc.
+2. REST tests, each file: `npx tsx --test test/api.contract-0005.test.mts test/api.contract-0006.test.mts test/api.ai.test.mts test/api.upsert.test.mts test/api.search.test.mts test/api.stats.test.mts test/api.supersede.test.mts test/api.reassign-module.test.mts`. Alternatively, use `npx tsx --test test/**/*.test.mts` for all of them.
+3. MCP golden: `npm --prefix mcp run test:golden`. The REST golden is `npx tsx --test test/golden/rest.golden.test.mts`. Both are expected to show the drift below, so regenerate them as described there.
+4. Script runtime checks, against a scratch DB only, never the live one. First run `COLLAB_DB_PATH=<scratch>.db COLLAB_DB_CREATE=1 npm --prefix mcp run migrate`, then run each of these with `COLLAB_DB_PATH=<scratch>.db`:
+   - `npm --prefix mcp run log-collab -- ...`
+   - `npm --prefix mcp run sweep-deps`
+   - `npm --prefix mcp run test:search`
+   - `npm --prefix mcp run inspect-db`
+
+   Each must write to the scratch DB and nothing else. No new `collab.db` may appear in the cwd.
+5. Delete the stray empty `internal-tools/collab.db` (4096 bytes, at the main checkout root, next to `mcp/`). Old code created it before this branch's D9 fix. Delete it before go-live, so that nothing ever mistakes it for the real DB (which is `mcp/collab.db`).
+
+#### Golden drift (expected; regenerate after the build, then review the diff)
+
+Snapshots were NOT regenerated on this branch, because that needs a build. Both golden suites migrate **without** staged migrations, so before go-live they run at 0005. Expected changes:
+
+- `test/golden/__snapshots__/rest_doctor.json`: the doctor now comes from core, not a server copy. The check list gains `data.entries_without_ulid`, `data.unresolved_entry_refs` and `fts.integrity: ok`. The `schema.*` detail counts may change to core's expected lists. `data.orphan_refs.entry` stays `ok`, because the seed has no links; on real data, D10 removed its false positives. After go-live, it also gains `data.duplicate_entry_ids` and `data.tombstones`.
+- `rest_search_all.json` and `rest_search_module_demo.json` lose "Beta change". REST-created changelogs are now `kind=log`, and search defaults exclude logs.
+- The export JSON (REST export, `collab_export`) gains `ulid` on every entry. After go-live it also gains `deleted_at` (null).
+- The MCP snapshots (`mcp/test/golden/__snapshots__/*`) keep their shape, but new fields such as `ulid`, `author` and `superseded_by_ulid` are now masked by `stable()`. Its masks are `<ulid>`, `<author>` and `<ts>` for a non-null `deleted_at`, plus any ULID embedded in a string, such as doctor items. `mcp_doctor.json` gains the same new checks as `rest_doctor.json`.
+- Both comparers are now line-ending-insensitive (E-687 CRLF failures).
+
+Any other change needs a reason in the changelog. The commands to regenerate, then rerun without the flag (expected result: PASS):
+
+```
+UPDATE_GOLDEN=1 npx tsx --test test/golden/rest.golden.test.mts && npx tsx --test test/golden/rest.golden.test.mts
+cd mcp && UPDATE_GOLDEN=1 npx tsx --test test/golden/tools.golden.test.ts && npx tsx --test test/golden/tools.golden.test.ts
+```
+
 #### Go-live runbook (the user runs this; never an agent)
 
+0. Pre-merge checks above all pass, goldens regenerated and reviewed, and the stray empty `internal-tools/collab.db` deleted.
 1. Merge `collab-0006-contract` into `collabv1`. It is safe to merge before go-live, because every path is tested at 0005.
 2. Stop **every** Claude/Codex session **and** the REST server/UI. Any of them applies migrations on start. The first one to start would migrate while the others hold the old schema in memory.
 3. Build: `cd internal-tools && npm -w @collab-mcp/core run build && npm -w @collab-mcp/server run build && npm --prefix mcp run build`.

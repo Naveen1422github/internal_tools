@@ -14,6 +14,6 @@ export function matchSnapshot(name, value) {
     fs.writeFileSync(file, actual);
     return;
   }
-  const expected = fs.readFileSync(file, 'utf8');
-  assert.strictEqual(actual, expected, `golden mismatch for ${name}`);
+  const expected = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+  assert.strictEqual(actual.replace(/\r\n/g, '\n'), expected, `golden mismatch for ${name}`);
 }
