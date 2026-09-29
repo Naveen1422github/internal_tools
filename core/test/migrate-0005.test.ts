@@ -385,7 +385,8 @@ test('backfill is idempotent and reports unresolved links', () => {
     const snapshot = db.prepare(`SELECT id, ulid FROM entries ORDER BY id`).all();
     const report = backfillUlids(db);
     assert.equal(report.entries, 0);
-    assert.deepEqual(report.unresolvedEntryRefs, [{ entry_id: 5, ref_value: '3' }]);
+    const entry_ulid = (db.prepare(`SELECT ulid FROM entries WHERE id = 5`).get() as any).ulid;
+    assert.deepEqual(report.unresolvedEntryRefs, [{ entry_id: 5, entry_ulid, ref_value: '3' }]);
     assert.deepEqual(db.prepare(`SELECT id, ulid FROM entries ORDER BY id`).all(), snapshot);
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });

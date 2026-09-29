@@ -6,6 +6,7 @@ export * from './ops/list-recent.js';
 export * from './ops/add.js';
 export * from './ops/update.js';
 export * from './ops/supersede.js';
+export * from './ops/delete.js';
 export * from './ops/module.js';
 export * from './ops/doctor.js';
 export * from './ops/task.js';

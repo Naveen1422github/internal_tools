@@ -1,6 +1,8 @@
 import type { DB } from "../db.js";
 import { estimateTokens } from "../db.js";
 import type { RefInput } from "./add.js";
+import { hasUlidPrimaryKey } from "../schema.js";
+import { ownerOf, insertRefs, deleteRef } from "../entry-write.js";
 
 // ------------------------------------------------------------
 // Types
@@ -63,8 +65,18 @@ export function updateEntry(db: DB, args: UpdateEntryArgs): UpdateEntryResult {
     throw new Error("nothing to update: provide at least one of title/summary/description");
   }
 
+  // At 0006 id is not unique (E-648): resolve the owner (lowest live ulid;
+  // tombstones never own) and write by ulid (F3). Before 0006 id is the PK.
+  let where = "id = @id";
+  if (hasUlidPrimaryKey(db)) {
+    const owner = ownerOf(db, args.id);
+    if (!owner) throw new Error(`no entry found with id ${args.id}`);
+    params.ulid = owner.ulid as string;
+    where = "ulid = @ulid";
+  }
+
   const info = db
-    .prepare(`UPDATE entries SET ${sets.join(", ")} WHERE id = @id`)
+    .prepare(`UPDATE entries SET ${sets.join(", ")} WHERE ${where}`)
     .run(params);
 
   if (info.changes === 0) {
@@ -109,27 +121,19 @@ export function updateEntryRefs(db: DB, args: UpdateEntryRefsArgs): UpdateEntryR
     throw new Error("nothing to do: provide at least one ref in 'add' or 'remove'");
   }
 
-  const exists = db.prepare(`SELECT 1 FROM entries WHERE id = ?`).get(args.id);
-  if (!exists) throw new Error(`no entry found with id ${args.id}`);
+  // Owner by E-number (F3): lowest live ulid at 0006; tombstones refused.
+  const owner = ownerOf(db, args.id);
+  if (!owner) throw new Error(`no entry found with id ${args.id}`);
 
   const added: RefInput[] = [];
   const removed: RefInput[] = [];
 
-  const insertRef = db.prepare(
-    `INSERT OR IGNORE INTO refs (entry_id, ref_type, ref_value) VALUES (?, ?, ?)`
-  );
-  const deleteRef = db.prepare(
-    `DELETE FROM refs WHERE entry_id = ? AND ref_type = ? AND ref_value = ?`
-  );
-
   const tx = db.transaction(() => {
     for (const r of toRemove) {
-      const info = deleteRef.run(args.id, r.ref_type, r.ref_value);
-      if (info.changes > 0) removed.push(r);
+      if (deleteRef(db, owner, r) > 0) removed.push(r);
     }
     for (const r of toAdd) {
-      const info = insertRef.run(args.id, r.ref_type, r.ref_value);
-      if (info.changes > 0) added.push(r);
+      if (insertRefs(db, owner, [r]) > 0) added.push(r);
     }
   });
   tx();
