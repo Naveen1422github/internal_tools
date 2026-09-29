@@ -1,7 +1,8 @@
 import type { DB } from "../db.js";
 import { estimateTokens } from "../db.js";
 import type { EntryType, Agent, RefInput } from "./add.js";
-import { insertEntryRow, insertRefs } from "../entry-write.js";
+import { insertEntryRow, insertRefs, ownerOf } from "../entry-write.js";
+import { liveEntry, hasUlidPrimaryKey } from "../schema.js";
 
 // ------------------------------------------------------------
 // Public types
@@ -78,6 +79,7 @@ function selectEntries(db: DB, args: RollupArgs): RawEntryRow[] {
          FROM entries
          WHERE task_id = ?
            AND deprecated = 0
+           AND ${liveEntry(db, "entries")}
            AND type != 'rollup'
          ORDER BY created_at ASC`,
       )
@@ -90,6 +92,7 @@ function selectEntries(db: DB, args: RollupArgs): RawEntryRow[] {
        FROM entries
        WHERE created_at >= ?
          AND deprecated = 0
+         AND ${liveEntry(db, "entries")}
          AND type != 'rollup'
        ORDER BY created_at ASC`,
     )
@@ -179,6 +182,33 @@ function formatRollupBody(group: RollupGroup): { summary: string; description: s
 }
 
 // ------------------------------------------------------------
+// deprecateOriginals
+//
+// Marks a group's originals deprecated. At 0006 E-numbers are not unique
+// (E-648), so each number is resolved to its owner (lowest live ulid, the same
+// row the rollup's `entry` refs resolve to) and updated by ulid (ruling F3).
+// Before 0006, id is unique and the update stays by id.
+// ------------------------------------------------------------
+const DEPRECATE_CHUNK_SIZE = 900; // each row uses 1 param
+
+function deprecateOriginals(db: DB, entryIds: number[]): void {
+  if (hasUlidPrimaryKey(db)) {
+    const ulids = [...new Set(entryIds.map((id) => ownerOf(db, id)?.ulid).filter((u): u is string => !!u))];
+    for (let i = 0; i < ulids.length; i += DEPRECATE_CHUNK_SIZE) {
+      const chunk = ulids.slice(i, i + DEPRECATE_CHUNK_SIZE);
+      const placeholders = chunk.map(() => "?").join(", ");
+      db.prepare(`UPDATE entries SET deprecated = 1 WHERE ulid IN (${placeholders})`).run(...chunk);
+    }
+    return;
+  }
+  for (let i = 0; i < entryIds.length; i += DEPRECATE_CHUNK_SIZE) {
+    const chunk = entryIds.slice(i, i + DEPRECATE_CHUNK_SIZE);
+    const placeholders = chunk.map(() => "?").join(", ");
+    db.prepare(`UPDATE entries SET deprecated = 1 WHERE id IN (${placeholders})`).run(...chunk);
+  }
+}
+
+// ------------------------------------------------------------
 // Main entry point
 // ------------------------------------------------------------
 export function rollup(db: DB, args: RollupArgs): RollupResult {
@@ -243,12 +273,7 @@ export function rollup(db: DB, args: RollupArgs): RollupResult {
     insertRefs(db, owner, group.entry_ids.map((id) => ({ ref_type: "entry" as const, ref_value: String(id) })));
 
     // 2. Batch deprecate original entries
-    const DEPRECATE_CHUNK_SIZE = 900; // each row uses 1 param
-    for (let i = 0; i < group.entry_ids.length; i += DEPRECATE_CHUNK_SIZE) {
-      const chunk = group.entry_ids.slice(i, i + DEPRECATE_CHUNK_SIZE);
-      const placeholders = chunk.map(() => "?").join(", ");
-      db.prepare(`UPDATE entries SET deprecated = 1 WHERE id IN (${placeholders})`).run(...chunk);
-    }
+    deprecateOriginals(db, group.entry_ids);
 
     return newId;
   });
@@ -312,6 +337,7 @@ function selectArchiveEntries(db: DB, args: ArchiveArgs): RawEntryRow[] {
      FROM entries
      WHERE created_at < ?
        AND deprecated = 0
+       AND ${liveEntry(db, "entries")}
        AND status = 'active'
        AND category = 'Activity'
        AND type NOT IN (${protectedPlaceholders})`;
@@ -383,12 +409,7 @@ export function archive(db: DB, args: ArchiveArgs): RollupResult {
     insertRefs(db, owner, group.entry_ids.map((id) => ({ ref_type: "entry" as const, ref_value: String(id) })));
 
     // Deprecate the originals (they stay searchable with include_deprecated=true).
-    const DEPRECATE_CHUNK_SIZE = 900;
-    for (let i = 0; i < group.entry_ids.length; i += DEPRECATE_CHUNK_SIZE) {
-      const chunk = group.entry_ids.slice(i, i + DEPRECATE_CHUNK_SIZE);
-      const placeholders = chunk.map(() => "?").join(", ");
-      db.prepare(`UPDATE entries SET deprecated = 1 WHERE id IN (${placeholders})`).run(...chunk);
-    }
+    deprecateOriginals(db, group.entry_ids);
 
     return newId;
   });

@@ -1,4 +1,5 @@
 import type { DB } from "../db.js";
+import { liveEntry } from "../schema.js";
 
 // ------------------------------------------------------------
 // Types
@@ -86,6 +87,8 @@ export function getModule(db: DB, slug: string): ModuleCard {
     };
   }
 
+  const live = liveEntry(db, "entries"); // tombstones never appear on the card
+
   const active_tasks = db
     .prepare(
       `
@@ -111,7 +114,7 @@ export function getModule(db: DB, slug: string): ModuleCard {
     .prepare(
       `
     SELECT id, title, summary FROM entries
-    WHERE id IN (SELECT entry_id FROM entry_modules WHERE module = ?)
+    WHERE ulid IN (SELECT entry_ulid FROM entry_modules WHERE module = ?) AND ${live}
       AND category = 'Index' AND deprecated = 0
     ORDER BY created_at DESC LIMIT 5
   `
@@ -122,7 +125,7 @@ export function getModule(db: DB, slug: string): ModuleCard {
     .prepare(
       `
     SELECT id, title, summary FROM entries
-    WHERE id IN (SELECT entry_id FROM entry_modules WHERE module = ?)
+    WHERE ulid IN (SELECT entry_ulid FROM entry_modules WHERE module = ?) AND ${live}
       AND type = 'decision' AND deprecated = 0
     ORDER BY created_at DESC LIMIT 5
   `
@@ -133,7 +136,7 @@ export function getModule(db: DB, slug: string): ModuleCard {
     .prepare(
       `
     SELECT id, summary FROM entries
-    WHERE id IN (SELECT entry_id FROM entry_modules WHERE module = ?)
+    WHERE ulid IN (SELECT entry_ulid FROM entry_modules WHERE module = ?) AND ${live}
       AND type = 'gotcha' AND deprecated = 0
     ORDER BY created_at DESC LIMIT 5
   `
@@ -144,7 +147,7 @@ export function getModule(db: DB, slug: string): ModuleCard {
     .prepare(
       `
     SELECT id, title, summary, agent, created_at FROM entries
-    WHERE id IN (SELECT entry_id FROM entry_modules WHERE module = ?)
+    WHERE ulid IN (SELECT entry_ulid FROM entry_modules WHERE module = ?) AND ${live}
       AND type = 'handoff' AND deprecated = 0
     ORDER BY created_at DESC LIMIT 3
   `

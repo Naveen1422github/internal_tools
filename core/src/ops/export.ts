@@ -1,4 +1,5 @@
 import type { DB } from "../db.js";
+import { liveEntry } from "../schema.js";
 import type { EntryType } from "./add.js";
 
 export interface ExportArgs {
@@ -17,6 +18,7 @@ export interface ExportResult {
 }
 
 interface ExportEntryRow {
+  ulid: string;
   id: number;
   type: EntryType;
   kind: string;
@@ -34,17 +36,6 @@ interface ExportEntryRow {
   deprecated: number;
   created_at: string;
   updated_at: string;
-}
-
-interface ModuleRow {
-  entry_id: number;
-  module: string;
-}
-
-interface RefRow {
-  entry_id: number;
-  ref_type: string;
-  ref_value: string;
 }
 
 function parseSince(since: string): string {
@@ -161,9 +152,11 @@ export function exportEntries(db: DB, args: ExportArgs): ExportResult {
     params.push(parseSince(args.since));
   }
 
+  where.push(liveEntry(db, "entries")); // tombstones are never exported
+
   const sql = `
     SELECT
-      id, type, kind, title, summary, description, status, agent, module, task_id,
+      ulid, id, type, kind, title, summary, description, status, agent, module, task_id,
       category, superseded_by, tokens_estimate, rollup_of_task, deprecated, created_at, updated_at
     FROM entries
     ${where.length ? "WHERE " + where.join(" AND ") : ""}
@@ -171,40 +164,38 @@ export function exportEntries(db: DB, args: ExportArgs): ExportResult {
   `;
   const rows = db.prepare(sql).all(...params) as ExportEntryRow[];
 
-  const ids = rows.map((r) => r.id);
-  const refsByEntryId = new Map<number, Array<{ ref_type: string; ref_value: string }>>();
-  const modulesByEntryId = new Map<number, string[]>();
-  if (ids.length > 0) {
-    const placeholders = ids.map(() => "?").join(",");
+  const ulids = rows.map((r) => r.ulid);
+  const refsByUlid = new Map<string, Array<{ ref_type: string; ref_value: string }>>();
+  const modulesByUlid = new Map<string, string[]>();
+  if (ulids.length > 0) {
+    const placeholders = ulids.map(() => "?").join(",");
     const refRows = db
       .prepare(
-        `SELECT entry_id, ref_type, ref_value FROM refs WHERE entry_id IN (${placeholders}) ORDER BY entry_id ASC, ref_type ASC, ref_value ASC`,
+        `SELECT entry_ulid, ref_type, ref_value FROM refs WHERE entry_ulid IN (${placeholders}) ORDER BY entry_ulid ASC, ref_type ASC, ref_value ASC`,
       )
-      .all(...ids) as RefRow[];
-
+      .all(...ulids) as Array<{ entry_ulid: string; ref_type: string; ref_value: string }>;
     for (const rr of refRows) {
-      const list = refsByEntryId.get(rr.entry_id) ?? [];
+      const list = refsByUlid.get(rr.entry_ulid) ?? [];
       list.push({ ref_type: rr.ref_type, ref_value: rr.ref_value });
-      refsByEntryId.set(rr.entry_id, list);
+      refsByUlid.set(rr.entry_ulid, list);
     }
 
     const moduleRows = db
       .prepare(
-        `SELECT entry_id, module FROM entry_modules WHERE entry_id IN (${placeholders}) ORDER BY entry_id ASC, is_primary DESC, module ASC`,
+        `SELECT entry_ulid, module FROM entry_modules WHERE entry_ulid IN (${placeholders}) ORDER BY entry_ulid ASC, is_primary DESC, module ASC`,
       )
-      .all(...ids) as ModuleRow[];
-
+      .all(...ulids) as Array<{ entry_ulid: string; module: string }>;
     for (const mr of moduleRows) {
-      const list = modulesByEntryId.get(mr.entry_id) ?? [];
+      const list = modulesByUlid.get(mr.entry_ulid) ?? [];
       list.push(mr.module);
-      modulesByEntryId.set(mr.entry_id, list);
+      modulesByUlid.set(mr.entry_ulid, list);
     }
   }
 
   const entries = rows.map((r) => ({
     ...r,
-    modules: modulesByEntryId.get(r.id) ?? [],
-    refs: refsByEntryId.get(r.id) ?? [],
+    modules: modulesByUlid.get(r.ulid) ?? [],
+    refs: refsByUlid.get(r.ulid) ?? [],
   }));
 
   const exported_at = new Date().toISOString();

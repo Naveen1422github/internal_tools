@@ -1,4 +1,5 @@
 import type { DB } from "../db.js";
+import { liveEntry } from "../schema.js";
 import type { Agent } from "./add.js";
 
 // ------------------------------------------------------------
@@ -231,7 +232,7 @@ export function getTask(db: DB, id: string): TaskWithEntries {
       `
     SELECT id, type, title, summary, created_at
     FROM entries
-    WHERE task_id = ? AND deprecated = 0
+    WHERE task_id = ? AND deprecated = 0 AND ${liveEntry(db, "entries")}
     ORDER BY created_at DESC
     LIMIT 10
   `
