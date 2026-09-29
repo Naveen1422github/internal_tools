@@ -1,4 +1,5 @@
 import type { DB } from "../db.js";
+import { parseEntryRef } from "../ulid.js";
 
 export interface DoctorCheck {
   name: string; // short id, e.g. "schema.tables"
@@ -85,6 +86,33 @@ const EXPECTED_TRIGGERS_0005 = new Set([
   "trg_entries_revision",
 ]);
 
+// Migration 0006 rebuilds entries/refs/entry_modules/tasks/modules and the FTS
+// table, so its expected objects are a complete list, not a delta.
+const EXPECTED_TABLES_0006 = new Set([
+  "entries", "refs", "tasks", "modules", "dispatches", "entry_modules", "schema_migrations",
+  "entries_fts", "entries_fts_config", "entries_fts_content", "entries_fts_data",
+  "entries_fts_docsize", "entries_fts_idx", "sqlite_sequence", "entry_revisions", "local_counters",
+]);
+
+const EXPECTED_INDEXES_0006 = new Set([
+  "idx_entries_id", "idx_entries_type", "idx_entries_module", "idx_entries_task",
+  "idx_entries_created", "idx_entries_kind", "idx_entries_status", "idx_entries_deprecated",
+  "idx_entries_category", "idx_entries_superseded",
+  "idx_refs_value", "idx_refs_type", "idx_refs_target_ulid",
+  "idx_entry_modules_module",
+  "idx_tasks_status", "idx_tasks_module", "idx_tasks_assignee",
+  "idx_dispatches_agent", "idx_dispatches_module", "idx_dispatches_created", "idx_dispatches_entry",
+  "idx_entry_revisions_entry",
+]);
+
+const EXPECTED_TRIGGERS_0006 = new Set([
+  "trg_entries_updated_at", "trg_entries_fts_ai", "trg_entries_fts_ad", "trg_entries_fts_au",
+  "trg_entries_ulid_immutable", "trg_entries_fill_superseded_ulid", "trg_entries_revision",
+  "trg_refs_fill_target_ulid", "trg_refs_cascade_delete", "trg_entry_modules_cascade_delete",
+  "trg_tasks_updated_at", "trg_modules_updated_at",
+  "trg_dispatches_updated_at", "trg_dispatches_updated_at_insert",
+]);
+
 function union(a: Set<string>, b: Set<string>): Set<string> {
   return new Set([...a, ...b]);
 }
@@ -122,19 +150,26 @@ function schemaCheck(
 export function doctor(db: DB): DoctorResult {
   const checks: DoctorCheck[] = [];
 
-  // Migration-aware: a DB that hasn't applied staged 0005 yet must never see its
-  // objects reported as missing (or its data checks throw on not-yet-existing
-  // columns). Guarded: schema_migrations itself may not exist on a very old DB.
-  let has0005 = false;
-  try {
-    has0005 = !!db.prepare(`SELECT 1 FROM schema_migrations WHERE version = '0005_ulid_expand'`).get();
-  } catch {
-    has0005 = false;
-  }
+  // Migration-aware: a DB that hasn't applied staged 0005/0006 yet must never
+  // see their objects reported as missing (or its data checks throw on
+  // not-yet-existing columns). Guarded: schema_migrations itself may not exist
+  // on a very old DB.
+  const applied = (version: string): boolean => {
+    try {
+      return !!db.prepare(`SELECT 1 FROM schema_migrations WHERE version = ?`).get(version);
+    } catch {
+      return false;
+    }
+  };
+  const has0005 = applied("0005_ulid_expand");
+  const has0006 = applied("0006_ulid_contract");
 
-  const expectedTables = has0005 ? union(EXPECTED_TABLES, EXPECTED_TABLES_0005) : EXPECTED_TABLES;
-  const expectedIndexes = has0005 ? union(EXPECTED_INDEXES, EXPECTED_INDEXES_0005) : EXPECTED_INDEXES;
-  const expectedTriggers = has0005 ? union(EXPECTED_TRIGGERS, EXPECTED_TRIGGERS_0005) : EXPECTED_TRIGGERS;
+  const expectedTables = has0006 ? EXPECTED_TABLES_0006
+    : has0005 ? union(EXPECTED_TABLES, EXPECTED_TABLES_0005) : EXPECTED_TABLES;
+  const expectedIndexes = has0006 ? EXPECTED_INDEXES_0006
+    : has0005 ? union(EXPECTED_INDEXES, EXPECTED_INDEXES_0005) : EXPECTED_INDEXES;
+  const expectedTriggers = has0006 ? EXPECTED_TRIGGERS_0006
+    : has0005 ? union(EXPECTED_TRIGGERS, EXPECTED_TRIGGERS_0005) : EXPECTED_TRIGGERS;
 
   // 1) schema.tables
   const tableRows = db
@@ -205,18 +240,23 @@ export function doctor(db: DB): DoctorResult {
         : undefined,
   });
 
-  // 5) data.orphan_refs.entry
-  const orphanEntryRefs = db
-    .prepare(
-      `
-        SELECT entry_id, ref_value
-        FROM refs
-        WHERE ref_type = 'entry'
-          AND CAST(ref_value AS INTEGER) NOT IN (SELECT id FROM entries)
-        ORDER BY entry_id ASC, ref_value ASC
-      `,
-    )
-    .all() as Array<{ entry_id: number; ref_value: string }>;
+  // 5) data.orphan_refs.entry: parsed with the same rules as the link triggers.
+  //    The old SQL used CAST(ref_value AS INTEGER), which is 0 for "E-214" and
+  //    "#116", so every non-numeric link was reported as an orphan (144 false
+  //    positives on the real DB, 2026-09-29). At 0006 a tombstoned target is
+  //    not a live target.
+  const liveIds = new Set(
+    (db.prepare(`SELECT id FROM entries WHERE id IS NOT NULL${has0006 ? " AND deleted_at IS NULL" : ""}`).all() as Array<{ id: number }>).map((r) => r.id),
+  );
+  // refs.entry_id is legacy/nullable from 0006 on; the owner is entry_ulid.
+  const ownerId = has0005 ? `(SELECT e.id FROM entries e WHERE e.ulid = refs.entry_ulid)` : `entry_id`;
+  const orphanEntryRefs = (
+    db.prepare(`SELECT ${ownerId} AS entry_id, ref_value FROM refs WHERE ref_type = 'entry' ORDER BY 1 ASC, ref_value ASC`)
+      .all() as Array<{ entry_id: number | null; ref_value: string }>
+  ).filter((r) => {
+    const target = parseEntryRef(r.ref_value);
+    return target === null || !liveIds.has(target);
+  });
   checks.push({
     name: "data.orphan_refs.entry",
     severity: orphanEntryRefs.length > 0 ? "warn" : "ok",
@@ -226,10 +266,7 @@ export function doctor(db: DB): DoctorResult {
         : "no orphan entry refs",
     items:
       orphanEntryRefs.length > 0
-        ? orphanEntryRefs.map((r) => {
-            const missingId = Number.parseInt(r.ref_value, 10);
-            return `${toEntryId(r.entry_id)} -> ${toEntryId(Number.isFinite(missingId) ? missingId : 0)}`;
-          })
+        ? orphanEntryRefs.map((r) => `${toEntryId(r.entry_id ?? 0)} -> ${r.ref_value}`)
         : undefined,
   });
 
@@ -303,17 +340,10 @@ export function doctor(db: DB): DoctorResult {
   });
 
   // 9) data.entries_without_module — non-deprecated entries with no entry_modules row
-  const entriesWithoutModule = db
-    .prepare(
-      `
-        SELECT id
-        FROM entries
-        WHERE deprecated = 0
-          AND id NOT IN (SELECT entry_id FROM entry_modules)
-        ORDER BY id ASC
-      `,
-    )
-    .all() as Array<{ id: number }>;
+  const withoutModuleSql = has0005
+    ? `SELECT id FROM entries WHERE deprecated = 0${has0006 ? " AND deleted_at IS NULL" : ""} AND ulid NOT IN (SELECT entry_ulid FROM entry_modules WHERE entry_ulid IS NOT NULL) ORDER BY id`
+    : `SELECT id FROM entries WHERE deprecated = 0 AND id NOT IN (SELECT entry_id FROM entry_modules) ORDER BY id`;
+  const entriesWithoutModule = db.prepare(withoutModuleSql).all() as Array<{ id: number }>;
   checks.push({
     name: "data.entries_without_module",
     severity: entriesWithoutModule.length > 0 ? "warn" : "ok",
@@ -371,6 +401,41 @@ export function doctor(db: DB): DoctorResult {
       detail: "skipped: migration 0005 not applied",
     });
   }
+
+  if (has0006) {
+    const dupIds = db
+      .prepare(`SELECT id, COUNT(*) AS n FROM entries WHERE id IS NOT NULL GROUP BY id HAVING n > 1 ORDER BY id`)
+      .all() as Array<{ id: number; n: number }>;
+    checks.push({
+      name: "data.duplicate_entry_ids",
+      severity: dupIds.length > 0 ? "warn" : "ok",
+      detail: dupIds.length > 0 ? `${dupIds.length} E-number(s) used by more than one entry` : "every E-number is unique",
+      items: dupIds.length > 0 ? dupIds.map((r) => `${toEntryId(r.id)} x${r.n}`) : undefined,
+    });
+    const tomb = (db.prepare(`SELECT COUNT(*) AS c FROM entries WHERE deleted_at IS NOT NULL`).get() as { c: number }).c;
+    checks.push({ name: "data.tombstones", severity: "ok", detail: `${tomb} tombstoned entr${tomb === 1 ? "y" : "ies"}` });
+  }
+
+  // fts.integrity: row-count parity cannot see a corrupted index (E-684).
+  // The strict form (rank = 1) also compares against the content table.
+  // Several sessions + the REST server share the file: a lock is not corruption.
+  let ftsIntegrity = "ok";
+  let ftsBusy = false;
+  try {
+    db.exec(`INSERT INTO entries_fts(entries_fts, rank) VALUES('integrity-check', 1)`);
+  } catch (e) {
+    ftsIntegrity = (e as Error).message;
+    const code = (e as { code?: string }).code;
+    ftsBusy = code === "SQLITE_BUSY" || code === "SQLITE_LOCKED";
+  }
+  checks.push({
+    name: "fts.integrity",
+    severity: ftsIntegrity === "ok" ? "ok" : ftsBusy ? "warn" : "error",
+    detail:
+      ftsIntegrity === "ok" ? "fts index consistent"
+        : ftsBusy ? `fts integrity-check skipped: database busy (${ftsIntegrity}); rerun doctor`
+        : `fts integrity-check failed: ${ftsIntegrity}`,
+  });
 
   // 12) fts.count_parity
   const entryCount = (db.prepare("SELECT COUNT(*) AS c FROM entries").get() as { c: number }).c;
