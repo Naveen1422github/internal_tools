@@ -16,9 +16,9 @@ function stable(obj) {
 
 before(async () => {
   srv = await startTestServer();
-  seedEntry(srv.db, { type: 'decision', category: 'Reference', title: 'Alpha decision', module: 'demo' });
-  seedEntry(srv.db, { type: 'changelog', category: 'Activity', title: 'Beta change', module: 'demo' });
-  seedEntry(srv.db, { type: 'gotcha', category: 'Reference', title: 'Gamma gotcha', module: 'other' });
+  await seedEntry(srv.db, { type: 'decision', category: 'Reference', title: 'Alpha decision', module: 'demo' });
+  await seedEntry(srv.db, { type: 'changelog', category: 'Activity', title: 'Beta change', module: 'demo' });
+  await seedEntry(srv.db, { type: 'gotcha', category: 'Reference', title: 'Gamma gotcha', module: 'other' });
 });
 after(() => srv.close());
 

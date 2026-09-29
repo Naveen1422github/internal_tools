@@ -5,8 +5,8 @@ import { startTestServer, seedEntry } from './helpers/server.mjs';
 let srv, oldId, newId;
 before(async () => {
   srv = await startTestServer();
-  oldId = seedEntry(srv.db, { title: 'old' });
-  newId = seedEntry(srv.db, { title: 'new' });
+  oldId = await seedEntry(srv.db, { title: 'old' });
+  newId = await seedEntry(srv.db, { title: 'new' });
 });
 after(() => srv.close());
 

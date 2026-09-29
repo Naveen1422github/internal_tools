@@ -61,7 +61,7 @@ test('2. Model returns answer envelope -> endpoint returns { answer }', async ()
 test('3. Model returns search then answer -> server runs FTS search and second call sees results', async () => {
   process.env.GROQ_API_KEY = 'mock-key';
 
-  const entryId = seedEntry(srv.db, {
+  const entryId = await seedEntry(srv.db, {
     category: 'Reference',
     type: 'decision',
     title: 'Testing FTS',
