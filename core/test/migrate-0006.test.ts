@@ -93,6 +93,28 @@ test('FTS own copy survives a NULL->text edit (E-684)', () => {
   } finally { cleanup(); }
 });
 
+// Fix round 1: the FTS triggers find the row via the indexed ulid column
+// (MATCH ulid:"...") and then compare ulid exactly. A hard delete and an edit
+// must each touch exactly that entry's FTS row.
+test("FTS delete/update triggers target exactly the entry's own row", () => {
+  const { db, cleanup } = tempDb();
+  try {
+    const { a, b, c } = seed0005(db); migrate(db);
+    const ftsCount = () => (db.prepare(`SELECT COUNT(*) n FROM entries_fts`).get() as any).n;
+    const ulidOf = (id: number) => (db.prepare(`SELECT ulid FROM entries WHERE id = ?`).get(id) as any).ulid;
+    const n0 = ftsCount();
+    db.prepare(`UPDATE entries SET title = 'renamed' WHERE id = ?`).run(b);
+    assert.equal(ftsCount(), n0);
+    assert.deepEqual(db.prepare(`SELECT title FROM entries_fts WHERE ulid = ?`).all(ulidOf(b)), [{ title: 'renamed' }]);
+    const gone = ulidOf(c);
+    db.prepare(`DELETE FROM entries WHERE id = ?`).run(c);
+    assert.equal(ftsCount(), n0 - 1);
+    assert.deepEqual(db.prepare(`SELECT ulid FROM entries_fts WHERE ulid = ?`).all(gone), []);
+    assert.deepEqual(db.prepare(`SELECT title FROM entries_fts WHERE ulid = ?`).all(ulidOf(a)), [{ title: 'alpha' }]);
+    fts(db);
+  } finally { cleanup(); }
+});
+
 test('entries.ulid is immutable', () => {
   const { db, cleanup } = tempDb();
   try {
@@ -123,7 +145,8 @@ test('preflight rejects duplicate and malformed ulids and changes nothing', () =
 
 // F15 (Review Focus #3): a refs / entry_modules row whose owning entry is gone.
 // 0005's cascade triggers normally remove these, so they only exist when an
-// entry was deleted by a path that bypassed them. The pre-flight must list the
+// entry was deleted by a path that bypassed them. Two shapes: the owner key is
+// NULL (never resolved), or it is set to a ulid no entry has (stale). The pre-flight must list the
 // orphans and roll back its own repairs (here: a NULL ulid it would have
 // assigned, and a NULL author it would have stamped), leaving the DB unchanged.
 test('preflight rejects a ref / module row whose owning entry is gone and changes nothing', () => {
@@ -135,6 +158,11 @@ test('preflight rejects a ref / module row whose owning entry is gone and change
     // Orphans: owner E-00999 never existed, so the 0005 fill triggers leave entry_ulid NULL.
     db.prepare(`INSERT INTO refs (entry_id, ref_type, ref_value) VALUES (999, 'file', 'orphan.ts')`).run();
     db.prepare(`INSERT INTO entry_modules (entry_id, module, is_primary) VALUES (999, 'm1', 1)`).run();
+    // Stale orphans: owner key set, but no entry has that ulid (E-00998 was hard-deleted
+    // by a path that skipped the cascade).
+    const stale = newUlid();
+    db.prepare(`INSERT INTO refs (entry_id, entry_ulid, ref_type, ref_value) VALUES (998, ?, 'file', 'stale.ts')`).run(stale);
+    db.prepare(`INSERT INTO entry_modules (entry_id, entry_ulid, module, is_primary) VALUES (998, ?, 'm2', 1)`).run(stale);
     const all = () => ({
       entries: db.prepare(`SELECT id, ulid, author, superseded_by_ulid, updated_at FROM entries ORDER BY id`).all(),
       refs: db.prepare(`SELECT entry_id, entry_ulid, ref_type, ref_value, target_ulid FROM refs ORDER BY 1, 3, 4`).all(),
@@ -147,7 +175,9 @@ test('preflight rejects a ref / module row whose owning entry is gone and change
     assert.throws(() => migrate(db), (e: any) =>
       e.name === 'PreflightError' &&
       e.problems.some((p: string) => p.startsWith('refs row') && p.includes('E-00999') && p.includes('orphan.ts')) &&
-      e.problems.some((p: string) => p.startsWith('entry_modules row') && p.includes('E-00999') && p.includes('m1')));
+      e.problems.some((p: string) => p.startsWith('entry_modules row') && p.includes('E-00999') && p.includes('m1')) &&
+      e.problems.some((p: string) => p.startsWith('refs row') && p.includes('E-00998') && p.includes('stale.ts') && p.includes(stale)) &&
+      e.problems.some((p: string) => p.startsWith('entry_modules row') && p.includes('E-00998') && p.includes('m2') && p.includes(stale)));
     assert.deepEqual(all(), before);
     assert.equal(db.prepare(`SELECT 1 FROM sqlite_master WHERE name = 'local_counters'`).get(), undefined);
     fts(db);
@@ -198,10 +228,18 @@ test('perf at 10k entries: edit < 100 ms, search < 100 ms (E-674)', () => {
     let t = process.hrtime.bigint();
     for (let k = 0; k < 10; k++) edit.run(target);
     const editMs = Number(process.hrtime.bigint() - t) / 10 / 1e6;
-    const q = db.prepare(`SELECT e.id FROM entries_fts JOIN entries e ON e.ulid = entries_fts.ulid
-      WHERE entries_fts MATCH ? AND e.deprecated = 0 AND e.deleted_at IS NULL ORDER BY bm25(entries_fts) LIMIT 10`);
+    // Search shape for Task 5 (controller ruling, fix round 1): rank inside FTS
+    // first with a bounded over-fetch (2x the page, to absorb tombstone/deprecated
+    // filtering), THEN join entries. Joining all matches before the LIMIT reads
+    // every matching row twice (~250 ms here, since this query matches all 10k).
+    const q = db.prepare(`SELECT e.id
+      FROM (SELECT ulid, rank FROM entries_fts WHERE entries_fts MATCH ? ORDER BY rank LIMIT ?) f
+      JOIN entries e ON e.ulid = f.ulid
+      WHERE e.deprecated = 0 AND e.deleted_at IS NULL
+      ORDER BY f.rank LIMIT ?`);
+    assert.equal(q.all('relay* AND merge*', 20, 10).length, 10);
     t = process.hrtime.bigint();
-    for (let k = 0; k < 10; k++) q.all('relay* AND merge*');
+    for (let k = 0; k < 10; k++) q.all('relay* AND merge*', 20, 10);
     const searchMs = Number(process.hrtime.bigint() - t) / 10 / 1e6;
     assert.ok(editMs < 100, `edit took ${editMs.toFixed(1)} ms`);
     assert.ok(searchMs < 100, `search took ${searchMs.toFixed(1)} ms`);

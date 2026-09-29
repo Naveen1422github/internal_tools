@@ -202,11 +202,16 @@ ALTER TABLE modules_new RENAME TO modules;
 
 -- ------------------------------------------------------------
 -- 7. FTS with its own copy of the text, keyed by ulid. Local only, never
---    synced. Deletes scan by the UNINDEXED ulid column; the 10k-row timing
---    test in migrate-0006.test.ts holds this to the E-674 budget.
+--    synced. ulid is an INDEXED column so the delete/update triggers find
+--    the FTS row through the FTS index (a MATCH on ulid:"...") instead of
+--    scanning every row: an UNINDEXED ulid made each edit a full scan
+--    (~100 ms at 10k rows, over the E-674 budget). The MATCH only narrows
+--    the candidates; the triggers still compare ulid exactly, so a
+--    tokenizer/stemmer quirk can never delete the wrong row. The 10k-row
+--    timing test in migrate-0006.test.ts holds this to the E-674 budget.
 -- ------------------------------------------------------------
 CREATE VIRTUAL TABLE entries_fts USING fts5(
-  ulid UNINDEXED,
+  ulid,
   title,
   summary,
   description,
@@ -240,13 +245,19 @@ END;
 CREATE TRIGGER trg_entries_fts_ad
 AFTER DELETE ON entries
 BEGIN
-  DELETE FROM entries_fts WHERE ulid = old.ulid;
+  DELETE FROM entries_fts
+   WHERE rowid IN (SELECT rowid FROM entries_fts
+                    WHERE entries_fts MATCH 'ulid:"' || replace(old.ulid, '"', '""') || '"')
+     AND ulid = old.ulid;
 END;
 
 CREATE TRIGGER trg_entries_fts_au
 AFTER UPDATE OF title, summary, description ON entries
 BEGIN
-  DELETE FROM entries_fts WHERE ulid = old.ulid;
+  DELETE FROM entries_fts
+   WHERE rowid IN (SELECT rowid FROM entries_fts
+                    WHERE entries_fts MATCH 'ulid:"' || replace(old.ulid, '"', '""') || '"')
+     AND ulid = old.ulid;
   INSERT INTO entries_fts (ulid, title, summary, description)
   VALUES (new.ulid, new.title, new.summary, new.description);
 END;
