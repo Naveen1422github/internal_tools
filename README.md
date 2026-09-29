@@ -1,70 +1,126 @@
-# Internal Tools
+# collab-mcp
 
-Local web dashboard for collaboration management. Runs on `127.0.0.1:7473`.
+A small, **local**, SQLite-backed [MCP](https://modelcontextprotocol.io) server that gives
+your AI coding agent a knowledge base it keeps across sessions. Capture decisions, gotchas
+and changelogs while you work; next session your agent searches them instead of
+re-deriving everything from the code.
 
-## Features
+No cloud, no account, no telemetry. The data is one SQLite file you own.
 
-- **Collaboration** - Browse and edit the Collab MCP database (entries, tasks, modules) with FTS5 search, doctor, and JSON/Markdown export.
-- **Durable Memory** - Source of truth for agent handoffs, decisions, and project "gotchas".
-- **Lightweight** - Zero native dependencies, fast startup, and minimal footprint.
+Works with any MCP-capable agent — Claude Code, Codex, agy, Cursor, Cline, Windsurf, Zed.
+You need one of them, not all of them.
 
-## Run
+## Requirements
+
+Node.js ≥ 20.9. That's it.
+
+## Quick start
 
 ```bash
-cd internal-tools
+git clone <this repo>
+cd collab-mcp
 npm install
-npm run dev          # nodemon, auto-restart on server changes
-# or: npm start
+npm run build
 ```
 
-Open `http://127.0.0.1:7473/`.
+Then open your agent **in the project where you want the knowledge base**, and paste the
+prompt from [`SETUP-PROMPT.md`](./SETUP-PROMPT.md) with this folder's path filled in. It
+registers the MCP server, merges the conventions into your `CLAUDE.md` / `AGENTS.md`,
+installs the workflow skill, and verifies the connection — then tells you what it changed.
+
+To update later: `git pull && npm install && npm run build`.
+
+## Where your data lives — read this once
+
+The server picks its database in this order:
+
+1. an explicit path passed in code
+2. **`$COLLAB_DB_PATH`** ← set this
+3. `./collab.db`, relative to the current working directory
+
+**Set `COLLAB_DB_PATH` explicitly for every project.** If you don't, the fallback follows
+whatever directory your agent happened to start in, and you can end up with a stray empty
+database — or, if you point several projects at one install without it, at knowledge from
+an unrelated project. An earlier version defaulted to a path *inside the install*, which
+silently merged two projects' knowledge bases for days before anyone noticed. The server
+now prints the file it opened on stderr; if something looks wrong, that line is the answer.
+
+One database per project is the normal setup. Pointing several projects at the same file is
+also fine — just make it a deliberate choice rather than an accident.
+
+## What your agent gets
+
+Twenty-one `collab_*` tools over one FTS5-indexed store. The ones that matter day to day:
+
+- `collab_search` / `collab_get` / `collab_list_recent` — retrieval, filterable by module,
+  type and date
+- `collab_add` — record a `decision`, `gotcha`, `changelog`, `handoff` or `review`
+- `collab_task_*` — lightweight task tracking with assignment and transitions
+- `collab_module_get` — one call that returns a module's active tasks, recent decisions and
+  top gotchas: the "catch me up" primitive
+- `collab_doctor` — integrity and orphan-reference lint
+
+Conventions live in [`AGENTS.md`](./AGENTS.md) and the portable skill in
+[`skills/collab-workflow/`](./skills/collab-workflow/). Both are installed for you by the
+setup prompt.
+
+## Optional: the web UI
+
+A React SPA and REST host ship alongside the MCP server for browsing and editing entries by
+hand. Entirely optional — the MCP server never depends on it.
+
+```bash
+npm run ui:build     # -> ui/dist
+node server/server.js
+```
+
+Open <http://127.0.0.1:7473/>. For hot reload, run `node server/server.js` and
+`cd ui && npm run dev` in parallel, then use <http://localhost:5173/>.
+
+**Localhost-only, and it has no authentication.** Do not expose it to a network.
+
+## Optional: dispatching to Codex
+
+`scripts/codex-dispatch.sh` sends a prompt to Codex and records the result as a collab entry
+automatically. `--review` files it as a review instead of a handoff.
+
+```bash
+bash scripts/codex-dispatch.sh "refactor the parser" --db /path/to/project/collab.db
+```
+
+Always pass `--db`, or the entry follows the same fallback chain described above. The
+script also points Codex's *own* collab MCP server at that database for the duration of
+the run, so tools the agent calls mid-task write to the same place.
 
 ## Layout
 
-npm workspaces monorepo (TypeScript, ESM). Five packages:
+npm workspaces monorepo, TypeScript, ESM.
 
 ```text
-internal-tools/
-├── core/         # @collab-mcp/core — all domain logic (DB + the collab ops)
-│   ├── src/db.ts
-│   └── src/ops/  # add, search, get, task, module, ingest, rollup, doctor,
-│                 #   export, savings, supersede, update, list-recent
-├── mcp/          # @collab-mcp/mcp — thin MCP stdio adapter over core (see its README)
-│   ├── src/server.ts   # registers the mcp__collab__* tools
+collab-mcp/
+├── core/         # @collab-mcp/core — all domain logic (DB + collab ops)
+│   ├── src/db.ts       # connection + migrations + path resolution
+│   └── src/ops/        # add, search, get, task, module, ingest, rollup,
+│                       #   doctor, export, savings, supersede, update
+├── mcp/          # thin MCP stdio adapter over core
+│   ├── src/server.ts   # registers the collab_* tools
 │   ├── migrations/     # 0001–0004 SQL — the schema lives here
-│   └── src/scripts/    # seed, codex-output parser, hook helpers
-├── server/       # @collab-mcp/server — HTTP host: REST API + serves the built UI
-│   └── src/tools/{collab,ai}.ts   # /api/collab/* and /api/ai/* routes
-├── ui/           # React + Vite SPA (Dashboard, Tasks, Modules, Knowledge, Health, AiPanel)
-├── gemini-mcp/   # Gemini skim/locate MCP server (separate; see its README)
-└── scripts/      # bundle.mjs (emits the shareable dist-share/), seed-starter.mjs
+│   └── claude/         # slash commands + session hooks
+├── server/       # REST host; also serves the built UI
+├── ui/           # React + Vite SPA (optional)
+├── scripts/      # codex dispatch, bundle.mjs, seed-starter.mjs
+└── gemini-mcp/   # deprecated, scheduled for removal
 ```
 
-Domain logic lives **only** in `core/src/ops/`; `mcp/` and `server/` are thin adapters
-(MCP stdio and REST) over it. The SQLite store is `mcp/collab.db` (gitignored).
+Domain logic lives **only** in `core/src/ops/`. `mcp/` and `server/` are thin adapters over
+it, which is why the MCP tools and the web UI can never disagree about your data.
 
-## Notes
+## Sharing it
 
-- Localhost-only, no auth.
-- The dashboard and `mcp__collab__*` tools share the same DB via `@collab-mcp/core`
-  (`better-sqlite3`). For automated/agent flows, prefer the MCP tools.
+`npm run bundle` emits `dist-share/collab-mcp.zip` — source, migrations and onboarding docs,
+with the database, `.env` and UI excluded. Useful for handing someone a copy offline;
+cloning this repo is the better path for anyone who wants updates.
 
-## UI (React SPA)
+## License
 
-Two modes:
-
-- **Dev (hot reload):** run the backend and the Vite dev server in parallel.
-  ```bash
-  node server/server.js        # backend on :7473
-  cd ui && npm run dev         # UI on :5173, proxies /api -> :7473
-  ```
-  Open http://localhost:5173/
-
-- **Integrated (single server):** build the UI, then the Node server serves it.
-  ```bash
-  cd ui && npm run build       # -> ui/dist
-  node server/server.js        # serves ui/dist at http://127.0.0.1:7473/
-  ```
-
-The server serves the built UI from `ui/dist`. If it's absent, static routes return
-`503 — UI not built. Run npm run ui:build first.` (there is no legacy dashboard fallback).
+MIT.
