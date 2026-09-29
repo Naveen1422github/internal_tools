@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { getDb, migrate, addEntry } from '@collab-mcp/core';
 
 const dbPath = process.env.COLLAB_DB_PATH ?? join(process.cwd(), 'collab.db');
-const db = getDb(dbPath);
+const db = getDb(dbPath, { create: true });
 migrate(db);
 
 const already = db.prepare("SELECT 1 FROM entries WHERE title = ? LIMIT 1").get('Start here');

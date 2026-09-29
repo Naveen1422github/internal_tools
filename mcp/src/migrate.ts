@@ -7,7 +7,8 @@
  */
 import { getDb, migrate, closeDb } from "@collab-mcp/core";
 
-const db = getDb();
+// The one command allowed to create a new knowledge base (E-689).
+const db = getDb(undefined, { create: true });
 const applied = migrate(db);
 
 if (applied.length === 0) {

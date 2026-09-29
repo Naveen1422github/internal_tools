@@ -9,6 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export async function startTestServer() {
   const tmpFile = path.join(os.tmpdir(), `collab-test-${crypto.randomUUID()}.db`);
   process.env.COLLAB_DB_PATH = tmpFile;
+  process.env.COLLAB_DB_CREATE = '1'; // test DBs are created on purpose
   // dynamic import AFTER env is set so the singleton binds to the temp DB
   const { start } = await import(pathToFileURL(path.join(__dirname, '..', '..', 'server', 'dist', 'server.js')).href);
   const { getDb } = await import('@collab-mcp/core');

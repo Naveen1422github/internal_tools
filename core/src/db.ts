@@ -55,7 +55,29 @@ export function resolveDbPath(explicit?: string): DbPathResolution {
 let _db: DB | null = null;
 let _dbPath: string | null = null;
 
-export function getDb(dbPath?: string): DB {
+export interface GetDbOptions {
+  /** Allow creating the file when it does not exist. Only init paths pass this. */
+  create?: boolean;
+}
+
+/**
+ * Thrown instead of creating a new, empty database (collab E-689). A missing
+ * file almost always means a wrong path (a typo, a late-loaded .env, the wrong
+ * cwd), and a freshly migrated empty DB looks exactly like "all entries gone".
+ */
+export class MissingDatabaseError extends Error {
+  constructor(path: string, source: DbPathSource) {
+    super(
+      `[collab-mcp] no database at ${path} (resolved from ${source}). Refusing to create an empty one.
+` +
+        `[collab-mcp] To create a new knowledge base there, run once: ` +
+        `COLLAB_DB_PATH="${path}" npm --prefix mcp run migrate  (or set COLLAB_DB_CREATE=1).`,
+    );
+    this.name = "MissingDatabaseError";
+  }
+}
+
+export function getDb(dbPath?: string, opts: GetDbOptions = {}): DB {
   if (_db) {
     // The connection is a module-level singleton, so a later caller asking for a
     // DIFFERENT file would silently receive the first one. Refuse instead: a
@@ -71,6 +93,11 @@ export function getDb(dbPath?: string): DB {
 
   const { path, source } = resolveDbPath(dbPath);
 
+  const mayCreate = opts.create === true || process.env.COLLAB_DB_CREATE === "1";
+  if (path !== ":memory:" && !mayCreate && !existsSync(path)) {
+    throw new MissingDatabaseError(path, source);
+  }
+
   // The fallback is safe (per-project) but implicit, so say so out loud.
   // stderr keeps this off the MCP stdio channel.
   if (source === "cwd-fallback") {
@@ -79,6 +106,8 @@ export function getDb(dbPath?: string): DB {
         `[collab-mcp] Set COLLAB_DB_PATH to pin this project to a specific knowledge base.`,
     );
   }
+  // One line per process: which file this process is actually using (E-689).
+  console.error(`[collab-mcp] db: ${path} (${source})`);
 
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
@@ -117,6 +146,10 @@ export function closeDb(): void {
 
 export interface MigrateOptions {
   includeStaged?: boolean;
+  /** Tests only: read migrations from here instead of mcp/migrations. */
+  migrationsDir?: string;
+  /** Tests only: defaults to <migrationsDir>/staged. */
+  stagedDir?: string;
 }
 
 interface Pending {
@@ -158,8 +191,10 @@ function pendingMigrations(db: DB, upTo: string | undefined, opts: MigrateOption
   const applied = new Set(
     db.prepare("SELECT version FROM schema_migrations").all().map((r: any) => r.version as string),
   );
-  const core = listSql(MIGRATIONS_DIR);
-  const staged = opts.includeStaged ? listSql(STAGED_DIR) : [];
+  const migrationsDir = opts.migrationsDir ?? MIGRATIONS_DIR;
+  const stagedDir = opts.stagedDir ?? (opts.migrationsDir ? join(opts.migrationsDir, "staged") : STAGED_DIR);
+  const core = listSql(migrationsDir);
+  const staged = opts.includeStaged ? listSql(stagedDir) : [];
   for (const s of staged) {
     const dup = core.find((c) => c.version === s.version);
     if (dup) throw new DuplicateMigrationError(s.version, dup.file, s.file);

@@ -76,8 +76,10 @@ codex mcp add collab --env COLLAB_DB_PATH=<workspace>/collab.db -- node <abs>/mc
 
 The default database lives **inside the package**, so if you don't set `COLLAB_DB_PATH`,
 every workspace shares one DB. Point `COLLAB_DB_PATH` at a per-workspace file (e.g.
-`<workspace>/collab.db`) to keep each project's knowledge separate. The DB is created and
-migrated automatically on first run.
+`<workspace>/collab.db`) to keep each project's knowledge separate. Create it once before first use:
+`COLLAB_DB_PATH=<workspace>/collab.db npm --prefix <abs>/mcp run migrate`.
+The servers refuse to open a path that does not exist, because a typo in the path
+must never look like an empty knowledge base (collab E-689).
 
 ## Optional: starter content
 

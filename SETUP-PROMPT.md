@@ -34,9 +34,13 @@ edited. If you are unsure which host you are (Claude Code / Codex / agy), ask me
 
 2. PICK A DATABASE PATH
    Use this workspace's own DB: COLLAB_DB_PATH = "<absolute path of this workspace>/collab.db".
-   (This keeps each project's knowledge separate. The DB is created automatically.)
+   (This keeps each project's knowledge separate. The servers never create one on their own.)
 
-3. CONNECT THE MCP SERVER for whichever host you are — create config files if missing,
+3. CREATE THE DATABASE (once)
+   Create the database once (the servers never create one on their own):
+   COLLAB_DB_PATH="<dbpath>" npm --prefix ${COLLAB_MCP_DIR}/mcp run migrate
+
+4. CONNECT THE MCP SERVER for whichever host you are — create config files if missing,
    and NEVER remove existing servers/entries:
    - Claude Code → merge into this project's `.mcp.json` under `mcpServers`:
        "collab": { "command": "node",
@@ -53,7 +57,7 @@ edited. If you are unsure which host you are (Claude Code / Codex / agy), ask me
      server path, env `COLLAB_DB_PATH`). If you know your config file's location, edit it;
      if you're unsure where it lives, ask me and I'll point you to it — do not guess.
 
-4. ADD THE CONVENTIONS — without clobbering anything
+5. ADD THE CONVENTIONS — without clobbering anything
    Find this workspace's agent context file: `CLAUDE.md` (Claude Code) or `AGENTS.md`
    (Codex/agy). If neither exists, create `AGENTS.md`. If the markers below are already
    present, do nothing. Otherwise APPEND this block (keep all existing content):
@@ -67,13 +71,13 @@ edited. If you are unsure which host you are (Claude Code / Codex / agy), ask me
    - Keep summaries <= 200 chars; put detail in the description. Tag entries with `module`.
    <!-- collab-mcp:end -->
 
-5. INSTALL THE WORKFLOW SKILL (recommended)
+6. INSTALL THE WORKFLOW SKILL (recommended)
    Copy "${COLLAB_MCP_DIR}/skills/collab-workflow/" into this host's skills directory:
    - Claude Code → `.claude/skills/collab-workflow/`
    - Codex → `.codex/skills/collab-workflow/`
    - agy → `~/.gemini/antigravity-cli/skills/collab-workflow/`
 
-6. VERIFY
+7. VERIFY
    The MCP server loads when the host starts, so I may need to restart you. After a
    reload, call `collab_search` with query "start" and show me the first result's title.
    If you cannot see a `collab_search` tool yet, tell me to restart you and then retry.
