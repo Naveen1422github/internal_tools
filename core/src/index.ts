@@ -18,3 +18,4 @@ export * from './validate.js';
 export * from './ulid.js';
 export * from './author.js';
 export * from './backfill.js';
+export * from './preflight-0006.js';

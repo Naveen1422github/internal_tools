@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { backfillUlids } from "./backfill.js";
+import { preflight0006 } from "./preflight-0006.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -220,9 +221,16 @@ function backupBeforeMigrating(db: DB, firstPending: string): void {
   db.prepare("VACUUM INTO ?").run(`${db.name}.bak-${firstPending}-${stamp}`);
 }
 
+// JS that must run immediately BEFORE a given migration's SQL (after the
+// backup). A hook that throws stops migrate() before that SQL runs.
+const BEFORE_MIGRATION: Record<string, (db: DB) => unknown> = {
+  "0006_ulid_contract": preflight0006,
+};
+
 function applyMigrations(db: DB, pending: Pending[]): string[] {
   if (pending.length > 0) backupBeforeMigrating(db, pending[0].version);
   for (const m of pending) {
+    BEFORE_MIGRATION[m.version]?.(db);
     // Each migration file owns its BEGIN/COMMIT; we just exec.
     db.exec(readFileSync(m.file, "utf-8"));
   }

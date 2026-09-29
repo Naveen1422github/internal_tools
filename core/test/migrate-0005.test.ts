@@ -13,8 +13,9 @@ import { updateEntry } from '../src/ops/update.js';
 import { rollup, archive } from '../src/ops/rollup.js';
 import { doctor } from '../src/ops/doctor.js';
 
-// Tests exercise the staged 0005; production callers never pass includeStaged.
-const migrate = (db: Database.Database) => migrateProd(db, { includeStaged: true });
+// Pinned to 0005 (F1): with 0006 staged, includeStaged alone would carry these
+// 0005 tests up to 0006. Production callers never pass includeStaged.
+const migrate = (db: Database.Database) => migrateTo(db, '0005', { includeStaged: true });
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Mirrors db.ts's MIGRATIONS_DIR/STAGED_DIR resolution (core/test is a sibling
