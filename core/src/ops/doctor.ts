@@ -243,10 +243,10 @@ export function doctor(db: DB): DoctorResult {
   // 5) data.orphan_refs.entry: parsed with the same rules as the link triggers.
   //    The old SQL used CAST(ref_value AS INTEGER), which is 0 for "E-214" and
   //    "#116", so every non-numeric link was reported as an orphan (144 false
-  //    positives on the real DB, 2026-09-29). At 0006 a tombstoned target is
-  //    not a live target.
+  //    positives on the real DB, 2026-09-29). A tombstoned target still resolves
+  //    (D5b: a deleted entry stays readable by its number).
   const liveIds = new Set(
-    (db.prepare(`SELECT id FROM entries WHERE id IS NOT NULL${has0006 ? " AND deleted_at IS NULL" : ""}`).all() as Array<{ id: number }>).map((r) => r.id),
+    (db.prepare(`SELECT id FROM entries WHERE id IS NOT NULL`).all() as Array<{ id: number }>).map((r) => r.id),
   );
   // refs.entry_id is legacy/nullable from 0006 on; the owner is entry_ulid.
   const ownerId = has0005 ? `(SELECT e.id FROM entries e WHERE e.ulid = refs.entry_ulid)` : `entry_id`;

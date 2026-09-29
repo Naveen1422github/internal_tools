@@ -75,3 +75,15 @@ test('a corrupted FTS index is an error at 0006', () => {
     assert.equal(c.severity, 'error');
   } finally { cleanup(); }
 });
+
+test('a link to a tombstoned entry still resolves at 0006 (D5b)', () => {
+  const { db, cleanup } = dbAt('0006');
+  try {
+    const a = addEntry(db, { type: 'decision', title: 'a', summary: 's' }).id;
+    addEntry(db, { type: 'decision', title: 'b', summary: 's', refs: [{ ref_type: 'entry', ref_value: `E-${a}` }] });
+    deleteEntry(db, a);
+    assert.match(check(db, 'data.tombstones').detail, /1 tombstoned/);
+    assert.equal(check(db, 'data.orphan_refs.entry').severity, 'ok');
+    assertFtsIntact(db);
+  } finally { cleanup(); }
+});
