@@ -7,7 +7,7 @@
  *
  * Safe to re-run — idempotent seed (uses INSERT OR IGNORE on titles).
  */
-import { getDb, migrate, estimateTokens, closeDb, searchEntries } from "@collab-mcp/core";
+import { getDb, migrate, addEntry, closeDb, searchEntries } from "@collab-mcp/core";
 
 const db = getDb();
 migrate(db);
@@ -18,15 +18,9 @@ migrate(db);
 const { n } = db.prepare("SELECT count(*) AS n FROM entries").get() as { n: number };
 if (n === 0) {
   console.log("[seed] inserting 4 example entries...");
-  const insert = db.prepare(`
-    INSERT INTO entries (type, kind, title, summary, description, status, agent, module, task_id, tokens_estimate)
-    VALUES (@type, @kind, @title, @summary, @description, @status, @agent, @module, @task_id, @tokens_estimate)
-  `);
-
   const rows = [
     {
       type: "gotcha",
-      kind: "signal",
       title: "Attendance join key is STRING not ObjectId",
       summary: "attendances.employeeId is a STRING (employee.employeeId), unlike all other collections.",
       description:
@@ -39,7 +33,6 @@ if (n === 0) {
     },
     {
       type: "handoff",
-      kind: "signal",
       title: "Timesheet approval date arrows wired",
       summary: "Prev/next arrows drive rangeMode; refresh resets to weekly. No backend changes.",
       description:
@@ -52,7 +45,6 @@ if (n === 0) {
     },
     {
       type: "decision",
-      kind: "signal",
       title: "Query strategy: hybrid $lookup + application join",
       summary: "Use $lookup for employee→related collection; app-level join for cross-collection filters.",
       description:
@@ -64,7 +56,6 @@ if (n === 0) {
     },
     {
       type: "session-note",
-      kind: "log",
       title: "2026-04-15 action-bar polish",
       summary: "Refined arrow alignment, fixed safari flex gap.",
       description: "No behavioral changes. CSS only.",
@@ -75,9 +66,7 @@ if (n === 0) {
     },
   ];
 
-  for (const r of rows) {
-    insert.run({ ...r, tokens_estimate: estimateTokens(r.description) });
-  }
+  for (const r of rows) addEntry(db, { type: r.type as any, title: r.title, summary: r.summary, description: r.description, status: r.status as any, agent: r.agent as any, module: r.module ?? undefined, task_id: r.task_id ?? undefined });
 }
 
 // ------------------------------------------------------------
