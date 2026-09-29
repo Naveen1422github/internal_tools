@@ -1,16 +1,14 @@
+import './env.js'; // must stay first: loads .env before tools/collab.js opens the DB
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import dotenv from 'dotenv';
 import { migrate } from '@collab-mcp/core';
 import * as collab from './tools/collab.js';
 import * as ai from './tools/ai.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-dotenv.config({ path: path.join(__dirname, '..', '..', '.env') });
 
 const PORT = Number(process.env.PORT || 7473);
 const HOST = '127.0.0.1';
