@@ -1,8 +1,7 @@
 import type { DB } from "../db.js";
-import { estimateTokens, hasUlidColumns } from "../db.js";
+import { estimateTokens } from "../db.js";
 import type { EntryType, Agent, RefInput } from "./add.js";
-import { newUlid } from "../ulid.js";
-import { resolveAuthor } from "../author.js";
+import { insertEntryRow, insertRefs } from "../entry-write.js";
 
 // ------------------------------------------------------------
 // Public types
@@ -210,29 +209,6 @@ export function rollup(db: DB, args: RollupArgs): RollupResult {
     return { groups, created_entries: [], deprecated_count: 0, dry_run: true };
   }
 
-  // rollup.ts owns its own insert path because addEntry() rejects type='rollup'
-  // (that guard exists to prevent callers creating rollups via the public API).
-  // See core/src/db.ts:hasUlidColumns for why this is gated (pre-0005 DBs have
-  // no ulid/author columns) and checked fresh per call.
-  const withUlid = hasUlidColumns(db);
-  const insertRollup = db.prepare(
-    withUlid
-      ? `INSERT INTO entries (
-      type, kind, title, summary, description,
-      status, agent, module, task_id, rollup_of_task, tokens_estimate, ulid, author
-    ) VALUES (
-      'rollup', 'signal', @title, @summary, @description,
-      'active', @agent, @module, @task_id, @rollup_of_task, @tokens_estimate, @ulid, @author
-    )`
-      : `INSERT INTO entries (
-      type, kind, title, summary, description,
-      status, agent, module, task_id, rollup_of_task, tokens_estimate
-    ) VALUES (
-      'rollup', 'signal', @title, @summary, @description,
-      'active', @agent, @module, @task_id, @rollup_of_task, @tokens_estimate
-    )`,
-  );
-
   // Wrap each group's (insert rollup + refs + deprecate originals) in a transaction
   // so a mid-write failure can't leave originals deprecated without a rollup entry.
   const runGroup = db.transaction((group: RollupGroup): number => {
@@ -253,21 +229,18 @@ export function rollup(db: DB, args: RollupArgs): RollupResult {
       rollup_of_task: group.kind === "task" ? group.key : moduleRollupSentinel(group.key),
       tokens_estimate: estimateTokens(description),
     };
-    const result = insertRollup.run(
-      withUlid ? { ...rollupParams, ulid: newUlid(), author: resolveAuthor() } : rollupParams,
-    );
-    const newId = Number(result.lastInsertRowid);
+    // rollup.ts owns its own insert path because addEntry() rejects type='rollup'
+    // (that guard exists to prevent callers creating rollups via the public API).
+    const owner = insertEntryRow(db, {
+      type: "rollup",
+      kind: "signal",
+      status: "active",
+      ...rollupParams,
+    });
+    const newId = owner.id;
 
-    // 1. Batch insert refs to original entries
-    const REF_CHUNK_SIZE = 400; // each row uses 2 params
-    for (let i = 0; i < group.entry_ids.length; i += REF_CHUNK_SIZE) {
-      const chunk = group.entry_ids.slice(i, i + REF_CHUNK_SIZE);
-      const placeholders = chunk.map(() => "(?, 'entry', ?)").join(", ");
-      const params = chunk.flatMap((id) => [newId, String(id)]);
-      db.prepare(`INSERT OR IGNORE INTO refs (entry_id, ref_type, ref_value) VALUES ${placeholders}`).run(
-        ...params,
-      );
-    }
+    // 1. Link the rollup to its originals (trigger/backfill resolve target_ulid).
+    insertRefs(db, owner, group.entry_ids.map((id) => ({ ref_type: "entry" as const, ref_value: String(id) })));
 
     // 2. Batch deprecate original entries
     const DEPRECATE_CHUNK_SIZE = 900; // each row uses 1 param
@@ -380,26 +353,6 @@ export function archive(db: DB, args: ArchiveArgs): RollupResult {
     return { groups, created_entries: [], deprecated_count: 0, dry_run: true };
   }
 
-  // See core/src/db.ts:hasUlidColumns for why this is gated and checked fresh per call.
-  const withUlid = hasUlidColumns(db);
-  const insertRollup = db.prepare(
-    withUlid
-      ? `INSERT INTO entries (
-      type, kind, title, summary, description,
-      status, agent, module, task_id, rollup_of_task, tokens_estimate, ulid, author
-    ) VALUES (
-      'rollup', 'signal', @title, @summary, @description,
-      'active', @agent, @module, NULL, @rollup_of_task, @tokens_estimate, @ulid, @author
-    )`
-      : `INSERT INTO entries (
-      type, kind, title, summary, description,
-      status, agent, module, task_id, rollup_of_task, tokens_estimate
-    ) VALUES (
-      'rollup', 'signal', @title, @summary, @description,
-      'active', @agent, @module, NULL, @rollup_of_task, @tokens_estimate
-    )`,
-  );
-
   const runGroup = db.transaction((group: RollupGroup): number => {
     const { summary, description } = formatRollupBody(group);
     if (!summary || summary.trim().length === 0) {
@@ -417,21 +370,17 @@ export function archive(db: DB, args: ArchiveArgs): RollupResult {
       rollup_of_task: moduleRollupSentinel(group.key),
       tokens_estimate: estimateTokens(description),
     };
-    const result = insertRollup.run(
-      withUlid ? { ...archiveParams, ulid: newUlid(), author: resolveAuthor() } : archiveParams,
-    );
-    const newId = Number(result.lastInsertRowid);
+    const owner = insertEntryRow(db, {
+      type: "rollup",
+      kind: "signal",
+      status: "active",
+      task_id: null,
+      ...archiveParams,
+    });
+    const newId = owner.id;
 
     // Link the breadcrumb to the originals it archived.
-    const REF_CHUNK_SIZE = 400;
-    for (let i = 0; i < group.entry_ids.length; i += REF_CHUNK_SIZE) {
-      const chunk = group.entry_ids.slice(i, i + REF_CHUNK_SIZE);
-      const placeholders = chunk.map(() => "(?, 'entry', ?)").join(", ");
-      const params = chunk.flatMap((id) => [newId, String(id)]);
-      db.prepare(`INSERT OR IGNORE INTO refs (entry_id, ref_type, ref_value) VALUES ${placeholders}`).run(
-        ...params,
-      );
-    }
+    insertRefs(db, owner, group.entry_ids.map((id) => ({ ref_type: "entry" as const, ref_value: String(id) })));
 
     // Deprecate the originals (they stay searchable with include_deprecated=true).
     const DEPRECATE_CHUNK_SIZE = 900;
