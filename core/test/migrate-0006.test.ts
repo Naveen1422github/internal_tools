@@ -247,10 +247,12 @@ test('perf at 10k entries: edit < 100 ms, search < 100 ms (E-674)', () => {
   } finally { cleanup(); }
 });
 
-test('plain migrate() never applies staged 0006', () => {
+// 0006 went live 2026-10-02 (collab E-700): it is a released migration now,
+// so plain migrate() must apply it.
+test('plain migrate() applies released 0006', () => {
   const { db, cleanup } = tempDb();
   try {
     migrateProd(db);
-    assert.equal(db.prepare(`SELECT 1 FROM schema_migrations WHERE version = '0006_ulid_contract'`).get(), undefined);
+    assert.ok(db.prepare(`SELECT 1 FROM schema_migrations WHERE version = '0006_ulid_contract'`).get());
   } finally { cleanup(); }
 });

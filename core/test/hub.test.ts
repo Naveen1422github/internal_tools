@@ -4,7 +4,7 @@ import { testAtEachLevel, dbAt, assertFtsIntact } from './helpers/levels.js';
 import { addEntry } from '../src/ops/add.js';
 import { initModule } from '../src/ops/module.js';
 import { supersede } from '../src/ops/supersede.js';
-import { updateEntryRefs } from '../src/ops/update.js';
+import { deleteEntry } from '../src/ops/delete.js';
 import { setModuleHub, getHubStatus, resolveLive } from '../src/ops/hub.js';
 import { newUlid } from '../src/ulid.js';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -180,4 +180,15 @@ testAtEachLevel('doctor reports missing main notes, unlinked and expired links',
   assert.match(String(chk(db, 'hub.unlinked').items![0]), new RegExp(`^${M}: 1 `));
   assert.match(String(chk(db, 'hub.expired_links').items![0]), /-> E-\d{5}/);
   assert.equal(doctor(db).ok, true, 'hub checks never fail the doctor');
+});
+
+test('doctor ignores tombstoned notes when deciding a main note is missing [0006]', () => {
+  const { db, cleanup } = dbAt('0006');
+  try {
+    initModule(db, { slug: M });
+    const only = note(db, 'decision', 'deleted later');
+    deleteEntry(db, only);
+    assert.equal(chk(db, 'hub.missing').severity, 'ok');
+    assertFtsIntact(db);
+  } finally { cleanup(); }
 });

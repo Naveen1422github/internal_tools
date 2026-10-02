@@ -1,6 +1,7 @@
 import type { DB } from "../db.js";
 import { parseEntryRef } from "../ulid.js";
 import { getHubStatus, IMPORTANT_TYPES } from "./hub.js";
+import { liveEntry } from "../schema.js";
 
 export interface DoctorCheck {
   name: string; // short id, e.g. "schema.tables"
@@ -425,7 +426,7 @@ export function doctor(db: DB): DoctorResult {
     const slugs = (db.prepare(`SELECT slug FROM modules ORDER BY slug`).all() as Array<{ slug: string }>).map((r) => r.slug);
     const hasImportant = db.prepare(
       `SELECT 1 FROM entry_modules em JOIN entries e ON e.ulid = em.entry_ulid
-        WHERE em.module = ? AND e.deprecated = 0 AND e.type IN (${types}) LIMIT 1`,
+        WHERE em.module = ? AND ${liveEntry(db, "e")} AND e.deprecated = 0 AND e.type IN (${types}) LIMIT 1`,
     );
     const missing: string[] = [];
     const unlinked: string[] = [];
