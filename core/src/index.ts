@@ -8,6 +8,7 @@ export * from './ops/update.js';
 export * from './ops/supersede.js';
 export * from './ops/delete.js';
 export * from './ops/module.js';
+export * from './ops/hub.js';
 export * from './ops/doctor.js';
 export * from './ops/task.js';
 export * from './ops/rollup.js';
