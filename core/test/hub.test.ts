@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { migrateTo } from '../src/db.js';
 import { getModule } from '../src/ops/module.js';
+import { doctor } from '../src/ops/doctor.js';
 
 const M = 'demo-topic';
 const note = (db: any, type: any, title: string, refs: string[] = []) =>
@@ -161,4 +162,22 @@ testAtEachLevel('module card carries hub status', (db) => {
   assert.equal(card.hub.state, 'ok');
   assert.deepEqual(card.hub.coverage!.unlinked.map((u) => u.id), [g]);
   assert.deepEqual(getModule(db, 'no-such-topic').hub, { state: 'unset', coverage: null });
+});
+
+const chk = (db: any, n: string) => doctor(db).checks.find((c) => c.name === n)!;
+
+testAtEachLevel('doctor reports missing main notes, unlinked and expired links', (db) => {
+  initModule(db, { slug: M });
+  initModule(db, { slug: 'quiet-topic' }); // no important notes -> never "missing"
+  note(db, 'decision', 'd');
+  assert.deepEqual(chk(db, 'hub.missing').items, [M]);
+  const gone = note(db, 'gotcha', 'retired');
+  const hub = note(db, 'decision', 'map', [String(gone)]);
+  db.prepare('UPDATE entries SET deprecated = 1 WHERE id = ?').run(gone);
+  setModuleHub(db, { slug: M, id: hub });
+  assert.equal(chk(db, 'hub.missing').severity, 'ok');
+  assert.equal(chk(db, 'hub.unlinked').severity, 'warn');
+  assert.match(String(chk(db, 'hub.unlinked').items![0]), new RegExp(`^${M}: 1 `));
+  assert.match(String(chk(db, 'hub.expired_links').items![0]), /-> E-\d{5}/);
+  assert.equal(doctor(db).ok, true, 'hub checks never fail the doctor');
 });

@@ -1,5 +1,6 @@
 import type { DB } from "../db.js";
 import { parseEntryRef } from "../ulid.js";
+import { getHubStatus, IMPORTANT_TYPES } from "./hub.js";
 
 export interface DoctorCheck {
   name: string; // short id, e.g. "schema.tables"
@@ -414,6 +415,49 @@ export function doctor(db: DB): DoctorResult {
     });
     const tomb = (db.prepare(`SELECT COUNT(*) AS c FROM entries WHERE deleted_at IS NOT NULL`).get() as { c: number }).c;
     checks.push({ name: "data.tombstones", severity: "ok", detail: `${tomb} tombstoned entr${tomb === 1 ? "y" : "ies"}` });
+  }
+
+  // T-011 / E-657: main note (hub) coverage. warn-only: drift, not corruption.
+  // Only registered modules (modules table) are checked; modules that exist
+  // only in entry_modules can't hold a hub and are covered by orphan_module.
+  if (has0005) {
+    const types = IMPORTANT_TYPES.map((t) => `'${t}'`).join(",");
+    const slugs = (db.prepare(`SELECT slug FROM modules ORDER BY slug`).all() as Array<{ slug: string }>).map((r) => r.slug);
+    const hasImportant = db.prepare(
+      `SELECT 1 FROM entry_modules em JOIN entries e ON e.ulid = em.entry_ulid
+        WHERE em.module = ? AND e.deprecated = 0 AND e.type IN (${types}) LIMIT 1`,
+    );
+    const missing: string[] = [];
+    const unlinked: string[] = [];
+    const expired: string[] = [];
+    for (const slug of slugs) {
+      const s = getHubStatus(db, slug, 0);
+      if (s.state !== "ok") {
+        if (hasImportant.get(slug)) missing.push(slug);
+        continue;
+      }
+      const c = s.coverage!;
+      if (c.unlinked_count > 0) unlinked.push(`${slug}: ${c.unlinked_count} not linked from ${toEntryId(c.hub.id)}`);
+      for (const x of c.expired) expired.push(`${slug}: ${toEntryId(x.from_id)} -> ${x.to_id !== null ? toEntryId(x.to_id) : x.to_ref}`);
+    }
+    checks.push({
+      name: "hub.missing",
+      severity: missing.length > 0 ? "warn" : "ok",
+      detail: missing.length > 0 ? `${missing.length} module(s) have important notes but no live main note` : "every module with important notes has a main note",
+      items: missing.length > 0 ? missing : undefined,
+    });
+    checks.push({
+      name: "hub.unlinked",
+      severity: unlinked.length > 0 ? "warn" : "ok",
+      detail: unlinked.length > 0 ? `${unlinked.length} module(s) have notes their main note does not reach` : "main notes reach every important note",
+      items: unlinked.length > 0 ? unlinked : undefined,
+    });
+    checks.push({
+      name: "hub.expired_links",
+      severity: expired.length > 0 ? "warn" : "ok",
+      detail: expired.length > 0 ? `${expired.length} main-note link(s) point at retired notes (remove with collab_update_refs)` : "no expired main-note links",
+      items: expired.length > 0 ? expired : undefined,
+    });
   }
 
   // fts.integrity: row-count parity cannot see a corrupted index (E-684).
