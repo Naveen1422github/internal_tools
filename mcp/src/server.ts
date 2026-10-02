@@ -31,6 +31,8 @@ import {
   type Priority,
   initModule,
   getModule,
+  getHubStatus,
+  setModuleHub,
   ingestDraft,
   rollup,
   archive,
@@ -305,10 +307,20 @@ server.registerTool(
       refs: args.refs,
     });
     const tt = result.taskTransition;
-    const text = tt
+    let text = tt
       ? `Added E-${String(result.id).padStart(5, "0")} (${args.type}). `
         + `Auto-advanced ${tt.id}: ${tt.from} -> ${tt.to}.`
       : `Added E-${String(result.id).padStart(5, "0")} (${args.type}).`;
+    // E-657 guardrail: tell the writing agent where its module's main note is,
+    // only for important types (the hub must not become a dump).
+    if (args.module && ["decision", "proposal", "gotcha"].includes(args.type)) {
+      const hs = getHubStatus(db, args.module, 0);
+      if (hs.state === "ok") {
+        const h = hs.coverage!.hub;
+        text += ` Main note for '${args.module}' is E-${String(h.id).padStart(5, "0")}; `
+          + `if this belongs in it, link it with collab_update_refs (id ${h.id}, add entry '${result.id}').`;
+      }
+    }
     return {
       content: [{ type: "text", text }],
       structuredContent: structured(result),
@@ -738,7 +750,7 @@ server.registerTool(
   {
     title: "Get a module card (module row + tasks + recent signals)",
     description: [
-      "Returns: {module, active_tasks, indexes, recent_decisions, top_gotchas, recent_handoffs}.",
+      "Returns: {module, active_tasks, indexes, recent_decisions, top_gotchas, recent_handoffs, hub}.",
       "If the slug is unknown, module is null and all other fields are empty arrays.",
       "Membership is multi-module aware (entry_modules): an entry surfaces here if it belongs to this module.",
       "Ordering: active_tasks by priority then recency; Index hubs first among knowledge sections, others by created_at DESC.",
@@ -776,10 +788,30 @@ server.registerTool(
         lines.push(`  [${t.id}] ${t.status}${t.priority ? ` (${t.priority})` : ""} - ${t.title}`);
       }
     }
-    if (result.indexes.length > 0) {
-      lines.push("\nIndexes:");
-      for (const ix of result.indexes) {
-        lines.push(`  [E-${String(ix.id).padStart(5, "0")}] ${ix.title}`);
+    const E = (n: number) => `E-${String(n).padStart(5, "0")}`;
+    const cut = (s: string) => (s.length > 80 ? s.slice(0, 79) + "…" : s);
+    if (result.hub.state === "unset") {
+      lines.push("\nMain note: not set (collab_module_set_hub picks one).");
+    } else if (result.hub.state === "retired") {
+      lines.push("\nMain note: retired with no replacement (collab_module_set_hub picks a new one).");
+    } else {
+      const c = result.hub.coverage!;
+      lines.push(`\nMain note: [${E(c.hub.id)}] ${cut(c.hub.title)}${c.hub.followed ? " (replacement of the original)" : ""}`);
+      if (c.unlinked_count === 0) {
+        lines.push(`  reaches all ${c.linked_count} important notes.`);
+      } else {
+        lines.push(`  reaches ${c.linked_count} of ${c.linked_count + c.unlinked_count} important notes; not linked yet:`);
+        for (const u of c.unlinked) lines.push(`    [${E(u.id)}] ${u.type} - ${cut(u.title)}`);
+        if (c.unlinked_count > c.unlinked.length) lines.push(`    (+${c.unlinked_count - c.unlinked.length} more; collab_doctor lists all)`);
+      }
+      if (c.expired.length > 0) lines.push(`  ${c.expired.length} link(s) point at retired notes (ignored; collab_doctor lists them).`);
+    }
+    if (result.hub.state !== "ok") {
+      if (result.indexes.length > 0) {
+        lines.push("\nIndexes:");
+        for (const ix of result.indexes) {
+          lines.push(`  [E-${String(ix.id).padStart(5, "0")}] ${ix.title}`);
+        }
       }
     }
     if (result.top_gotchas.length > 0) {
@@ -804,6 +836,38 @@ server.registerTool(
       content: [{ type: "text", text: lines.join("\n") }],
       structuredContent: structured(result),
     };
+  }
+);
+
+// ------------------------------------------------------------
+// Tool: collab.module.set_hub
+// ------------------------------------------------------------
+server.registerTool(
+  "collab_module_set_hub",
+  {
+    title: "Set (or clear) a module's main note",
+    description: [
+      "Names ONE entry as the module's main note (hub). collab_module_get then reports",
+      "which decisions/proposals/gotchas the main note does not reach within 2 links.",
+      "The entry must belong to the module and be live. Pass id=null to clear.",
+    ].join("\n"),
+    inputSchema: {
+      slug: z.string().min(1),
+      id: z.number().int().min(1).nullable().describe("Entry id (integer inside E-NNNNN), or null to clear."),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (args) => {
+    const result = setModuleHub(db, { slug: args.slug, id: args.id });
+    const text = result.hub
+      ? `Main note for '${result.slug}' is now E-${String(result.hub.id).padStart(5, "0")} (${result.hub.title}).`
+      : `Main note for '${result.slug}' cleared.`;
+    return { content: [{ type: "text", text }], structuredContent: structured(result) };
   }
 );
 

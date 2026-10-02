@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { migrateTo } from '../src/db.js';
+import { getModule } from '../src/ops/module.js';
 
 const M = 'demo-topic';
 const note = (db: any, type: any, title: string, refs: string[] = []) =>
@@ -148,4 +149,16 @@ test('pre-0005 DB reports unset and never touches ULID columns', () => {
     initModule(db, { slug: M });
     assert.deepEqual(getHubStatus(db, M), { state: 'unset', coverage: null });
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+testAtEachLevel('module card carries hub status', (db) => {
+  initModule(db, { slug: M });
+  assert.equal(getModule(db, M).hub.state, 'unset');
+  const g = note(db, 'gotcha', 'unlinked gotcha');
+  const hub = note(db, 'decision', 'map');
+  setModuleHub(db, { slug: M, id: hub });
+  const card = getModule(db, M);
+  assert.equal(card.hub.state, 'ok');
+  assert.deepEqual(card.hub.coverage!.unlinked.map((u) => u.id), [g]);
+  assert.deepEqual(getModule(db, 'no-such-topic').hub, { state: 'unset', coverage: null });
 });

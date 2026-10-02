@@ -1,5 +1,6 @@
 import type { DB } from "../db.js";
 import { liveEntry } from "../schema.js";
+import { getHubStatus, type HubState, type HubCoverage } from "./hub.js";
 
 // ------------------------------------------------------------
 // Types
@@ -34,6 +35,7 @@ export interface ModuleCard {
     agent: string | null;
     created_at: string;
   }>;
+  hub: { state: HubState; coverage: HubCoverage | null };
 }
 
 // Slug rules match the schema CHECK in 0001_init.sql:
@@ -84,6 +86,7 @@ export function getModule(db: DB, slug: string): ModuleCard {
       recent_decisions: [],
       top_gotchas: [],
       recent_handoffs: [],
+      hub: { state: "unset", coverage: null },
     };
   }
 
@@ -154,5 +157,6 @@ export function getModule(db: DB, slug: string): ModuleCard {
     )
     .all(slug) as ModuleCard["recent_handoffs"];
 
-  return { module, active_tasks, indexes, recent_decisions, top_gotchas, recent_handoffs };
+  const hub = getHubStatus(db, slug);
+  return { module, active_tasks, indexes, recent_decisions, top_gotchas, recent_handoffs, hub };
 }
