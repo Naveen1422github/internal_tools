@@ -16,5 +16,5 @@
     "forceConsistentCasingInFileNames": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "src/scripts/rehearse-0005.ts"]
+  "exclude": ["node_modules", "dist", "src/scripts/rehearse-0005.ts", "src/scripts/rehearse-0006.ts"]
 }

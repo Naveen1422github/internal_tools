@@ -6,14 +6,17 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export async function startTestServer() {
+export async function startTestServer({ level = '0005' } = {}) {
   const tmpFile = path.join(os.tmpdir(), `collab-test-${crypto.randomUUID()}.db`);
   process.env.COLLAB_DB_PATH = tmpFile;
+  process.env.COLLAB_DB_CREATE = '1'; // test DBs are created on purpose
   // dynamic import AFTER env is set so the singleton binds to the temp DB
   const { start } = await import(pathToFileURL(path.join(__dirname, '..', '..', 'server', 'dist', 'server.js')).href);
-  const { getDb } = await import('@collab-mcp/core');
+  const { getDb, migrate } = await import('@collab-mcp/core');
   const { server, port } = await start(0, '127.0.0.1');
   const db = getDb();
+  // The server only applies released migrations; opt this DB into staged 0006.
+  if (level === '0006') migrate(db, { includeStaged: true });
   const baseUrl = `http://127.0.0.1:${port}`;
   const close = () => new Promise((resolve) => server.close(() => {
     for (const s of ['', '-wal', '-shm', '-journal']) { try { fs.unlinkSync(tmpFile + s); } catch {} }
@@ -22,16 +25,12 @@ export async function startTestServer() {
   return { baseUrl, db, close };
 }
 
-export function seedEntry(db, { type = 'decision', kind = 'signal', category = 'Reference',
+export async function seedEntry(db, { type = 'decision', category = 'Reference',
   title = 'T', summary = 'S', description = '', agent = 'Claude', module = null,
   deprecated = 0 } = {}) {
-  const info = db.prepare(`
-    INSERT INTO entries (type, kind, category, title, summary, description, agent, module, deprecated)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(type, kind, category, title, summary, description, agent, module, deprecated);
-  const id = info.lastInsertRowid;
-  if (module) {
-    db.prepare('INSERT OR IGNORE INTO entry_modules (entry_id, module, is_primary) VALUES (?, ?, 1)').run(id, module);
-  }
+  // Through core, so the row is valid at 0005 AND 0006 (ulid, id, author).
+  const { addEntry } = await import('@collab-mcp/core');
+  const { id } = addEntry(db, { type, category, title, summary, description, agent, module: module ?? undefined });
+  if (deprecated) db.prepare('UPDATE entries SET deprecated = 1 WHERE id = ?').run(id);
   return id;
 }

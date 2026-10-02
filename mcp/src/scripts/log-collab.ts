@@ -1,5 +1,4 @@
-import Database from 'better-sqlite3';
-import path from 'path';
+import { getDb, migrate, addEntry, initModule, closeDb, type EntryType, type Category } from "@collab-mcp/core";
 
 const [type, title, summary, description, moduleName, category, status] = process.argv.slice(2);
 
@@ -8,50 +7,28 @@ if (!type || !title || !summary) {
   process.exit(1);
 }
 
-const dbPath = path.resolve('collab.db');
-const db = new Database(dbPath);
-
+// Same DB resolution as every other entry point (COLLAB_DB_PATH), never ./collab.db (E-550, E-689).
+const db = getDb();
 try {
-  const kind = (type === 'gotcha' || type === 'decision' || type === 'proposal' || type === 'changelog') ? 'signal' : 'log';
-  const finalCategory = category || (type === 'gotcha' || type === 'decision' ? 'Reference' : 'Activity');
-  const tokensEstimate = description ? Math.ceil(description.length / 4) : 0;
-  
-  const insertStmt = db.prepare(`
-    INSERT INTO entries (type, kind, title, summary, description, status, agent, module, category, tokens_estimate)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  
-  const info = insertStmt.run(
-    type,
-    kind,
+  migrate(db);
+  if (moduleName && !db.prepare("SELECT 1 FROM modules WHERE slug = ?").get(moduleName)) {
+    initModule(db, { slug: moduleName, name: moduleName });
+    console.log(`Created placeholder module: ${moduleName}`);
+  }
+  const { id } = addEntry(db, {
+    type: type as EntryType,
     title,
     summary,
-    description || null,
-    status || 'active',
-    'Gemini',
-    moduleName || null,
-    finalCategory,
-    tokensEstimate
-  );
-  
-  const entryId = info.lastInsertRowid;
-  console.log(`Inserted entry E-${entryId}`);
-  
-  if (moduleName) {
-    // Ensure module exists or insert a placeholder
-    const modExists = db.prepare('SELECT 1 FROM modules WHERE slug = ?').get(moduleName);
-    if (!modExists) {
-      db.prepare('INSERT INTO modules (slug, name, status) VALUES (?, ?, ?)')
-        .run(moduleName, moduleName, 'active');
-      console.log(`Created placeholder module: ${moduleName}`);
-    }
-    
-    db.prepare('INSERT OR IGNORE INTO entry_modules (entry_id, module, is_primary) VALUES (?, ?, 1)')
-      .run(entryId, moduleName);
-  }
+    description: description || undefined,
+    status: (status as "draft" | "active") || "active",
+    agent: "Gemini",
+    module: moduleName || undefined,
+    category: (category as Category) || undefined,
+  });
+  console.log(`Inserted entry E-${id}`);
 } catch (e) {
-  console.error('Error logging to DB:', e);
-  process.exit(1);
+  console.error("Error logging to DB:", e);
+  process.exitCode = 1;
 } finally {
-  db.close();
+  closeDb();
 }

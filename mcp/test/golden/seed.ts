@@ -10,7 +10,7 @@ import { getDb, migrate, closeDb, addEntry } from '@collab-mcp/core';
 export function freshDb() {
   const tmp = path.join(os.tmpdir(), `collab-golden-${crypto.randomUUID()}.db`);
   process.env.COLLAB_DB_PATH = tmp;
-  const db = getDb(tmp);
+  const db = getDb(tmp, { create: true });
   migrate(db);
 
   // Mirror the proven arg shape from mcp/src/scripts/seed.ts (kind/category are derived from type).

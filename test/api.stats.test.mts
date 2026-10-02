@@ -5,9 +5,9 @@ import { startTestServer, seedEntry } from './helpers/server.mjs';
 let srv;
 before(async () => {
   srv = await startTestServer();
-  seedEntry(srv.db, { category: 'Reference', type: 'decision', module: 'alpha' });
-  seedEntry(srv.db, { category: 'Activity', type: 'changelog', module: 'alpha' });
-  seedEntry(srv.db, { category: 'Reference', type: 'gotcha', deprecated: 1 }); // excluded
+  await seedEntry(srv.db, { category: 'Reference', type: 'decision', module: 'alpha' });
+  await seedEntry(srv.db, { category: 'Activity', type: 'changelog', module: 'alpha' });
+  await seedEntry(srv.db, { category: 'Reference', type: 'gotcha', deprecated: 1 }); // excluded
 });
 after(() => srv.close());
 

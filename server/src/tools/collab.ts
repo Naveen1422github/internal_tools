@@ -1,5 +1,9 @@
 import http from 'node:http';
-import { getDb, estimateTokens, KIND_BY_TYPE, CATEGORY_BY_TYPE, SLUG_REGEX, validateEntryInput, buildFtsMatch } from '@collab-mcp/core';
+import {
+  getDb, estimateTokens, KIND_BY_TYPE, SLUG_REGEX, validateEntryInput, buildFtsMatch,
+  addEntry, getEntry, deleteEntry, supersede, doctor, ownerOf, replaceLinks, insertEntryModules,
+  liveEntry, ftsJoin, hasUlidPrimaryKey,
+} from '@collab-mcp/core';
 
 const db = getDb();
 
@@ -7,11 +11,11 @@ export function runSearch(db: any, { q = '', type, module, agent, kind = 'signal
   if (!db) throw new Error('Database not available');
 
   let query = `
-    SELECT e.rowid as id, e.type, e.kind, e.category, e.title, e.summary, e.module, e.agent, e.created_at,
+    SELECT e.id, e.type, e.kind, e.category, e.title, e.summary, e.module, e.agent, e.created_at,
            snippet(entries_fts, -1, '[[HL]]', '[[/HL]]', '...', 10) as snippet
-    FROM entries e
-    JOIN entries_fts f ON e.rowid = f.rowid
-    WHERE e.deprecated = 0
+    FROM entries_fts
+    ${ftsJoin(db, 'e')}
+    WHERE e.deprecated = 0 AND ${liveEntry(db, 'e')}
   `;
   const params: any[] = [];
 
@@ -24,7 +28,7 @@ export function runSearch(db: any, { q = '', type, module, agent, kind = 'signal
     params.push(type);
   }
   if (module) {
-    query += ` AND e.id IN (SELECT entry_id FROM entry_modules WHERE module = ?)`;
+    query += ` AND e.ulid IN (SELECT entry_ulid FROM entry_modules WHERE module = ?)`;
     params.push(module);
   }
   if (agent) {
@@ -91,27 +95,30 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
 
   'GET /api/collab/stats': async (req, res, send) => {
     try {
-      const total = (db.prepare('SELECT COUNT(*) AS c FROM entries WHERE deprecated = 0').get() as any).c;
+      const live = liveEntry(db, 'entries');
+      const total = (db.prepare(`SELECT COUNT(*) AS c FROM entries WHERE deprecated = 0 AND ${live}`).get() as any).c;
       const rowsToMap = (rows: any[], key: string) => Object.fromEntries(rows.map((r) => [r[key], r.c]));
       const by_category = rowsToMap(
-        db.prepare(`SELECT COALESCE(category,'(none)') AS category, COUNT(*) AS c FROM entries WHERE deprecated=0 GROUP BY category`).all(),
+        db.prepare(`SELECT COALESCE(category,'(none)') AS category, COUNT(*) AS c FROM entries WHERE deprecated=0 AND ${live} GROUP BY category`).all(),
         'category'
       );
       const by_type = rowsToMap(
-        db.prepare(`SELECT type, COUNT(*) AS c FROM entries WHERE deprecated=0 GROUP BY type`).all(),
+        db.prepare(`SELECT type, COUNT(*) AS c FROM entries WHERE deprecated=0 AND ${live} GROUP BY type`).all(),
         'type'
       );
       const by_status = rowsToMap(
-        db.prepare(`SELECT status, COUNT(*) AS c FROM entries WHERE deprecated=0 GROUP BY status`).all(),
+        db.prepare(`SELECT status, COUNT(*) AS c FROM entries WHERE deprecated=0 AND ${live} GROUP BY status`).all(),
         'status'
       );
       const top_modules = db.prepare(`
-        SELECT module, COUNT(*) AS count
-        FROM entry_modules GROUP BY module ORDER BY count DESC, module ASC LIMIT 10
+        SELECT em.module AS module, COUNT(*) AS count
+        FROM entry_modules em JOIN entries e ON e.ulid = em.entry_ulid
+        WHERE ${liveEntry(db, 'e')}
+        GROUP BY em.module ORDER BY count DESC, em.module ASC LIMIT 10
       `).all();
       const recent = db.prepare(`
-        SELECT rowid AS id, type, category, title, summary, agent, module, created_at
-        FROM entries WHERE deprecated=0 ORDER BY created_at DESC LIMIT 10
+        SELECT id, type, category, title, summary, agent, module, created_at
+        FROM entries WHERE deprecated=0 AND ${live} ORDER BY created_at DESC LIMIT 10
       `).all();
       send(200, { total, by_category, by_type, by_status, top_modules, recent });
     } catch (err: any) { send(500, { error: err.message }); }
@@ -161,13 +168,12 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
 
   'GET /api/collab/entry': async (req, res, send) => {
     const url = new URL(req.url!, `http://${req.headers.host}`);
-    const id = url.searchParams.get('id');
+    const id = Number(url.searchParams.get('id'));
     try {
-      const entry: any = db.prepare('SELECT rowid as id, * FROM entries WHERE rowid = ?').get(id);
+      // Core read: a tombstoned entry is still returned, with deleted_at set (D5b).
+      const entry = getEntry(db, id);
       if (!entry) return send(404, { error: 'Not found' });
-      const refs = db.prepare('SELECT ref_type, ref_value FROM refs WHERE entry_id = ?').all(id);
-      const modules = db.prepare('SELECT module FROM entry_modules WHERE entry_id = ? ORDER BY is_primary DESC, module ASC').all(id).map((r: any) => r.module);
-      send(200, { ...entry, refs, modules });
+      send(200, entry);
     } catch (err: any) {
       send(500, { error: err.message });
     }
@@ -191,41 +197,36 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     }
     const primaryModule = orderedModules.length ? orderedModules[0] : null;
     try {
+      const normRefs = (Array.isArray(refs) ? refs : []).map((r: any) => ({
+        ref_type: r.ref_type || r.type,
+        ref_value: r.ref_value || r.value,
+      }));
+
+      if (!id) {
+        // Create: core owns id/ulid/author/links at every schema level.
+        const { id: newId } = addEntry(db, {
+          type, title, summary, description, agent: agent || undefined,
+          module: primaryModule ?? undefined, modules: orderedModules, category: resolvedCategory as any,
+          task_id: task_id || undefined, refs: normRefs,
+        });
+        return send(200, { ok: true, id: newId });
+      }
+
+      // Edit: resolve the E-number to its owner (lowest live ulid at 0006,
+      // where id is not unique; F3) and write by the level's real key.
+      const owner = ownerOf(db, Number(id));
+      if (!owner) return send(404, { error: `entry ${id} not found` });
+      const byUlid = hasUlidPrimaryKey(db);
       const tokens = estimateTokens(description);
-      let entryId = id;
-
       const tx = db.transaction(() => {
-        if (id) {
-          db.prepare(`
-            UPDATE entries SET type=?, kind=?, title=?, summary=?, description=?, agent=?, module=?, task_id=?, tokens_estimate=?, category=?
-            WHERE rowid=?
-          `).run(type, kind, title, summary, description, agent, primaryModule, task_id, tokens, resolvedCategory, id);
-          db.prepare('DELETE FROM refs WHERE entry_id = ?').run(id);
-          db.prepare('DELETE FROM entry_modules WHERE entry_id = ?').run(id);
-        } else {
-          const result = db.prepare(`
-            INSERT INTO entries (type, kind, title, summary, description, agent, module, task_id, tokens_estimate, category)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(type, kind, title, summary, description, agent, primaryModule, task_id, tokens, resolvedCategory);
-          entryId = result.lastInsertRowid;
-        }
-
-        if (orderedModules.length > 0) {
-          const stmt = db.prepare('INSERT OR IGNORE INTO entry_modules (entry_id, module, is_primary) VALUES (?, ?, ?)');
-          for (const moduleSlug of orderedModules) {
-            stmt.run(entryId, moduleSlug, moduleSlug === primaryModule ? 1 : 0);
-          }
-        }
-
-        if (refs && Array.isArray(refs)) {
-          const stmt = db.prepare('INSERT INTO refs (entry_id, ref_type, ref_value) VALUES (?, ?, ?)');
-          for (const ref of refs) {
-            stmt.run(entryId, ref.ref_type || ref.type, ref.ref_value || ref.value);
-          }
-        }
+        db.prepare(`
+          UPDATE entries SET type=?, kind=?, title=?, summary=?, description=?, agent=?, module=?, task_id=?, tokens_estimate=?, category=?
+          WHERE ${byUlid ? 'ulid = ?' : 'id = ?'}
+        `).run(type, kind, title, summary, description, agent, primaryModule, task_id, tokens, resolvedCategory, byUlid ? owner.ulid : owner.id);
+        replaceLinks(db, owner, orderedModules, primaryModule, normRefs);
       });
       tx();
-      send(200, { ok: true, id: entryId });
+      send(200, { ok: true, id: owner.id });
     } catch (err: any) {
       send(500, { error: err.message });
     }
@@ -233,10 +234,13 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
 
   'POST /api/collab/entry/delete': async (req, res, send, body) => {
     try {
-      db.prepare('DELETE FROM entries WHERE rowid = ?').run(body.id);
-      send(200, { ok: true });
+      const r = deleteEntry(db, Number(body?.id)); // tombstone at 0006, hard delete before (D5a)
+      send(200, { ok: true, ...r });
     } catch (err: any) {
-      send(500, { error: err.message });
+      const status = /no entry found/.test(err.message) ? 404
+        : /must be a positive integer/.test(err.message) ? 400
+        : 500;
+      send(status, { error: err.message });
     }
   },
 
@@ -252,23 +256,14 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       return send(400, { error: "'by' cannot be one of the superseded 'ids'" });
     }
     try {
-      const byRow = db.prepare('SELECT id FROM entries WHERE id = ?').get(by);
-      if (!byRow) return send(400, { error: `'by' entry ${by} does not exist` });
-
-      const uniqueIds = [...new Set(ids)];
-      const placeholders = uniqueIds.map(() => '?').join(',');
-      const found = db.prepare(`SELECT id FROM entries WHERE id IN (${placeholders})`).all(...uniqueIds);
-      const foundSet = new Set(found.map((r: any) => r.id));
-      const missing = uniqueIds.filter((id) => !foundSet.has(id));
-      if (missing.length > 0) {
-        return send(400, { error: `these ids do not exist: ${missing.join(', ')}` });
-      }
-
-      const update = db.prepare('UPDATE entries SET superseded_by = ?, deprecated = 1 WHERE id = ?');
-      const tx = db.transaction((targetIds: any[]) => { for (const id of targetIds) update.run(by, id); });
-      tx(uniqueIds);
-      send(200, { ok: true, superseded: uniqueIds, by });
-    } catch (err: any) { send(500, { error: err.message }); }
+      const uniqueIds = [...new Set(ids)] as number[];
+      const r = supersede(db, { ids: uniqueIds, by });
+      send(200, { ok: true, superseded: r.superseded, by: r.by });
+    } catch (err: any) {
+      // Core: "'by' entry E-… does not exist" / "the following 'ids' do not exist: …".
+      const status = /does not exist|do not exist|cannot be one of/.test(err.message) ? 400 : 500;
+      send(status, { error: err.message });
+    }
   },
 
   'POST /api/collab/entry/reassign-module': async (req, res, send, body) => {
@@ -283,27 +278,31 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       const exists = db.prepare('SELECT slug FROM modules WHERE slug = ?').get(module);
       if (!exists) return send(400, { error: `target module '${module}' does not exist` });
 
-      const uniqueIds = [...new Set(ids)];
-      const setPrimary = db.prepare('UPDATE entries SET module = ? WHERE id = ?');
-      const clearOld = db.prepare('DELETE FROM entry_modules WHERE entry_id = ? AND is_primary = 1');
-      // Upsert: if the entry was already a (secondary) member of the target module,
-      // promote that existing row to primary instead of silently ignoring it.
-      const addJoin = db.prepare(`
-        INSERT INTO entry_modules (entry_id, module, is_primary) VALUES (?, ?, 1)
-        ON CONFLICT(entry_id, module) DO UPDATE SET is_primary = 1
-      `);
+      // Works at 0005 and 0006: no ON CONFLICT(entry_id, module) (that PK is gone
+      // at 0006). Writes key on the level's real key, as entry-write.ts does (F3):
+      // ulid at 0006; id / entry_id at 0005, where a link row's entry_ulid is only
+      // trigger-filled and may be NULL.
+      const byUlid = hasUlidPrimaryKey(db);
+      const entryKey = byUlid ? 'ulid' : 'id';
+      const linkKey = byUlid ? 'entry_ulid' : 'entry_id';
+      const setPrimary = db.prepare(`UPDATE entries SET module = ? WHERE ${entryKey} = ?`);
+      const clearOld = db.prepare(`DELETE FROM entry_modules WHERE ${linkKey} = ? AND is_primary = 1`);
+      const promote = db.prepare(`UPDATE entry_modules SET is_primary = 1 WHERE ${linkKey} = ? AND module = ?`);
+      const uniqueIds = [...new Set(ids)] as number[];
       let updated = 0;
-      const tx = db.transaction((targetIds: any[]) => {
-        for (const id of targetIds) {
-          const r = setPrimary.run(module, id);
-          if (r.changes > 0) {
-            clearOld.run(id);
-            addJoin.run(id, module);
-            updated += 1;
-          }
+      const tx = db.transaction(() => {
+        for (const id of uniqueIds) {
+          const owner = ownerOf(db, Number(id));
+          if (!owner) continue;
+          const key = byUlid ? owner.ulid : owner.id;
+          setPrimary.run(module, key);
+          clearOld.run(key);
+          // Promote an existing secondary membership, or add a new primary one.
+          if (promote.run(key, module).changes === 0) insertEntryModules(db, owner, [module], module);
+          updated += 1;
         }
       });
-      tx(uniqueIds);
+      tx();
       send(200, { ok: true, updated, module });
     } catch (err: any) { send(500, { error: err.message }); }
   },
@@ -446,78 +445,29 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
         ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, updated_at DESC
       `).all(slug);
       const recent_decisions = db.prepare(`
-        SELECT rowid AS id, title, summary FROM entries
-        WHERE id IN (SELECT entry_id FROM entry_modules WHERE module = ?) AND type='decision' AND deprecated=0
+        SELECT id, title, summary FROM entries
+        WHERE ulid IN (SELECT entry_ulid FROM entry_modules WHERE module = ?) AND ${liveEntry(db, 'entries')} AND type='decision' AND deprecated=0
         ORDER BY created_at DESC LIMIT 5
       `).all(slug);
       const top_gotchas = db.prepare(`
-        SELECT rowid AS id, title, summary FROM entries
-        WHERE id IN (SELECT entry_id FROM entry_modules WHERE module = ?) AND type='gotcha' AND deprecated=0
+        SELECT id, title, summary FROM entries
+        WHERE ulid IN (SELECT entry_ulid FROM entry_modules WHERE module = ?) AND ${liveEntry(db, 'entries')} AND type='gotcha' AND deprecated=0
         ORDER BY created_at DESC LIMIT 5
       `).all(slug);
       const recent_handoffs = db.prepare(`
-        SELECT rowid AS id, title, summary, agent, created_at FROM entries
-        WHERE id IN (SELECT entry_id FROM entry_modules WHERE module = ?) AND type='handoff' AND deprecated=0
+        SELECT id, title, summary, agent, created_at FROM entries
+        WHERE ulid IN (SELECT entry_ulid FROM entry_modules WHERE module = ?) AND ${liveEntry(db, 'entries')} AND type='handoff' AND deprecated=0
         ORDER BY created_at DESC LIMIT 5
       `).all(slug);
       send(200, { module, active_tasks, recent_decisions, top_gotchas, recent_handoffs });
     } catch (err: any) { send(500, { error: err.message }); }
   },
 
-  // --- DOCTOR (mirrors collab-mcp/src/tools/doctor.ts — keep in sync) ---
+  // --- DOCTOR (core is the single implementation; E-685 #5) ---
+  // fts.integrity runs an FTS 'integrity-check' INSERT, so it needs a read-write
+  // connection: getDb() opens read-write (better-sqlite3 default).
   'POST /api/collab/doctor': async (req, res, send) => {
-    const EXPECTED_TABLES = new Set(['entries','refs','tasks','modules','dispatches','entry_modules','schema_migrations','entries_fts','entries_fts_config','entries_fts_data','entries_fts_docsize','entries_fts_idx','sqlite_sequence']);
-    const EXPECTED_INDEXES = new Set(['idx_entries_created','idx_entries_deprecated','idx_entries_kind','idx_entries_module','idx_entries_status','idx_entries_task','idx_entries_type','idx_entries_category','idx_entries_superseded','idx_entry_modules_module','idx_entry_modules_entry','idx_refs_entry','idx_refs_type','idx_refs_value','idx_tasks_assignee','idx_tasks_module','idx_tasks_status','idx_dispatches_agent','idx_dispatches_created','idx_dispatches_entry','idx_dispatches_module']);
-    const EXPECTED_TRIGGERS = new Set(['trg_entries_fts_ad','trg_entries_fts_ai','trg_entries_fts_au','trg_entries_updated_at','trg_modules_updated_at','trg_refs_cascade_delete','trg_tasks_updated_at','trg_entry_modules_cascade_delete','trg_dispatches_updated_at','trg_dispatches_updated_at_insert']);
-    // Migration 0005 (staged): objects that exist only once 0005 has been applied.
-    // trg_entries_updated_at / trg_entries_fts_au are re-created under their same
-    // names by 0005, so they stay in the base EXPECTED_TRIGGERS above, not here.
-    const EXPECTED_TABLES_0005 = new Set(['entry_revisions']);
-    const EXPECTED_INDEXES_0005 = new Set(['idx_entries_ulid','idx_refs_entry_ulid','idx_refs_target_ulid','idx_entry_modules_entry_ulid','idx_entry_revisions_entry']);
-    const EXPECTED_TRIGGERS_0005 = new Set(['trg_refs_fill_ulids','trg_entry_modules_fill_ulid','trg_entries_fill_superseded_ulid','trg_entries_revision']);
-    const union = (a: Set<string>, b: Set<string>) => new Set([...a, ...b]);
-    const schemaCheck = (name: string, actual: Set<string>, expected: Set<string>, label: string) => {
-      const missing = [...expected].filter(x => !actual.has(x)).sort();
-      const extra = [...actual].filter(x => !expected.has(x)).sort();
-      const severity = missing.length ? 'error' : extra.length ? 'warn' : 'ok';
-      const detail = (!missing.length && !extra.length) ? `${expected.size} expected ${label} present` : `${missing.length} missing, ${extra.length} extra ${label}`;
-      const items = (!missing.length && !extra.length) ? undefined : [...missing.map(m=>`missing:${m}`), ...extra.map(e=>`extra:${e}`)];
-      return { name, severity, detail, items };
-    };
-    try {
-      let has0005 = false;
-      try {
-        has0005 = !!db.prepare(`SELECT 1 FROM schema_migrations WHERE version = '0005_ulid_expand'`).get();
-      } catch { has0005 = false; }
-      const expectedTables = has0005 ? union(EXPECTED_TABLES, EXPECTED_TABLES_0005) : EXPECTED_TABLES;
-      const expectedIndexes = has0005 ? union(EXPECTED_INDEXES, EXPECTED_INDEXES_0005) : EXPECTED_INDEXES;
-      const expectedTriggers = has0005 ? union(EXPECTED_TRIGGERS, EXPECTED_TRIGGERS_0005) : EXPECTED_TRIGGERS;
-      const checks: any[] = [];
-      const tables = new Set(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND (name NOT LIKE 'sqlite_%' OR name='sqlite_sequence')`).all().map((r: any)=>r.name));
-      checks.push(schemaCheck('schema.tables', tables, expectedTables, 'tables'));
-      const indexes = new Set(db.prepare(`SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_autoindex_%'`).all().map((r: any)=>r.name));
-      checks.push(schemaCheck('schema.indexes', indexes, expectedIndexes, 'indexes'));
-      const triggers = new Set(db.prepare(`SELECT name FROM sqlite_master WHERE type='trigger'`).all().map((r: any)=>r.name));
-      checks.push(schemaCheck('schema.triggers', triggers, expectedTriggers, 'triggers'));
-      const orphanTaskRefs = db.prepare(`SELECT entry_id, ref_value FROM refs WHERE ref_type='task' AND ref_value NOT IN (SELECT id FROM tasks)`).all();
-      checks.push({ name: 'data.orphan_refs.task', severity: orphanTaskRefs.length ? 'warn' : 'ok', detail: orphanTaskRefs.length ? `${orphanTaskRefs.length} orphan task ref(s)` : 'no orphan task refs', items: orphanTaskRefs.length ? orphanTaskRefs.map((r: any)=>`E-${String(r.entry_id).padStart(5,'0')} -> ${r.ref_value}`) : undefined });
-      const orphanEntryRefs = db.prepare(`SELECT entry_id, ref_value FROM refs WHERE ref_type='entry' AND CAST(ref_value AS INTEGER) NOT IN (SELECT id FROM entries)`).all();
-      checks.push({ name: 'data.orphan_refs.entry', severity: orphanEntryRefs.length ? 'warn' : 'ok', detail: orphanEntryRefs.length ? `${orphanEntryRefs.length} orphan entry ref(s)` : 'no orphan entry refs', items: orphanEntryRefs.length ? orphanEntryRefs.map((r: any)=>`E-${String(r.entry_id).padStart(5,'0')} -> E-${r.ref_value}`) : undefined });
-      const orphanModuleEntries = db.prepare(`SELECT id FROM entries WHERE module IS NOT NULL AND module NOT IN (SELECT slug FROM modules) ORDER BY id`).all();
-      checks.push({ name: 'data.orphan_module.entries', severity: orphanModuleEntries.length ? 'warn' : 'ok', detail: orphanModuleEntries.length ? `${orphanModuleEntries.length} entries with unknown module` : 'no orphan module entries', items: orphanModuleEntries.length ? orphanModuleEntries.map((r: any)=>r.id) : undefined });
-      const orphanTaskEntries = db.prepare(`SELECT id FROM entries WHERE task_id IS NOT NULL AND task_id NOT IN (SELECT id FROM tasks) ORDER BY id`).all();
-      checks.push({ name: 'data.orphan_task.entries', severity: orphanTaskEntries.length ? 'warn' : 'ok', detail: orphanTaskEntries.length ? `${orphanTaskEntries.length} entries with unknown task_id` : 'no orphan task entries', items: orphanTaskEntries.length ? orphanTaskEntries.map((r: any)=>r.id) : undefined });
-      const danglingSuperseded = db.prepare(`SELECT id, superseded_by FROM entries WHERE superseded_by IS NOT NULL AND superseded_by NOT IN (SELECT id FROM entries) ORDER BY id`).all();
-      checks.push({ name: 'data.dangling_superseded', severity: danglingSuperseded.length ? 'warn' : 'ok', detail: danglingSuperseded.length ? `${danglingSuperseded.length} entries with dangling superseded_by` : 'no dangling superseded_by', items: danglingSuperseded.length ? danglingSuperseded.map((r: any)=>`E-${String(r.id).padStart(5,'0')} -> E-${String(r.superseded_by).padStart(5,'0')}`) : undefined });
-      const entriesWithoutModule = db.prepare(`SELECT id FROM entries WHERE deprecated = 0 AND id NOT IN (SELECT entry_id FROM entry_modules) ORDER BY id`).all();
-      checks.push({ name: 'data.entries_without_module', severity: entriesWithoutModule.length ? 'warn' : 'ok', detail: entriesWithoutModule.length ? `${entriesWithoutModule.length} non-deprecated entries with no module (informational)` : 'all non-deprecated entries have at least one module', items: entriesWithoutModule.length ? entriesWithoutModule.map((r: any)=>r.id) : undefined });
-      const entryCount = (db.prepare('SELECT COUNT(*) AS c FROM entries').get() as any).c;
-      const ftsCount = (db.prepare('SELECT COUNT(*) AS c FROM entries_fts').get() as any).c;
-      const parityOk = entryCount === ftsCount;
-      checks.push({ name: 'fts.count_parity', severity: parityOk ? 'ok' : 'error', detail: `entries=${entryCount}, entries_fts=${ftsCount}` });
-      checks.push({ name: 'fts.rebuild_hint', severity: parityOk ? 'ok' : 'warn', detail: parityOk ? 'fts index in sync' : `Run: INSERT INTO entries_fts(entries_fts) VALUES('rebuild');` });
-      send(200, { ok: checks.every(c => c.severity !== 'error'), checks });
-    } catch (err: any) { send(500, { error: err.message }); }
+    try { send(200, doctor(db)); } catch (err: any) { send(500, { error: err.message }); }
   },
 
   // --- EXPORT (json | markdown) ---
@@ -528,15 +478,16 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     const since = url.searchParams.get('since'); // ISO date or sqlite-friendly
     if (!['json', 'markdown'].includes(format)) return send(400, { error: 'format must be json or markdown' });
     try {
-      let q = 'SELECT rowid AS id, type, kind, category, title, summary, description, status, agent, module, task_id, superseded_by, created_at FROM entries WHERE deprecated=0';
+      let q = 'SELECT id, ulid, type, kind, category, title, summary, description, status, agent, module, task_id, superseded_by, created_at FROM entries WHERE deprecated=0'
+        + ` AND ${liveEntry(db, 'entries')}`;
       const params: any[] = [];
-      if (moduleFilter) { q += ' AND id IN (SELECT entry_id FROM entry_modules WHERE module=?)'; params.push(moduleFilter); }
+      if (moduleFilter) { q += ' AND ulid IN (SELECT entry_ulid FROM entry_modules WHERE module=?)'; params.push(moduleFilter); }
       if (since) { q += ' AND created_at >= ?'; params.push(since); }
       q += ' ORDER BY created_at DESC';
       const entries = db.prepare(q).all(...params) as any[];
       for (const e of entries) {
-        e.refs = db.prepare('SELECT ref_type, ref_value FROM refs WHERE entry_id=?').all(e.id);
-        e.modules = db.prepare('SELECT module FROM entry_modules WHERE entry_id=? ORDER BY is_primary DESC, module ASC').all(e.id).map((r: any) => r.module);
+        e.refs = db.prepare('SELECT ref_type, ref_value FROM refs WHERE entry_ulid=?').all(e.ulid);
+        e.modules = db.prepare('SELECT module FROM entry_modules WHERE entry_ulid=? ORDER BY is_primary DESC, module ASC').all(e.ulid).map((r: any) => r.module);
       }
       if (format === 'json') {
         res.writeHead(200, {

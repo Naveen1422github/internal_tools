@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import { getDb, migrate, addEntry, closeDb } from '@collab-mcp/core';
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -336,18 +336,19 @@ async function run() {
   console.log(`Markdown report written to ${reportPath}`);
 
   // Log gotchas to database
-  const dbPath = path.resolve('collab.db');
-  const db = new Database(dbPath);
+  const db = getDb();
+  migrate(db);
   try {
     for (const gotcha of gotchasList) {
-      db.prepare(`
-        INSERT INTO entries (type, kind, title, summary, description, status, agent, module, category, tokens_estimate)
-        VALUES ('gotcha', 'signal', ?, ?, ?, 'active', 'Gemini', 'dependency-audit', 'Reference', 0)
-      `).run(
-        `Dependency audit blocked on ${gotcha.repo}`,
-        `Audit blocked on ${gotcha.repo}: ${gotcha.error}`,
-        `The dependency audit sweep encountered an error on service ${gotcha.repo}: ${gotcha.error}. Analysis skipped.`
-      );
+      addEntry(db, {
+        type: 'gotcha',
+        title: `Dependency audit blocked on ${gotcha.repo}`,
+        summary: `Audit blocked on ${gotcha.repo}: ${gotcha.error}`.slice(0, 200),
+        description: `The dependency audit sweep encountered an error on service ${gotcha.repo}: ${gotcha.error}. Analysis skipped.`,
+        agent: 'Gemini',
+        module: 'dependency-audit',
+        category: 'Reference',
+      });
       console.log(`Logged gotcha for ${gotcha.repo}`);
     }
   } catch (dbErr) {
@@ -369,26 +370,15 @@ async function run() {
 Summary of findings:
 ${summaryText}`;
 
-    const insertStmt = db.prepare(`
-      INSERT INTO entries (type, kind, title, summary, description, status, agent, module, category, tokens_estimate)
-      VALUES ('changelog', 'signal', ?, ?, ?, 'active', 'Gemini', 'dependency-audit', 'Activity', ?)
-    `);
-    
-    const info = insertStmt.run(
-      title,
-      summary,
-      description,
-      Math.ceil(description.length / 4)
-    );
-    const entryId = info.lastInsertRowid;
-    db.prepare('INSERT OR IGNORE INTO entry_modules (entry_id, module, is_primary) VALUES (?, ?, 1)')
-      .run(entryId, 'dependency-audit');
+    const { id: entryId } = addEntry(db, {
+      type: 'changelog', title, summary, description, agent: 'Gemini', module: 'dependency-audit', category: 'Activity',
+    });
       
     console.log(`Logged changelog entry E-${entryId}`);
   } catch (dbErr) {
     console.error('Failed to log changelog to DB:', dbErr);
   } finally {
-    db.close();
+    closeDb();
   }
 }
 

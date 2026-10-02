@@ -13,8 +13,9 @@ import { updateEntry } from '../src/ops/update.js';
 import { rollup, archive } from '../src/ops/rollup.js';
 import { doctor } from '../src/ops/doctor.js';
 
-// Tests exercise the staged 0005; production callers never pass includeStaged.
-const migrate = (db: Database.Database) => migrateProd(db, { includeStaged: true });
+// Pinned to 0005 (F1): with 0006 staged, includeStaged alone would carry these
+// 0005 tests up to 0006. Production callers never pass includeStaged.
+const migrate = (db: Database.Database) => migrateTo(db, '0005', { includeStaged: true });
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Mirrors db.ts's MIGRATIONS_DIR/STAGED_DIR resolution (core/test is a sibling
@@ -55,10 +56,14 @@ test('migrate does not back up a brand-new empty DB', () => {
 
 test('plain migrate() never applies staged migrations', () => {
   const { db, dir } = tempDb();
+  const migrationsDir = join(dir, 'migrations');
+  const stagedDir = join(migrationsDir, 'staged');
+  mkdirSync(stagedDir, { recursive: true });
+  writeFileSync(join(stagedDir, '0999_staged_probe.sql'),
+    `BEGIN; INSERT INTO schema_migrations (version) VALUES ('0999_staged_probe'); COMMIT;`);
   try {
-    migrateProd(db);
-    const staged = db.prepare(`SELECT version FROM schema_migrations WHERE version LIKE '0005%'`).all();
-    assert.deepEqual(staged, []);
+    migrateProd(db, { migrationsDir, stagedDir });
+    assert.equal(db.prepare(`SELECT 1 FROM schema_migrations WHERE version = '0999_staged_probe'`).get(), undefined);
   } finally {
     db.close();
     rmSync(dir, { recursive: true, force: true });
@@ -78,25 +83,18 @@ test('migrate is idempotent', () => {
 
 test('migrate refuses a version that exists in both migrations/ and staged/', () => {
   const { db, dir } = tempDb();
-  const dupName = '0999_dup_probe.sql';
-  const corePath = join(MIGRATIONS_DIR, dupName);
-  const stagedPath = join(STAGED_DIR, dupName);
-  const stagedDirExisted = existsSync(STAGED_DIR);
+  const migrationsDir = join(dir, 'migrations');
+  const stagedDir = join(migrationsDir, 'staged');
+  mkdirSync(stagedDir, { recursive: true });
+  const probe = `BEGIN; INSERT INTO schema_migrations (version) VALUES ('0999_dup_probe'); COMMIT;`;
+  writeFileSync(join(migrationsDir, '0999_dup_probe.sql'), probe);
+  writeFileSync(join(stagedDir, '0999_dup_probe.sql'), probe);
   try {
-    if (!stagedDirExisted) mkdirSync(STAGED_DIR, { recursive: true });
-    writeFileSync(corePath, 'SELECT 1;\n');
-    writeFileSync(stagedPath, 'SELECT 1;\n');
-
-    assert.throws(() => migrate(db), /0999_dup_probe/);
-    const rows = db.prepare(`SELECT version FROM schema_migrations`).all();
-    assert.deepEqual(rows, []);
-
-    // Plain migrate() never scans staged/, so the same duplicate is invisible to it.
-    assert.doesNotThrow(() => migrateProd(db));
+    assert.throws(
+      () => migrateProd(db, { includeStaged: true, migrationsDir, stagedDir }),
+      (e: Error) => e.name === 'DuplicateMigrationError',
+    );
   } finally {
-    rmSync(corePath, { force: true });
-    rmSync(stagedPath, { force: true });
-    if (!stagedDirExisted) rmSync(STAGED_DIR, { recursive: true, force: true });
     db.close();
     rmSync(dir, { recursive: true, force: true });
   }
@@ -387,7 +385,8 @@ test('backfill is idempotent and reports unresolved links', () => {
     const snapshot = db.prepare(`SELECT id, ulid FROM entries ORDER BY id`).all();
     const report = backfillUlids(db);
     assert.equal(report.entries, 0);
-    assert.deepEqual(report.unresolvedEntryRefs, [{ entry_id: 5, ref_value: '3' }]);
+    const entry_ulid = (db.prepare(`SELECT ulid FROM entries WHERE id = 5`).get() as any).ulid;
+    assert.deepEqual(report.unresolvedEntryRefs, [{ entry_id: 5, entry_ulid, ref_value: '3' }]);
     assert.deepEqual(db.prepare(`SELECT id, ulid FROM entries ORDER BY id`).all(), snapshot);
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });
@@ -553,7 +552,7 @@ test('doctor flags unresolved entry links and missing ulids', () => {
 test('doctor is migration-aware: a pre-0005 DB never throws and reports skipped data checks', () => {
   const { db, dir } = tempDb();
   try {
-    migrateProd(db); // NO staged: what every production DB looks like before 0005 goes live
+    migrateTo(db, '0004'); // pre-0005: what a production DB looks like before it upgrades
     let r: ReturnType<typeof doctor> | undefined;
     assert.doesNotThrow(() => { r = doctor(db); });
     for (const name of ['schema.tables', 'schema.indexes', 'schema.triggers']) {
@@ -578,7 +577,7 @@ test('doctor is migration-aware: a pre-0005 DB never throws and reports skipped 
 test('addEntry succeeds on a pre-0005 DB and returns an id (C1)', () => {
   const { db, dir } = tempDb();
   try {
-    migrateProd(db); // NO staged: pre-0005
+    migrateTo(db, '0004'); // pre-0005
     const result = addEntry(db, { type: 'decision', title: 'pre-0005 add', summary: 's', module: 'demo' });
     assert.ok(Number.isInteger(result.id));
     const row = db.prepare(`SELECT title FROM entries WHERE id = ?`).get(result.id) as any;
@@ -593,7 +592,7 @@ test('addEntry succeeds on a pre-0005 DB and returns an id (C1)', () => {
 test('rollup succeeds on a pre-0005 DB (C1)', () => {
   const { db, dir } = tempDb();
   try {
-    migrateProd(db); // NO staged: pre-0005
+    migrateTo(db, '0004'); // pre-0005
     // Seeded with a raw INSERT that has no ulid column, mirroring what scripts
     // and the REST server do (and all a pre-0005 entries table can accept).
     for (const t of ['a', 'b']) {
@@ -611,7 +610,7 @@ test('rollup succeeds on a pre-0005 DB (C1)', () => {
 test('archive succeeds on a pre-0005 DB (C1)', () => {
   const { db, dir } = tempDb();
   try {
-    migrateProd(db); // NO staged: pre-0005
+    migrateTo(db, '0004'); // pre-0005
     // Raw INSERT, no ulid column: an unprotected type, default status='active' +
     // category='Activity', module set (archive always groups by module), and
     // created_at well before the 'older_than' cutoff -- mirrors the post-0005

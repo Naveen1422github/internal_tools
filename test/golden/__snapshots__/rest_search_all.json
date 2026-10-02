@@ -14,18 +14,6 @@
     },
     {
       "id": "<id>",
-      "type": "changelog",
-      "kind": "signal",
-      "category": "Activity",
-      "title": "Beta change",
-      "summary": "S",
-      "module": "demo",
-      "agent": "Claude",
-      "created_at": "<ts>",
-      "snippet": "Beta change"
-    },
-    {
-      "id": "<id>",
       "type": "gotcha",
       "kind": "signal",
       "category": "Reference",

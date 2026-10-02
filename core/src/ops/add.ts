@@ -1,8 +1,7 @@
 import type { DB } from "../db.js";
-import { estimateTokens, hasUlidColumns } from "../db.js";
+import { estimateTokens } from "../db.js";
 import { autoAdvanceTaskForEntry, type TaskStatus } from "./task.js";
-import { newUlid } from "../ulid.js";
-import { resolveAuthor } from "../author.js";
+import { insertEntryRow, insertEntryModules, insertRefs } from "../entry-write.js";
 
 // ------------------------------------------------------------
 // Types
@@ -126,32 +125,8 @@ export function addEntry(
   }
   const primaryModule = orderedModules.length > 0 ? orderedModules[0] : null;
 
-  // Pre-0005 DBs (staged migration not yet applied) have no `ulid`/`author`
-  // columns on `entries`; naming them unconditionally throws "table entries
-  // has no column named ulid". Checked fresh per call (never cached) because
-  // migrate() can add the columns between two addEntry() calls on the same
-  // open handle. See core/src/db.ts:hasUlidColumns.
-  const withUlid = hasUlidColumns(db);
-  const insertEntry = db.prepare(
-    withUlid
-      ? `INSERT INTO entries (
-      type, kind, title, summary, description,
-      status, agent, module, task_id, tokens_estimate, category, ulid, author
-    ) VALUES (
-      @type, @kind, @title, @summary, @description,
-      @status, @agent, @module, @task_id, @tokens_estimate, @category, @ulid, @author
-    )`
-      : `INSERT INTO entries (
-      type, kind, title, summary, description,
-      status, agent, module, task_id, tokens_estimate, category
-    ) VALUES (
-      @type, @kind, @title, @summary, @description,
-      @status, @agent, @module, @task_id, @tokens_estimate, @category
-    )`,
-  );
-
   const tx = db.transaction((a: AddEntryArgs) => {
-    const baseParams = {
+    const owner = insertEntryRow(db, {
       type: a.type,
       kind,
       title: a.title,
@@ -163,40 +138,10 @@ export function addEntry(
       task_id: a.task_id ?? null,
       tokens_estimate: tokens,
       category,
-    };
-    const result = insertEntry.run(
-      withUlid ? { ...baseParams, ulid: newUlid(), author: resolveAuthor() } : baseParams,
-    );
-    const id = Number(result.lastInsertRowid);
-
-    // entry_modules rows: primary gets is_primary=1, the rest 0. Positional
-    // (?, ?, ?) like the refs path; chunk to respect SQLite's 999-param limit.
-    if (orderedModules.length > 0) {
-      const MODULE_CHUNK_SIZE = 300; // each row uses 3 params
-      for (let i = 0; i < orderedModules.length; i += MODULE_CHUNK_SIZE) {
-        const chunk = orderedModules.slice(i, i + MODULE_CHUNK_SIZE);
-        const placeholders = chunk.map(() => "(?, ?, ?)").join(", ");
-        const params = chunk.flatMap((m) => [id, m, m === primaryModule ? 1 : 0]);
-        db.prepare(
-          `INSERT OR IGNORE INTO entry_modules (entry_id, module, is_primary) VALUES ${placeholders}`,
-        ).run(...params);
-      }
-    }
-
-    if (a.refs && a.refs.length > 0) {
-      // Chunking to respect SQLite's parameter limit (default 999).
-      // Each ref has 3 params (entry_id, ref_type, ref_value).
-      const CHUNK_SIZE = 300;
-      for (let i = 0; i < a.refs.length; i += CHUNK_SIZE) {
-        const chunk = a.refs.slice(i, i + CHUNK_SIZE);
-        const placeholders = chunk.map(() => "(?, ?, ?)").join(", ");
-        const params = chunk.flatMap((r) => [id, r.ref_type, r.ref_value]);
-        db.prepare(
-          `INSERT OR IGNORE INTO refs (entry_id, ref_type, ref_value) VALUES ${placeholders}`,
-        ).run(...params);
-      }
-    }
-    return id;
+    });
+    insertEntryModules(db, owner, orderedModules, primaryModule);
+    insertRefs(db, owner, a.refs ?? []);
+    return owner.id;
   });
 
   const id = tx(args);

@@ -16,6 +16,9 @@
   "updated_at": "<ts>",
   "category": "Reference",
   "superseded_by": null,
+  "ulid": "<ulid>",
+  "author": "<author>",
+  "superseded_by_ulid": null,
   "modules": [
     "demo"
   ],

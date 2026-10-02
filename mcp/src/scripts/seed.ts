@@ -8,7 +8,7 @@
  */
 import { getDb, migrate, closeDb, addEntry } from "@collab-mcp/core";
 
-const db = getDb();
+const db = getDb(undefined, { create: true });
 migrate(db);
 
 const { n } = db.prepare("SELECT count(*) AS n FROM entries").get() as { n: number };

@@ -5,8 +5,8 @@ import { startTestServer, seedEntry } from './helpers/server.mjs';
 let srv;
 before(async () => {
   srv = await startTestServer();
-  seedEntry(srv.db, { category: 'Reference', type: 'decision', title: 'Ref one' });
-  seedEntry(srv.db, { category: 'Activity', type: 'changelog', title: 'Act one' });
+  await seedEntry(srv.db, { category: 'Reference', type: 'decision', title: 'Ref one' });
+  await seedEntry(srv.db, { category: 'Activity', type: 'changelog', title: 'Act one' });
 });
 after(() => srv.close());
 

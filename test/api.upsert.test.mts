@@ -21,7 +21,7 @@ test('upsert creates a new entry and returns its id', async () => {
   const body: any = await res.json();
   assert.strictEqual(body.ok, true);
   assert.ok(Number.isInteger(body.id), 'returns numeric id');
-  const row: any = srv.db.prepare('SELECT title, kind, category FROM entries WHERE rowid = ?').get(body.id);
+  const row: any = srv.db.prepare('SELECT title, kind, category FROM entries WHERE id = ?').get(body.id);
   assert.strictEqual(row.title, 'New decision');
   assert.strictEqual(row.kind, 'signal');        // derived from type
   assert.strictEqual(row.category, 'Reference');  // decision -> Reference
@@ -35,7 +35,7 @@ test('upsert updates an existing entry in place', async () => {
     id: create.id, type: 'gotcha', title: 'Edited', summary: 'edited',
   });
   assert.strictEqual(res.status, 200);
-  const row: any = srv.db.prepare('SELECT title, summary FROM entries WHERE rowid = ?').get(create.id);
+  const row: any = srv.db.prepare('SELECT title, summary FROM entries WHERE id = ?').get(create.id);
   assert.strictEqual(row.title, 'Edited');
   assert.strictEqual(row.summary, 'edited');
 });

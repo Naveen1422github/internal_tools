@@ -1,14 +1,14 @@
 import { test, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { startTestServer, seedEntry } from './helpers/server.mjs';
-import * as ai from '../server/dist/tools/ai.js';
-
+let ai; // dynamic import: ai.js reaches getDb() at load, so env must be set first (D9)
 let srv;
 let originalApiKey;
 let originalGrokApiKey;
 
 before(async () => {
-  srv = await startTestServer();
+  srv = await startTestServer(); // sets COLLAB_DB_PATH + creates the DB
+  ai = await import('../server/dist/tools/ai.js');
   originalApiKey = process.env.GROQ_API_KEY;
   originalGrokApiKey = process.env.GROK_API_KEY;
 });
@@ -61,7 +61,7 @@ test('2. Model returns answer envelope -> endpoint returns { answer }', async ()
 test('3. Model returns search then answer -> server runs FTS search and second call sees results', async () => {
   process.env.GROQ_API_KEY = 'mock-key';
 
-  const entryId = seedEntry(srv.db, {
+  const entryId = await seedEntry(srv.db, {
     category: 'Reference',
     type: 'decision',
     title: 'Testing FTS',
