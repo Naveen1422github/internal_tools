@@ -157,6 +157,7 @@ export function getModule(db: DB, slug: string): ModuleCard {
     )
     .all(slug) as ModuleCard["recent_handoffs"];
 
-  const hub = getHubStatus(db, slug);
+  // 3 titles keeps the card's main-note section at <= 6 lines (T-011 token budget).
+  const hub = getHubStatus(db, slug, 3);
   return { module, active_tasks, indexes, recent_decisions, top_gotchas, recent_handoffs, hub };
 }
