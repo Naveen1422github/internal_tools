@@ -4,17 +4,17 @@
     {
       "name": "schema.tables",
       "severity": "ok",
-      "detail": "13 expected tables present"
+      "detail": "14 expected tables present"
     },
     {
       "name": "schema.indexes",
       "severity": "ok",
-      "detail": "21 expected indexes present"
+      "detail": "26 expected indexes present"
     },
     {
       "name": "schema.triggers",
       "severity": "ok",
-      "detail": "10 expected triggers present"
+      "detail": "14 expected triggers present"
     },
     {
       "name": "data.orphan_refs.task",
@@ -29,7 +29,7 @@
     {
       "name": "data.orphan_module.entries",
       "severity": "warn",
-      "detail": "3 entries with unknown module",
+      "detail": "found 3 entries with unknown module",
       "items": [
         1,
         2,
@@ -50,6 +50,21 @@
       "name": "data.entries_without_module",
       "severity": "ok",
       "detail": "all non-deprecated entries have at least one module"
+    },
+    {
+      "name": "data.entries_without_ulid",
+      "severity": "ok",
+      "detail": "every entry has a ulid"
+    },
+    {
+      "name": "data.unresolved_entry_refs",
+      "severity": "ok",
+      "detail": "every entry link resolves"
+    },
+    {
+      "name": "fts.integrity",
+      "severity": "ok",
+      "detail": "fts index consistent"
     },
     {
       "name": "fts.count_parity",
