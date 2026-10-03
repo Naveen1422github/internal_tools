@@ -2623,7 +2623,7 @@ export function divergentStatusOrType(db: Store, raw: RawChange): string | null 
 ### Task 10: The HTTPS + SSE server
 
 **Files:**
-- Create: `post-office/src/server.ts`, `post-office/test/server.test.ts`
+- Create: `post-office/src/server.ts`, `post-office/test/office.ts` (fixture), `post-office/test/server.test.ts`
 - Modify: `post-office/src/index.ts`
 
 **Interfaces produced:** `startPostOffice(opts) → PostOffice { url, port, ring(event, data, except?), listeners(), close() }`; options `{ store, certPem, keyPem, host?, port?, heartbeatMs? (25 s), revokeCheckMs? (2 s), maxBodyBytes? (64 MB), log?, testHooks?: { dropAllocateAnswer?(ulid) } }`.
@@ -2633,17 +2633,14 @@ Behaviour: every route but `/v1/join` authenticates FIRST, from the store, on ev
 - [ ] **Step 1: Write the failing tests.**
 
 ```ts
-// file: post-office/test/server.test.ts
-import { test } from 'node:test';
+// file: post-office/test/office.ts
 import assert from 'node:assert';
-import {
-  generateSelfSignedCert, requestJson, openEventStream, newUlid, AccessRevokedError,
-  addEntryAsync, setAllocator, readOwnChanges, type PostOfficeTarget,
-} from '@collab-mcp/core';
-import { tempStore, laptop } from './helpers.js';
-import { addMember, revokeMember } from '../src/store.js';
+import { generateSelfSignedCert, requestJson, type PostOfficeTarget } from '@collab-mcp/core';
+import { tempStore } from './helpers.js';
+import { addMember } from '../src/store.js';
 import { startPostOffice } from '../src/server.js';
 
+/** A running post office on 127.0.0.1 with a temp store; `join(name)` registers + joins a member. */
 export async function office(seed = 0, extra: Record<string, unknown> = {}) {
   const t = tempStore(seed);
   const cert = generateSelfSignedCert();
@@ -2657,6 +2654,20 @@ export async function office(seed = 0, extra: Record<string, unknown> = {}) {
   };
   return { ...t, po, cert, target, join, stop: async () => { await po.close(); t.cleanup(); } };
 }
+
+```
+
+```ts
+// file: post-office/test/server.test.ts
+import { test } from 'node:test';
+import assert from 'node:assert';
+import {
+  requestJson, openEventStream, newUlid, AccessRevokedError,
+  addEntryAsync, setAllocator, readOwnChanges, type PostOfficeTarget,
+} from '@collab-mcp/core';
+import { laptop } from './helpers.js';
+import { office } from './office.js';
+import { revokeMember } from '../src/store.js';
 
 function listen(target: PostOfficeTarget) {
   const events: Array<[string, any]> = [];
@@ -3334,7 +3345,7 @@ import {
   type AddEntryArgs,
 } from '@collab-mcp/core';
 import { laptop } from './helpers.js';
-import { office } from './server.test.js';
+import { office } from './office.js';
 import { allocate, nextNumber, revokeMember } from '../src/store.js';
 
 const ok: AddEntryArgs = { type: 'decision', title: 't', summary: 's', module: 'm' };
