@@ -1,6 +1,6 @@
 import type { DB } from "../db.js";
 import { hasUlidPrimaryKey } from "../schema.js";
-import { loadCrsqlite } from "./extension.js";
+import { loadCrsqlite, hasCrrTables } from "./extension.js";
 import { hasSyncState, isSyncEnabled, setSyncValue } from "./state.js";
 
 // Spec D5: notes only. tasks, FTS, local_counters and sync_state stay local.
@@ -91,4 +91,35 @@ export function enableSync(
   });
   tx();
   return { alreadyEnabled: false, tables: [...SYNCED_TABLES], backup };
+}
+
+/** The guarded trigger SQL with its guard removed: the 0006 body again. */
+function unguard(sql: string): string {
+  return sql
+    .replace(/WHEN crsql_internal_sync_bit\(\) = 0\s+AND /g, "WHEN ")
+    .replace(/\s*WHEN crsql_internal_sync_bit\(\) = 0\n/g, "\n");
+}
+
+/**
+ * Undo enableSync (`collab sync uninstall`). The shared tables become plain
+ * tables again (cr-sqlite's crsql_as_table drops its clocks and triggers), the
+ * bookkeeping triggers get their 0006 bodies back, every sync_state key goes
+ * (the machine key with it) and `enabled` becomes '0': new notes get local
+ * numbers again. Notes are untouched. The DB then opens without cr-sqlite.
+ */
+export function disableSync(db: DB): { wasEnabled: boolean } {
+  if (!hasSyncState(db)) return { wasEnabled: false };
+  const wasEnabled = isSyncEnabled(db);
+  if (!wasEnabled && !hasCrrTables(db)) return { wasEnabled };
+  loadCrsqlite(db);
+  db.transaction(() => {
+    for (const t of SYNCED_TABLES) db.prepare(`SELECT crsql_as_table(?)`).get(t);
+    for (const [name, sql] of GUARDED_TRIGGERS_SQL) {
+      db.exec(`DROP TRIGGER IF EXISTS ${name}`);
+      db.exec(unguard(sql));
+    }
+    db.prepare(`DELETE FROM sync_state WHERE key <> 'enabled'`).run();
+    setSyncValue(db, "enabled", "0");
+  })();
+  return { wasEnabled };
 }

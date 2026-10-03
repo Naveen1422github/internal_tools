@@ -183,7 +183,9 @@ export function doctor(db: DB): DoctorResult {
   // A shared DB carries cr-sqlite's own bookkeeping (crsql_*, <t>__crsql_clock/
   // _pks/_itrig...). Those are the extension's, not ours: not "extra".
   const shared = hasCrrTables(db);
-  const ours = (name: string) => !(shared && name.includes("crsql"));
+  // cr-sqlite's own objects (crsql_* bookkeeping, <t>__crsql_* clocks/triggers)
+  // are never "extra"; crsql_* tables can outlive a disableSync.
+  const ours = (name: string) => !(name.startsWith("crsql_") || (shared && name.includes("crsql")));
 
   // 1) schema.tables
   const tableRows = db
