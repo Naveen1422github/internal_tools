@@ -1,15 +1,15 @@
 // file: courier/src/engine.ts
 import Database from "better-sqlite3";
-import type { FSWatcher } from "node:fs";
+import { watch, type FSWatcher } from "node:fs";
+import { basename, dirname } from "node:path";
 import {
   loadCrsqlite, isCrsqliteLoaded, isSyncEnabled, getSyncValue, setSyncValue, postOfficeTargetFromDb,
-  readOwnChanges, decodeChange, applyChanges, reindexFts, entryUlidOf, requestJson,
+  readOwnChanges, decodeChange, applyChanges, reindexFts, entryUlidOf, requestJson, openEventStream,
   AccessRevokedError, type PostOfficeTarget, type WireChange, type EventStream,
 } from "@collab-mcp/core";
 import { COURIER_KEYS as K } from "./keys.js";
 
-// The courier (spec Components 2, D4). Task 3: push and pull; Task 4 adds the watch and the doorbell.
-// One per machine, client-agnostic: it
+// The courier (spec Components 2, D4). One per machine, client-agnostic: it
 // opens the notes DB itself. Push on write (a watch on the DB and its WAL,
 // ~200 ms debounce), pull when the doorbell rings (SSE), retry every 30 s after
 // a failure, nothing at all while nothing changes. All network work runs one
@@ -90,6 +90,12 @@ export class Courier {
   /** Resolves when the work queued so far is done. */
   whenIdle(): Promise<void> {
     return this.chain;
+  }
+
+  start(): void {
+    if (this.stopped) throw new Error("this courier was stopped; make a new one");
+    if (this.opt.watch) this.watchDb();
+    this.connect();
   }
 
   async stop(): Promise<void> {
@@ -281,5 +287,56 @@ export class Courier {
         this.log(`received ${changes.length} change(s)`);
       }
     }
+  }
+
+  /** Push on write: any change to the DB or its WAL, debounced. */
+  private watchDb(): void {
+    const dir = dirname(this.opt.dbPath);
+    const base = basename(this.opt.dbPath);
+    this.watcher = watch(dir, (_event, name) => {
+      const n = name === null || name === undefined ? null : String(name);
+      if (n !== null && n !== base && n !== `${base}-wal`) return;
+      if (this.debounceTimer) clearTimeout(this.debounceTimer);
+      this.debounceTimer = setTimeout(() => {
+        this.debounceTimer = null;
+        void this.pushNow();
+      }, this.opt.debounceMs);
+    });
+    this.watcher.on("error", (e) => this.log(`file watch failed: ${e.message}`));
+  }
+
+  /** The doorbell. On (re)connect: catch up both ways. Dropped: reconnect with back-off up to 30 s. */
+  private connect(): void {
+    if (this.stopped || this.st.state === "revoked") return;
+    this.stream = openEventStream(this.target, "/v1/events", {
+      event: (name) => {
+        if (name === "ready") {
+          this.reconnectDelay = 1000;
+          this.set({ state: "connected", lastError: null });
+          void this.syncNow();
+        } else if (name === "changes") {
+          void this.pullNow();
+        } else if (name === "modules") {
+          void this.enqueue(async () => {
+            await this.refreshModules();
+            await this.push();
+          });
+        } else if (name === "revoked") {
+          this.revoked();
+        }
+      },
+      close: (err) => {
+        this.stream = null;
+        if (this.stopped || this.st.state === "revoked") return;
+        if (err instanceof AccessRevokedError) return this.revoked(err);
+        this.set({ state: "offline", lastError: err?.message ?? this.st.lastError });
+        const delay = Math.min(this.reconnectDelay, this.opt.maxReconnectMs);
+        this.reconnectDelay = Math.min(delay * 2, this.opt.maxReconnectMs);
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = null;
+          this.connect();
+        }, delay);
+      },
+    });
   }
 }
