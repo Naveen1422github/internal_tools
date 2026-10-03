@@ -872,7 +872,7 @@ Add to `core/src/index.ts`: `export * from './sync/errors.js';` and `export * fr
 ### Task 4: Certificate, join code, pinned HTTPS client
 
 **Files:**
-- Create: `core/src/sync/cert.ts`, `core/src/sync/joincode.ts`, `core/src/sync/http.ts`, `core/test/sync-http.test.ts`
+- Create: `core/src/sync/cert.ts`, `core/src/sync/joincode.ts`, `core/src/sync/http.ts`, `core/test/helpers/https-stub.ts`, `core/test/sync-http.test.ts`
 - Modify: `core/src/index.ts`
 
 **Interfaces produced:**
@@ -885,16 +885,12 @@ The pin is checked on `secureConnect`, BEFORE the HTTP request is created, so an
 - [ ] **Step 1: Write the failing tests.**
 
 ```ts
-// file: core/test/sync-http.test.ts
-import { test } from 'node:test';
-import assert from 'node:assert';
+// file: core/test/helpers/https-stub.ts
 import https from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { generateSelfSignedCert, fingerprintOfPem, normalizeFingerprint } from '../src/sync/cert.js';
-import { formatJoinCode, parseJoinCode } from '../src/sync/joincode.js';
-import { requestJson, openEventStream } from '../src/sync/http.js';
-import { PinMismatchError, AccessRevokedError } from '../src/sync/errors.js';
+import { generateSelfSignedCert } from '../../src/sync/cert.js';
 
+/** A throwaway HTTPS server with a fresh self-signed certificate; `seen` lists every request that reached it. */
 export async function stubServer(handler: (req: IncomingMessage, res: ServerResponse, body: string) => void) {
   const c = generateSelfSignedCert();
   const seen: string[] = [];
@@ -910,6 +906,18 @@ export async function stubServer(handler: (req: IncomingMessage, res: ServerResp
     close: () => new Promise<void>((r) => { srv.closeAllConnections(); srv.close(() => r()); }),
   };
 }
+
+```
+
+```ts
+// file: core/test/sync-http.test.ts
+import { test } from 'node:test';
+import assert from 'node:assert';
+import { generateSelfSignedCert, fingerprintOfPem, normalizeFingerprint } from '../src/sync/cert.js';
+import { formatJoinCode, parseJoinCode } from '../src/sync/joincode.js';
+import { requestJson, openEventStream } from '../src/sync/http.js';
+import { PinMismatchError, AccessRevokedError } from '../src/sync/errors.js';
+import { stubServer } from './helpers/https-stub.js';
 
 test('a self-signed certificate: parseable, fingerprint = sha256 of the DER', () => {
   const c = generateSelfSignedCert();
@@ -1280,7 +1288,7 @@ Every writer process (MCP server, REST server, scripts, Codex runs) gets the HTT
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { freshDb } from './helpers/sync.js';
-import { stubServer } from './sync-http.test.js';
+import { stubServer } from './helpers/https-stub.js';
 import { addEntryAsync } from '../src/ops/add.js';
 import { setAllocator, setAllocationRetry, PostOfficeUnreachableError } from '../src/sync/allocator.js';
 import { setSyncValue } from '../src/sync/state.js';
@@ -1358,7 +1366,7 @@ test('httpAllocatorFromDb: null until configured, cached per DB, rebuilt on chan
 });
 ```
 
-Note: importing `stubServer` from `sync-http.test.js` re-registers that file's tests in this process; they are cheap and still pass. (If that double run is unwanted, move `stubServer` to `test/helpers/https-stub.ts`; record which was done.)
+`stubServer` lives in `test/helpers/https-stub.ts` (Task 4), so importing it does not re-run another file's tests.
 
 - [ ] **Step 2: Run and confirm it fails.** Run: `cd core && npx tsx --test test/sync-http-allocator.test.ts`. Expected: FAIL, `SYNC_KEYS` is not exported (the Task 3 stub).
 

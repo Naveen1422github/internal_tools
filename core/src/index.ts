@@ -30,3 +30,6 @@ export * from './sync/enable.js';
 export * from './sync/allocator.js';
 export * from './sync/errors.js';
 export * from './sync/http-allocator.js';
+export * from './sync/cert.js';
+export * from './sync/joincode.js';
+export * from './sync/http.js';
