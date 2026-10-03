@@ -18,7 +18,7 @@ Each laptop keeps its own notes file, and every tool keeps reading and writing i
 | D4 | Push on write. Doorbell (server push) for receiving. Retry every 30 s on failure. Idle = no work. | 2026-10-04, user's proposal + doorbell |
 | D5 | **Notes only.** Tasks stay per-machine (personal; T-numbers would collide; task conflict policy is parked). | 2026-10-04; E-646 |
 | D6 | One courier per machine, independent of any AI client, set up with one plain command. **Start-at-login is opt-in:** setup asks, and the default is no. Without it, the user runs `collab sync start` themselves. Nothing is installed silently, and setup prints exactly what it installs and how to remove it. | 2026-10-04 ("not everyone will use Claude"; "should not appear fishy") |
-| D7 | E-numbers come only from the post office, for every new note including private-topic ones (only the ULID is sent to ask). Idempotent by ULID, atomic, never reused. Pending shows as "number pending". | E-648 + 2026-10-04 |
+| D7 | E-numbers come only from the post office once sharing is on, for every new note including private-topic ones (only the ULID is sent to ask). Idempotent by ULID, atomic, never reused. **v1: if the post office is unreachable, the write is refused and nothing is saved** (collab E-708; relaxes E-642 constraint #5 on purpose; revisit when real teammates join). No "number pending" state: ~150 code sites assume a non-null id. | E-648, E-708 |
 | D8 | Concurrent edits: git-style. Links are separate rows and never conflict. Text edits become revision rows. The **post office alone** runs a three-way merge. Clean merge = merged revision; overlap, or a fixed-choice field (status/type) changed differently = `needs_merge` for a person. Last-writer-wins is **withdrawn**. | E-651 (re-confirmed 2026-10-04) |
 | D9 | Deletes travel as tombstones (`deleted_at`, from 0006) and never resurrect. | E-646, 0006 |
 | D10 | A note travels iff its **primary topic** is shared. Sharing is opt-in per topic. Un-sharing stops future sends; already-delivered notes stay delivered. | E-646 + 2026-10-04 |
@@ -66,17 +66,16 @@ Each laptop keeps its own notes file, and every tool keeps reading and writing i
 
 ## Data flow: a note written on the second laptop
 
-1. A tool saves the note locally: ULID set, `id` NULL ("number pending").
-2. The courier sees the file change, reads the new `crsql_changes` rows, and sends them plus an allocation request for the ULID.
-3. The post office records the delivery (#N), allocates the E-number (same answer on retry), writes `id` into its copy, and rings the doorbell.
+1. The writing tool mints a ULID and asks the post office for an E-number (`addEntryAsync`). If that fails, nothing is saved and the tool gets a clear error.
+2. The note is saved locally with its real number. The courier sees the file change, reads the new `crsql_changes` rows, and sends them.
+3. The post office records the delivery (#N) and rings the doorbell.
 4. The main laptop's courier fetches after its bookmark, applies the rows, re-indexes FTS for the ULIDs, and advances its bookmark. The note is searchable.
-5. The `id` change flows back to the second laptop, and the note shows its real number.
 
 ## Failure behaviour
 
 | Situation | Behaviour |
 |---|---|
-| Post office down | Local writes keep working. Notes stay "number pending". Courier retries every 30 s. |
+| Post office down | **New notes are refused** with a clear message (v1, E-708). Reads, search and edits keep working locally, and the courier retries every 30 s to send pending edits. |
 | Other laptop asleep | It catches up from its bookmark on wake. |
 | Courier crashes mid-send | Its persisted bookmark resends from the last confirmed point. The post office de-duplicates. |
 | Same note edited on both | Clean = merged. Overlap = `needs_merge`, shown on the card and in doctor. Nothing is silently discarded. |
@@ -88,7 +87,7 @@ Each laptop keeps its own notes file, and every tool keeps reading and writing i
 
 1. A note written on B appears on A in ≤ 2 s **and `collab_search` finds it** (not merely "the row is present", per E-643).
 2. B offline while A writes → B catches up on reconnect.
-3. Post office offline while B writes → "number pending" → a real number once it's back.
+3. Post office offline while B writes → the write is refused, nothing is saved, and the message names the post office. Edits made while offline sync once it's back.
 4. Same note edited on A and B: different paragraphs → merged; same line → `needs_merge`.
 5. Delete on A → gone on B and never returns after further syncs.
 6. A private-topic note never leaves its machine (assert on the post office store).
