@@ -56,3 +56,39 @@ test('getDb refuses a CRR database when the extension cannot be found', () => {
     closeDb(); // must finalize without throwing
   } finally { cleanup(); }
 });
+
+import { isSyncEnabled, setSyncValue, getSyncValue } from '../src/sync/state.js';
+import { enableSync, SYNCED_TABLES } from '../src/sync/enable.js';
+import { assertFtsIntact, dbAt } from './helpers/levels.js';
+import { addEntry } from '../src/ops/add.js';
+
+test('0007 adds needs_merge and sync_state; sharing starts off', () => {
+  const { db, cleanup } = db0007();
+  try {
+    assert.ok(db.prepare(`SELECT 1 FROM pragma_table_info('entries') WHERE name='needs_merge'`).get());
+    assert.equal(isSyncEnabled(db), false);
+    setSyncValue(db, 'x', 'y');
+    assert.equal(getSyncValue(db, 'x'), 'y');
+  } finally { cleanup(); }
+});
+
+test('enableSync turns exactly the synced tables into CRRs, is idempotent, keeps FTS intact', () => {
+  const { db, path, cleanup } = db0007();
+  try {
+    addEntry(db, { type: 'decision', title: 'before sharing', summary: 's', module: 'm' });
+    const r = enableSync(db, { backup: true });
+    assert.equal(r.alreadyEnabled, false);
+    assert.deepEqual(r.tables, [...SYNCED_TABLES]);
+    assert.ok(r.backup && r.backup.startsWith(path + '.bak-sync-enable-'));
+    for (const t of SYNCED_TABLES) assert.ok(db.prepare(`SELECT 1 FROM sqlite_master WHERE name = ?`).get(`${t}__crsql_clock`), t);
+    for (const t of ['tasks', 'local_counters', 'sync_state']) assert.equal(db.prepare(`SELECT 1 FROM sqlite_master WHERE name = ?`).get(`${t}__crsql_clock`), undefined, t);
+    assert.equal(isSyncEnabled(db), true);
+    assert.equal(enableSync(db).alreadyEnabled, true);
+    assertFtsIntact(db);
+  } finally { db.prepare('SELECT crsql_finalize()').get(); cleanup(); }
+});
+
+test('enableSync refuses a database without migration 0007', () => {
+  const { db, cleanup } = dbAt('0006');
+  try { assert.throws(() => enableSync(db), /0007/); } finally { cleanup(); }
+});

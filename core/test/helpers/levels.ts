@@ -9,7 +9,7 @@ import { migrateTo } from '../../src/db.js';
 // through testAtEachLevel. Stable API: Level, LEVELS, dbAt, testAtEachLevel,
 // assertFtsIntact.
 
-export type Level = '0005' | '0006';
+export type Level = '0005' | '0006' | '0007';
 export const LEVELS: Level[] = ['0005', '0006'];
 
 /**
