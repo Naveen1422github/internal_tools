@@ -92,3 +92,63 @@ test('enableSync refuses a database without migration 0007', () => {
   const { db, cleanup } = dbAt('0006');
   try { assert.throws(() => enableSync(db), /0007/); } finally { cleanup(); }
 });
+
+import { setAllocator, PostOfficeUnreachableError, SyncAllocationRequiredError } from '../src/sync/allocator.js';
+import { addEntryAsync } from '../src/ops/add.js';
+import { rollup } from '../src/ops/rollup.js';
+
+function sharedDb() {
+  const h = db0007();
+  enableSync(h.db);
+  return h;
+}
+const count = (db: any, t: string) => (db.prepare(`SELECT COUNT(*) c FROM ${t}`).get() as { c: number }).c;
+
+test('sharing off: addEntryAsync behaves like addEntry (local numbers)', async () => {
+  const { db, cleanup } = db0007();
+  try {
+    setAllocator(null);
+    const a = await addEntryAsync(db, { type: 'decision', title: 't', summary: 's' });
+    assert.ok(a.id >= 1);
+  } finally { cleanup(); }
+});
+
+test('sharing on: the number comes from the allocator', async () => {
+  const { db, cleanup } = sharedDb();
+  try {
+    const seen: string[] = [];
+    setAllocator({ allocate: async (ulid) => { seen.push(ulid); return 9001; } });
+    const r = await addEntryAsync(db, { type: 'gotcha', title: 'shared', summary: 's', module: 'm', refs: [{ ref_type: 'file', ref_value: 'x.ts' }] });
+    assert.equal(r.id, 9001);
+    const row = db.prepare(`SELECT ulid, id FROM entries WHERE id = 9001`).get() as { ulid: string; id: number };
+    assert.equal(row.ulid, seen[0]);
+    assert.equal(count(db, 'refs'), 1);
+    assertFtsIntact(db);
+  } finally { setAllocator(null); db.prepare('SELECT crsql_finalize()').get(); cleanup(); }
+});
+
+test('sharing on: allocator failure writes nothing and names the post office', async () => {
+  const { db, cleanup } = sharedDb();
+  try {
+    setAllocator({ allocate: async () => { throw new Error('ECONNREFUSED'); } });
+    const before = [count(db, 'entries'), count(db, 'refs'), count(db, 'entry_modules')];
+    await assert.rejects(addEntryAsync(db, { type: 'decision', title: 't', summary: 's', module: 'm', refs: [{ ref_type: 'file', ref_value: 'y' }] }), PostOfficeUnreachableError);
+    assert.deepEqual([count(db, 'entries'), count(db, 'refs'), count(db, 'entry_modules')], before);
+    setAllocator(null);
+    await assert.rejects(addEntryAsync(db, { type: 'decision', title: 't', summary: 's' }), /post office/i);
+  } finally { setAllocator(null); db.prepare('SELECT crsql_finalize()').get(); cleanup(); }
+});
+
+test('sharing on: sync-only paths refuse to mint numbers locally', async () => {
+  const { db, cleanup } = sharedDb();
+  try {
+    assert.throws(() => addEntry(db, { type: 'decision', title: 't', summary: 's' }), SyncAllocationRequiredError);
+    // An empty task has nothing to roll up: rollup returns an empty result (it does not throw).
+    assert.deepEqual(rollup(db, { task_id: 'T-999' } as any).created_entries, []);
+    // With a real handoff in the task, rollup must refuse to mint a local number.
+    let n = 9100;
+    setAllocator({ allocate: async () => n++ });
+    await addEntryAsync(db, { type: 'handoff', title: 'h', summary: 's', task_id: 'T-999' });
+    assert.throws(() => rollup(db, { task_id: 'T-999' } as any), SyncAllocationRequiredError);
+  } finally { setAllocator(null); db.prepare('SELECT crsql_finalize()').get(); cleanup(); }
+});

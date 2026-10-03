@@ -26,3 +26,4 @@ export * from './entry-write.js';
 export * from './sync/extension.js';
 export * from './sync/state.js';
 export * from './sync/enable.js';
+export * from './sync/allocator.js';

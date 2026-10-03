@@ -4,6 +4,8 @@ import { hasUlidPrimaryKey, liveEntry } from "./schema.js";
 import { newUlid } from "./ulid.js";
 import { resolveAuthor } from "./author.js";
 import type { RefInput } from "./ops/add.js";
+import { isSyncEnabled } from "./sync/state.js";
+import { SyncAllocationRequiredError } from "./sync/allocator.js";
 
 // The ONE place that knows how an entry and its links are written at each
 // schema level (pre-0005 / 0005 / 0006). Every writer goes through here.
@@ -33,6 +35,7 @@ export interface EntryRowInput {
   tokens_estimate: number;
   category?: string;
   rollup_of_task?: string | null;
+  assigned?: { ulid: string; id: number }; // internal: pre-assigned by the post office
 }
 
 export interface RefRowInput extends RefInput {
@@ -76,6 +79,12 @@ export function insertEntryRow(db: DB, row: EntryRowInput): InsertedEntry {
   if (row.category !== undefined) cols.push("category");
 
   if (hasUlidPrimaryKey(db)) {
+    if (row.assigned) {
+      cols.push("ulid", "author", "id");
+      run(db, cols, { ...values, ulid: row.assigned.ulid, author: resolveAuthor(), id: row.assigned.id });
+      return { id: row.assigned.id, ulid: row.assigned.ulid };
+    }
+    if (isSyncEnabled(db)) throw new SyncAllocationRequiredError();
     const ulid = newUlid();
     const id = nextEntryNumber(db);
     cols.push("ulid", "author", "id");
