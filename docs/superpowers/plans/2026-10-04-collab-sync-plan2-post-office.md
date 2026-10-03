@@ -1579,7 +1579,8 @@ export function readOwnChanges(db: DB, since: number): WireChange[] {
 
 /** The entry a change belongs to (null for modules rows or an unknown revision). */
 export function entryUlidOf(db: DB, table: string, pk: Buffer): string | null {
-  const first = db.prepare(`SELECT cell FROM crsql_unpack_columns(?) LIMIT 1`).get(pk) as { cell: unknown } | undefined;
+  // .get() = the first cell. No LIMIT: cr-sqlite 0.16 rejects a LIMIT on this table-valued function.
+  const first = db.prepare(`SELECT cell FROM crsql_unpack_columns(?)`).get(pk) as { cell: unknown } | undefined;
   if (!first) return null;
   switch (table) {
     case "entries":
@@ -2595,7 +2596,7 @@ export function mergeEntries(db: Store, ulids: Iterable<string>): void {
  */
 export function divergentStatusOrType(db: Store, raw: RawChange): string | null {
   if (raw.table !== "entries" || (raw.cid !== "status" && raw.cid !== "type")) return null;
-  const first = db.prepare(`SELECT cell FROM crsql_unpack_columns(?) LIMIT 1`).get(raw.pk) as { cell: string } | undefined;
+  const first = db.prepare(`SELECT cell FROM crsql_unpack_columns(?)`).get(raw.pk) as { cell: string } | undefined;
   if (!first) return null;
   const cur = db
     .prepare(
