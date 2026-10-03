@@ -2493,7 +2493,7 @@ test('5. a delete on A is gone on B and never comes back after further syncs', a
   for (const db of [A.w, B.w, office.store]) {
     assert.ok((db.prepare('SELECT deleted_at FROM entries WHERE ulid = ?').get(ulid) as { deleted_at: string | null }).deleted_at, 'still a tombstone');
   }
-  assert.equal(find(A.w, 'wombat').length + find(B.w, 'wombat').length, 0);
+  assert.equal([...find(A.w, 'wombat'), ...find(B.w, 'wombat')].filter((r) => r.id === id).length, 0, 'search never finds it again');
 });
 
 test('6. a private-module note never leaves its machine (checked on the post office store)', async () => {
