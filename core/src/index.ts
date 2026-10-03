@@ -28,3 +28,5 @@ export * from './sync/extension.js';
 export * from './sync/state.js';
 export * from './sync/enable.js';
 export * from './sync/allocator.js';
+export * from './sync/errors.js';
+export * from './sync/http-allocator.js';

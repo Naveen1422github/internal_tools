@@ -3,7 +3,7 @@ import { estimateTokens } from "../db.js";
 import { autoAdvanceTaskForEntry, type TaskStatus } from "./task.js";
 import { insertEntryRow, insertEntryModules, insertRefs } from "../entry-write.js";
 import { isSyncEnabled } from "../sync/state.js";
-import { getAllocator, PostOfficeUnreachableError } from "../sync/allocator.js";
+import { resolveAllocator, allocateWithRetry, PostOfficeUnreachableError } from "../sync/allocator.js";
 import { newUlid } from "../ulid.js";
 
 // ------------------------------------------------------------
@@ -89,22 +89,46 @@ export type AddEntryResult = {
   normalizedDescription?: boolean;
 };
 
+const ENTRY_TYPES = Object.keys(KIND_BY_TYPE);
+const CATEGORIES = ["Index", "Reference", "Activity"];
+const AGENTS = ["Claude", "Codex", "Gemini", "User"];
+const REF_TYPES = ["file", "task", "entry", "url"];
+
+/**
+ * Every check a new entry must pass, run BEFORE a number is requested (E-713):
+ * a save refused for bad input must never consume a post office number. The
+ * first four messages are addEntry's historical ones; the rest mirror the
+ * schema's CHECK constraints so the database never has to be the one to refuse.
+ */
+export function validateAddEntryArgs(args: AddEntryArgs): void {
+  if (!args.title || args.title.trim().length === 0) throw new Error("title is required");
+  if (!args.summary || args.summary.trim().length === 0) throw new Error("summary is required");
+  if (args.summary.length > 200) throw new Error(`summary exceeds 200 chars (got ${args.summary.length})`);
+  if (args.type === "rollup") throw new Error("rollup entries are system-generated; use collab.rollup (not collab.add)");
+  if (!ENTRY_TYPES.includes(args.type)) throw new Error(`invalid type: ${String(args.type)}`);
+  if (args.category !== undefined && !CATEGORIES.includes(args.category)) throw new Error(`invalid category: ${String(args.category)}`);
+  if (args.agent !== undefined && !AGENTS.includes(args.agent)) throw new Error(`invalid agent: ${String(args.agent)}`);
+  if (args.status !== undefined && args.status !== "draft" && args.status !== "active") {
+    throw new Error(`invalid status: ${String(args.status)} (a new note is draft or active)`);
+  }
+  if (args.description !== undefined && args.description !== null && typeof args.description !== "string") {
+    throw new Error("description must be text");
+  }
+  for (const m of [args.module, ...(args.modules ?? [])]) {
+    if (m !== undefined && typeof m !== "string") throw new Error(`invalid module: ${String(m)}`);
+  }
+  if (args.task_id !== undefined && typeof args.task_id !== "string") throw new Error("task_id must be text");
+  for (const r of args.refs ?? []) {
+    if (!r || !REF_TYPES.includes(r.ref_type)) throw new Error(`invalid ref_type: ${String(r?.ref_type)}`);
+    if (typeof r.ref_value !== "string" || r.ref_value.length === 0) throw new Error("every ref needs a non-empty ref_value");
+  }
+}
+
 export function addEntry(
   db: DB,
   args: AddEntryArgs,
 ): AddEntryResult {
-  if (!args.title || args.title.trim().length === 0) {
-    throw new Error("title is required");
-  }
-  if (!args.summary || args.summary.trim().length === 0) {
-    throw new Error("summary is required");
-  }
-  if (args.summary.length > 200) {
-    throw new Error(`summary exceeds 200 chars (got ${args.summary.length})`);
-  }
-  if (args.type === "rollup") {
-    throw new Error("rollup entries are system-generated; use collab.rollup (not collab.add)");
-  }
+  validateAddEntryArgs(args);
 
   // Repair a double-encoded description before anything downstream sees it --
   // including estimateTokens, which would otherwise count the escape sequences.
@@ -174,20 +198,17 @@ export function addEntry(
 }
 
 /**
- * The entry point for every async caller. Sharing off: identical to addEntry.
- * Sharing on: ask the post office for the number FIRST; if that fails,
- * nothing is written (E-708: refuse to save).
+ * The entry point for every async caller. Checks the input FIRST (E-713), then:
+ * sharing off => identical to addEntry; sharing on => ask the post office for
+ * the number with ONE ulid across bounded retries; if that fails, nothing is
+ * written (E-708: refuse to save).
  */
 export async function addEntryAsync(db: DB, args: AddEntryArgs): Promise<AddEntryResult> {
+  validateAddEntryArgs(args);
   if (!isSyncEnabled(db)) return addEntry(db, args);
-  const allocator = getAllocator();
+  const allocator = resolveAllocator(db);
   if (!allocator) throw new PostOfficeUnreachableError("no post office connection is configured on this machine");
   const ulid = newUlid();
-  let id: number;
-  try {
-    id = await allocator.allocate(ulid);
-  } catch (e) {
-    throw new PostOfficeUnreachableError((e as Error).message);
-  }
+  const id = await allocateWithRetry(allocator, ulid);
   return addEntry(db, { ...args, assigned: { ulid, id } });
 }
