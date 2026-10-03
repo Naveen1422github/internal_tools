@@ -2070,7 +2070,7 @@ export function isRevoked(db: Store, deviceId: string): boolean {
 }
 
 export function listMembers(db: Store): Member[] {
-  return db.prepare(`SELECT ${MEMBER_COLS} FROM po_members ORDER BY created_at, device_id`).all() as Member[];
+  return db.prepare(`SELECT ${MEMBER_COLS} FROM po_members ORDER BY created_at, rowid`).all() as Member[];
 }
 
 /** Revoke by device id or by name (a name must be unambiguous). Effective on the next request (D12). */
