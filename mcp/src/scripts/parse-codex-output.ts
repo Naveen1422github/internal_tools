@@ -29,9 +29,13 @@
  *   --type-hint <type>       override default type (see IngestSource -> EntryType map)
  *   --save                   persist the draft via addEntry and print {id: N}
  *   --input <path>           read from file path instead of stdin
+ *   --db <path>              SQLite file to persist into. Falls back to
+ *                            $COLLAB_DB_PATH, then ./collab.db in the cwd.
+ *                            Pass it explicitly when dispatching from a project
+ *                            other than the one the install lives in.
  */
 import { readFileSync } from "node:fs";
-import { getDb, migrate, closeDb } from "@collab-mcp/core";
+import { getDb, getDbPath, migrate, closeDb } from "@collab-mcp/core";
 import { addEntry } from "@collab-mcp/core";
 import {
   parseIntoDraft,
@@ -53,6 +57,7 @@ function parseArgs(argv: string[]): {
   type_hint?: EntryType;
   save: boolean;
   input?: string;
+  db?: string;
   prompt_chars?: number;
   wall_ms?: number;
   exit_code?: number;
@@ -96,6 +101,9 @@ function parseArgs(argv: string[]): {
         break;
       case "--input":
         out.input = take();
+        break;
+      case "--db":
+        out.db = take();
         break;
       case "--prompt-chars":
         out.prompt_chars = num(take());
@@ -237,7 +245,10 @@ if (!args.save) {
 process.stderr.write("=== Codex Results ===\n");
 process.stderr.write(rawText + "\n\n");
 
-const db = getDb();
+// Pass the path explicitly rather than leaning on ambient resolution: a dispatch
+// that silently persists into another project's knowledge base is invisible until
+// the entry ids stop making sense (collab E-550).
+const db = getDb(args.db);
 migrate(db);
 
 const refs: RefInput[] | undefined = result.draft_entry.refs;
@@ -253,7 +264,7 @@ const saved = addEntry(db, {
 });
 
 process.stderr.write(
-  `=== Saved to collab.db ===\n` +
+  `=== Saved to ${getDbPath()} ===\n` +
     `  id:         ${saved.id}\n` +
     `  type:       ${result.draft_entry.type}\n` +
     `  title:      ${result.draft_entry.title}\n` +
