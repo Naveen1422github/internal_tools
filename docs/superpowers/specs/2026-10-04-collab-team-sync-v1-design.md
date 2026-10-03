@@ -32,7 +32,7 @@ Each laptop keeps its own notes file, and every tool keeps reading and writing i
 
 ### 1. `@collab-mcp/core` changes (shared by every writer)
 - **Load the cr-sqlite extension in `getDb()` once sync is enabled.** Once tables are CRRs, their triggers call cr-sqlite functions, so **every** process that writes the notes file (MCP servers, REST server, scripts, Codex runs) must load the extension or its writes fail. This is the biggest blast-radius item in v1. See Risks.
-- **Numbering mode:** when sync is enabled, `insertEntryRow` writes `id = NULL` (number pending) instead of minting from `local_counters`. Readers show "pending" + a short ULID. Before sync is enabled, behaviour is unchanged.
+- **Numbering mode:** when sync is enabled, `insertEntryRow` refuses to mint from `local_counters`. New entries go through `addEntryAsync`, which gets the number from the post office first, or writes nothing (E-708). Before sync is enabled, behaviour is unchanged.
 - **Edits write revisions:** `updateEntry` appends an `entry_revisions` row (parent = current revision) as well as updating the entry. The table exists since 0005; today it holds 4 rows.
 - **`needs_merge` surfacing:** the module card and doctor show entries flagged by the post office.
 
