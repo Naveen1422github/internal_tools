@@ -167,12 +167,19 @@ export function doctor(db: DB): DoctorResult {
   const has0005 = applied("0005_ulid_expand");
   const has0006 = applied("0006_ulid_contract");
 
-  const expectedTables = has0006 ? EXPECTED_TABLES_0006
-    : has0005 ? union(EXPECTED_TABLES, EXPECTED_TABLES_0005) : EXPECTED_TABLES;
+  // Copied: the 0007 line below adds to it, and the constants are shared.
+  const expectedTables = new Set(has0006 ? EXPECTED_TABLES_0006
+    : has0005 ? union(EXPECTED_TABLES, EXPECTED_TABLES_0005) : EXPECTED_TABLES);
   const expectedIndexes = has0006 ? EXPECTED_INDEXES_0006
     : has0005 ? union(EXPECTED_INDEXES, EXPECTED_INDEXES_0005) : EXPECTED_INDEXES;
   const expectedTriggers = has0006 ? EXPECTED_TRIGGERS_0006
     : has0005 ? union(EXPECTED_TRIGGERS, EXPECTED_TRIGGERS_0005) : EXPECTED_TRIGGERS;
+  // 0007 (staged) adds the local-only sync_state table.
+  if (applied("0007_sync_prep")) expectedTables.add("sync_state");
+  // A shared DB carries cr-sqlite's own bookkeeping (crsql_*, <t>__crsql_clock/
+  // _pks/_itrig...). Those are the extension's, not ours: not "extra".
+  const shared = hasCrrTables(db);
+  const ours = (name: string) => !(shared && name.includes("crsql"));
 
   // 1) schema.tables
   const tableRows = db
@@ -188,7 +195,7 @@ export function doctor(db: DB): DoctorResult {
       `,
     )
     .all() as Array<{ name: string }>;
-  const actualTables = new Set(tableRows.map((r) => r.name));
+  const actualTables = new Set(tableRows.map((r) => r.name).filter(ours));
   checks.push(schemaCheck("schema.tables", actualTables, expectedTables, "tables"));
 
   // 2) schema.indexes
@@ -202,7 +209,7 @@ export function doctor(db: DB): DoctorResult {
       `,
     )
     .all() as Array<{ name: string }>;
-  const actualIndexes = new Set(indexRows.map((r) => r.name));
+  const actualIndexes = new Set(indexRows.map((r) => r.name).filter(ours));
   checks.push(schemaCheck("schema.indexes", actualIndexes, expectedIndexes, "indexes"));
 
   // 3) schema.triggers
@@ -215,7 +222,7 @@ export function doctor(db: DB): DoctorResult {
       `,
     )
     .all() as Array<{ name: string }>;
-  const actualTriggers = new Set(triggerRows.map((r) => r.name));
+  const actualTriggers = new Set(triggerRows.map((r) => r.name).filter(ours));
   checks.push(schemaCheck("schema.triggers", actualTriggers, expectedTriggers, "triggers"));
 
   // 4) data.orphan_refs.task

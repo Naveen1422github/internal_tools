@@ -183,6 +183,12 @@ test('doctor: sync.extension is ok on a shared DB opened with the extension', ()
   const { db, cleanup } = db0007();
   try {
     enableSync(db);
-    assert.equal(doctor(db).checks.find((x) => x.name === 'sync.extension')!.severity, 'ok');
+    const checks = doctor(db).checks;
+    assert.equal(checks.find((x) => x.name === 'sync.extension')!.severity, 'ok');
+    // sync_state and cr-sqlite's own objects are not "extra".
+    for (const n of ['schema.tables', 'schema.indexes', 'schema.triggers']) {
+      const c = checks.find((x) => x.name === n)!;
+      assert.equal(c.severity, 'ok', `${n}: ${c.detail} ${JSON.stringify(c.items)}`);
+    }
   } finally { db.prepare('SELECT crsql_finalize()').get(); cleanup(); }
 });
