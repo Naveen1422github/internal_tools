@@ -9,6 +9,7 @@
   "workspaces": [
     "core",
     "post-office",
+    "courier",
     "mcp",
     "server",
     "ui",

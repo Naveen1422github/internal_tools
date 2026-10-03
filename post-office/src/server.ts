@@ -23,7 +23,13 @@ export interface PostOfficeOptions {
   maxBodyBytes?: number;
   log?: (line: string) => void;
   /** Tests only. */
-  testHooks?: { dropAllocateAnswer?: (ulid: string) => boolean };
+  testHooks?: {
+    dropAllocateAnswer?: (ulid: string) => boolean;
+    /** Accept a push, then drop the connection instead of answering (acceptance test 8). */
+    dropChangesAnswer?: (device: string) => boolean;
+    /** Every request, with the device id it CLAIMS (before authentication), so tests also count refused ones. */
+    onRequest?: (route: string, device: string) => void;
+  };
 }
 
 export interface PostOffice {
@@ -106,6 +112,7 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "https://post-office.invalid");
     const route = `${req.method} ${url.pathname}`;
+    o.testHooks?.onRequest?.(route, /^Bearer ([^:\s]+):/.exec(req.headers.authorization ?? "")?.[1] ?? "");
     if (route === "POST /v1/join") {
       const b = await readJson(req, maxBody);
       const device = String(b?.device ?? "");
@@ -133,6 +140,7 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
           ring("changes", { last_seq: r.lastSeq }, r.officeWrote ? undefined : me.device_id);
           log(`${me.name}: ${r.accepted} change(s) accepted, ${r.duplicates} duplicate(s)${r.officeWrote ? ", office wrote a merge/flag" : ""}`);
         }
+        if (o.testHooks?.dropChangesAnswer?.(me.device_id)) { req.socket.destroy(); return; }
         return send(res, 200, { accepted: r.accepted, duplicates: r.duplicates, last_seq: r.lastSeq });
       }
       case "GET /v1/changes": {

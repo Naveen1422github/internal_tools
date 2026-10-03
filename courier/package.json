@@ -1,0 +1,28 @@
+{
+  "name": "@collab-mcp/courier",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Sync v1 courier: sends this machine's shared notes to the post office and collects everyone else's. CLI: collab sync ...",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": { ".": "./dist/index.js" },
+  "bin": { "collab": "./dist/bin.js" },
+  "scripts": {
+    "build": "tsc",
+    "pretest": "npm --prefix ../core run build && npm --prefix ../post-office run build",
+    "test": "tsx --test test/**/*.test.ts"
+  },
+  "dependencies": {
+    "@collab-mcp/core": "*",
+    "better-sqlite3": "^11.3.0"
+  },
+  "devDependencies": {
+    "@collab-mcp/post-office": "*",
+    "@types/better-sqlite3": "^7.6.8",
+    "@types/node": "^20.14.0",
+    "tsx": "^4.16.0",
+    "typescript": "~5.3.3"
+  },
+  "engines": { "node": ">=20.9.0" }
+}
