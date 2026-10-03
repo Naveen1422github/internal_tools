@@ -152,3 +152,37 @@ test('sharing on: sync-only paths refuse to mint numbers locally', async () => {
     assert.throws(() => rollup(db, { task_id: 'T-999' } as any), SyncAllocationRequiredError);
   } finally { setAllocator(null); db.prepare('SELECT crsql_finalize()').get(); cleanup(); }
 });
+
+import { getModule, initModule } from '../src/ops/module.js';
+import { doctor } from '../src/ops/doctor.js';
+
+test('needs_merge notes surface on the card and in doctor', () => {
+  const { db, cleanup } = db0007();
+  try {
+    initModule(db, { slug: 'm' });
+    const id = addEntry(db, { type: 'decision', title: 'forked', summary: 's', module: 'm' }).id;
+    assert.deepEqual(getModule(db, 'm').needs_merge, []);
+    db.prepare(`UPDATE entries SET needs_merge = 1 WHERE id = ?`).run(id);
+    assert.deepEqual(getModule(db, 'm').needs_merge, [{ id, title: 'forked' }]);
+    const c = doctor(db).checks.find((x) => x.name === 'sync.needs_merge')!;
+    assert.equal(c.severity, 'warn');
+    assert.deepEqual(c.items, [`E-${String(id).padStart(5, '0')}`]);
+  } finally { cleanup(); }
+});
+
+test('the card carries an empty needs_merge before 0007', () => {
+  const { db, cleanup } = dbAt('0006');
+  try {
+    initModule(db, { slug: 'm' });
+    assert.deepEqual(getModule(db, 'm').needs_merge, []);
+    assert.equal(doctor(db).checks.find((x) => x.name === 'sync.needs_merge'), undefined);
+  } finally { cleanup(); }
+});
+
+test('doctor: sync.extension is ok on a shared DB opened with the extension', () => {
+  const { db, cleanup } = db0007();
+  try {
+    enableSync(db);
+    assert.equal(doctor(db).checks.find((x) => x.name === 'sync.extension')!.severity, 'ok');
+  } finally { db.prepare('SELECT crsql_finalize()').get(); cleanup(); }
+});

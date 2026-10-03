@@ -28,6 +28,7 @@ export interface ModuleCard {
   indexes: Array<{ id: number; title: string; summary: string }>;
   recent_decisions: Array<{ id: number; title: string; summary: string }>;
   top_gotchas: Array<{ id: number; summary: string }>;
+  needs_merge: Array<{ id: number; title: string }>;
   recent_handoffs: Array<{
     id: number;
     title: string;
@@ -85,6 +86,7 @@ export function getModule(db: DB, slug: string): ModuleCard {
       indexes: [],
       recent_decisions: [],
       top_gotchas: [],
+      needs_merge: [],
       recent_handoffs: [],
       hub: { state: "unset", coverage: null },
     };
@@ -175,5 +177,16 @@ export function getModule(db: DB, slug: string): ModuleCard {
       },
     };
   }
-  return { module, active_tasks, indexes, recent_decisions, top_gotchas, recent_handoffs, hub };
+  // Spec D8: forks the post office could not merge wait here for a person.
+  const hasNeedsMerge = !!db.prepare(`SELECT 1 FROM pragma_table_info('entries') WHERE name = 'needs_merge'`).get();
+  const needs_merge = hasNeedsMerge
+    ? (db.prepare(
+        `SELECT id, title FROM entries
+          WHERE ulid IN (SELECT entry_ulid FROM entry_modules WHERE module = ?) AND ${live}
+            AND needs_merge = 1 AND deprecated = 0
+          ORDER BY created_at DESC LIMIT 5`,
+      ).all(slug) as ModuleCard["needs_merge"])
+    : [];
+
+  return { module, active_tasks, indexes, recent_decisions, top_gotchas, needs_merge, recent_handoffs, hub };
 }
