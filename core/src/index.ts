@@ -23,6 +23,7 @@ export * from './backfill.js';
 export * from './preflight-0006.js';
 export * from './schema.js';
 export * from './entry-write.js';
+export * from './revisions.js';
 export * from './sync/extension.js';
 export * from './sync/state.js';
 export * from './sync/enable.js';

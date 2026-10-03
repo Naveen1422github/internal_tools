@@ -172,10 +172,14 @@ export function doctor(db: DB): DoctorResult {
     : has0005 ? union(EXPECTED_TABLES, EXPECTED_TABLES_0005) : EXPECTED_TABLES);
   const expectedIndexes = has0006 ? EXPECTED_INDEXES_0006
     : has0005 ? union(EXPECTED_INDEXES, EXPECTED_INDEXES_0005) : EXPECTED_INDEXES;
-  const expectedTriggers = has0006 ? EXPECTED_TRIGGERS_0006
+  let expectedTriggers = has0006 ? EXPECTED_TRIGGERS_0006
     : has0005 ? union(EXPECTED_TRIGGERS, EXPECTED_TRIGGERS_0005) : EXPECTED_TRIGGERS;
-  // 0007 (staged) adds the local-only sync_state table.
-  if (applied("0007_sync_prep")) expectedTables.add("sync_state");
+  // 0007 (staged) adds the local-only sync_state table and drops the revision
+  // trigger (revisions are written by code from 0007, core/src/revisions.ts).
+  if (applied("0007_sync_prep")) {
+    expectedTables.add("sync_state");
+    expectedTriggers = new Set([...expectedTriggers].filter((t) => t !== "trg_entries_revision"));
+  }
   // A shared DB carries cr-sqlite's own bookkeeping (crsql_*, <t>__crsql_clock/
   // _pks/_itrig...). Those are the extension's, not ours: not "extra".
   const shared = hasCrrTables(db);

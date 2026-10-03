@@ -3,6 +3,7 @@ import { estimateTokens } from "../db.js";
 import type { RefInput } from "./add.js";
 import { hasUlidPrimaryKey } from "../schema.js";
 import { ownerOf, insertRefs, deleteRef } from "../entry-write.js";
+import { snapshotForRevision, finishRevision } from "../revisions.js";
 
 // ------------------------------------------------------------
 // Types
@@ -75,13 +76,15 @@ export function updateEntry(db: DB, args: UpdateEntryArgs): UpdateEntryResult {
     where = "ulid = @ulid";
   }
 
-  const info = db
-    .prepare(`UPDATE entries SET ${sets.join(", ")} WHERE ${where}`)
-    .run(params);
-
-  if (info.changes === 0) {
-    throw new Error(`no entry found with id ${args.id}`);
-  }
+  // Spec "Edits write revisions": the snapshot/finish pair records the revision
+  // in the same transaction as the edit (0007+; below 0007 the trigger does it).
+  const tx = db.transaction(() => {
+    const before = params.ulid ? snapshotForRevision(db, params.ulid as string) : null;
+    const info = db.prepare(`UPDATE entries SET ${sets.join(", ")} WHERE ${where}`).run(params);
+    if (info.changes === 0) throw new Error(`no entry found with id ${args.id}`);
+    finishRevision(db, before);
+  });
+  tx();
 
   return { id: args.id, updated_fields: updated };
 }
