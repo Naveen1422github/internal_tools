@@ -89,6 +89,22 @@ export function updateEntry(db: DB, args: UpdateEntryArgs): UpdateEntryResult {
   return { id: args.id, updated_fields: updated };
 }
 
+/**
+ * Spec D8: a person settles a needs_merge note while keeping its current text
+ * (to change the text, just edit it: any edit settles it). Folds every pending
+ * head into one revision and clears the flag; replicates like any edit.
+ */
+export function resolveNeedsMerge(db: DB, id: number): { id: number } {
+  const owner = ownerOf(db, id);
+  if (!owner || !owner.ulid) throw new Error(`no entry found with id ${id}`);
+  db.transaction(() => {
+    const before = snapshotForRevision(db, owner.ulid as string);
+    if (!before || before.needs_merge !== 1) throw new Error(`E-${id} is not waiting for a merge`);
+    finishRevision(db, before);
+  })();
+  return { id };
+}
+
 // ------------------------------------------------------------
 // updateEntryRefs — add/remove structured refs on an EXISTING entry
 //
