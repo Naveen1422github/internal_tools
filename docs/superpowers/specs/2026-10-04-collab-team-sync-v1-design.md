@@ -6,7 +6,7 @@
 
 ## In one paragraph (plain language)
 
-Each laptop keeps its own notes file, and every tool keeps reading and writing it at full speed. A small **courier** program runs on each laptop and starts with the computer. It notices new notes the moment they're saved and sends them to a **post office**. The post office runs on the main laptop for now and later on a server. It gives each note its official number, keeps a copy of everything shared, merges simultaneous edits, and **rings the doorbell** of the other laptops so they collect new notes straight away. If anything is unreachable, the courier retries every 30 seconds. When nothing changes, nothing happens.
+Each laptop keeps its own notes file, and every tool keeps reading and writing it at full speed. A small **courier** program runs on each laptop. The owner either starts it themselves or opts in to having it start at login. It notices new notes the moment they're saved and sends them to a **post office**. The post office runs on the main laptop for now and later on a server. It gives each note its official number, keeps a copy of everything shared, merges simultaneous edits, and **rings the doorbell** of the other laptops so they collect new notes straight away. If anything is unreachable, the courier retries every 30 seconds. When nothing changes, nothing happens.
 
 ## Decisions (with where they came from)
 
@@ -17,7 +17,7 @@ Each laptop keeps its own notes file, and every tool keeps reading and writing i
 | D3 | v1 = two real machines (the user's main and second laptop). Built so the post office can move to a server with a config change only. | 2026-10-04 (B + C) |
 | D4 | Push on write. Doorbell (server push) for receiving. Retry every 30 s on failure. Idle = no work. | 2026-10-04, user's proposal + doorbell |
 | D5 | **Notes only.** Tasks stay per-machine (personal; T-numbers would collide; task conflict policy is parked). | 2026-10-04; E-646 |
-| D6 | One courier per machine (a background service started at OS login), independent of any AI client. One plain setup command. | 2026-10-04 ("not everyone will use Claude") |
+| D6 | One courier per machine, independent of any AI client, set up with one plain command. **Start-at-login is opt-in:** setup asks, and the default is no. Without it, the user runs `collab sync start` themselves. Nothing is installed silently, and setup prints exactly what it installs and how to remove it. | 2026-10-04 ("not everyone will use Claude"; "should not appear fishy") |
 | D7 | E-numbers come only from the post office, for every new note including private-topic ones (only the ULID is sent to ask). Idempotent by ULID, atomic, never reused. Pending shows as "number pending". | E-648 + 2026-10-04 |
 | D8 | Concurrent edits: git-style. Links are separate rows and never conflict. Text edits become revision rows. The **post office alone** runs a three-way merge. Clean merge = merged revision; overlap, or a fixed-choice field (status/type) changed differently = `needs_merge` for a person. Last-writer-wins is **withdrawn**. | E-651 (re-confirmed 2026-10-04) |
 | D9 | Deletes travel as tombstones (`deleted_at`, from 0006) and never resurrect. | E-646, 0006 |
@@ -37,7 +37,10 @@ Each laptop keeps its own notes file, and every tool keeps reading and writing i
 - **`needs_merge` surfacing:** the module card and doctor show entries flagged by the post office.
 
 ### 2. Courier (new package, one per machine)
-- An OS login service (Windows Task Scheduler / macOS launchd / Linux systemd user unit), installed by `collab sync setup <join-code>`.
+- Set up by `collab sync setup <join-code>`. Setup asks "Start sync automatically when you log in? [y/N]" (also `--autostart` / `--no-autostart` for scripted installs).
+  - **Yes:** it registers an OS login entry (Windows Task Scheduler / macOS launchd / Linux systemd user unit) and prints its name and location.
+  - **No (default):** nothing is registered. The user runs `collab sync start` / `stop` / `status`.
+  - Either way: `collab sync autostart on|off` changes the choice later, and `collab sync uninstall` removes everything setup added. Notes always save locally; if the courier isn't running, it catches up from its bookmark when it starts.
 - **Watch:** a file-change watch on the notes DB and its WAL, debounced at about 200 ms. On change, it reads `crsql_changes` since its last-sent `db_version`.
 - **Filter:** sends only rows whose entry's primary topic is shared (entries, refs, entry_modules and entry_revisions are mapped to their entry ULID). Allocation requests (ULID only) are sent for every new note.
 - **Send:** HTTPS POST to the post office with its device key. On failure, retry every 30 s. It persists its sent-bookmark, and the post office ignores duplicates, so resending is always safe.
