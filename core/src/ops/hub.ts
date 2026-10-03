@@ -30,6 +30,7 @@ export interface HubCoverage {
   linked_count: number;
   unlinked_count: number;
   unlinked: Array<{ id: number; type: string; title: string }>;
+  unlinked_on_card?: number[]; // ids of unlinked notes already shown elsewhere on the module card
   expired: Array<{ from_id: number; to_id: number | null; to_ref: string }>;
 }
 

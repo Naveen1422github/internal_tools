@@ -160,8 +160,30 @@ testAtEachLevel('module card carries hub status', (db) => {
   setModuleHub(db, { slug: M, id: hub });
   const card = getModule(db, M);
   assert.equal(card.hub.state, 'ok');
-  assert.deepEqual(card.hub.coverage!.unlinked.map((u) => u.id), [g]);
+  assert.deepEqual(card.hub.coverage!.unlinked, []);
+  assert.deepEqual(card.hub.coverage!.unlinked_on_card, [g]);
+  assert.equal(card.hub.coverage!.unlinked_count, 1);
   assert.deepEqual(getModule(db, 'no-such-topic').hub, { state: 'unset', coverage: null });
+});
+
+testAtEachLevel('card drops the Index list once a main note is set', (db) => {
+  initModule(db, { slug: M });
+  const ix = addEntry(db, { type: 'decision', title: 'ix', summary: 's', module: M, category: 'Index' }).id;
+  assert.deepEqual(getModule(db, M).indexes.map((i) => i.id), [ix]);
+  setModuleHub(db, { slug: M, id: ix });
+  assert.deepEqual(getModule(db, M).indexes, []);
+});
+
+testAtEachLevel('card lists at most 3 unlinked notes that are not already on the card', (db) => {
+  initModule(db, { slug: M });
+  const hub = note(db, 'decision', 'map');
+  const props = [1, 2, 3, 4].map((n) => note(db, 'proposal', `p${n}`));
+  setModuleHub(db, { slug: M, id: hub });
+  const c = getModule(db, M).hub.coverage!;
+  assert.equal(c.unlinked_count, 4);
+  assert.equal(c.unlinked.length, 3);
+  assert.deepEqual(c.unlinked_on_card, []);
+  assert.ok(c.unlinked.every((u) => props.includes(u.id)));
 });
 
 const chk = (db: any, n: string) => doctor(db).checks.find((c) => c.name === n)!;

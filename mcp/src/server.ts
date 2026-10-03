@@ -800,9 +800,12 @@ server.registerTool(
       if (c.unlinked_count === 0) {
         lines.push(`  reaches all ${c.linked_count} important notes.`);
       } else {
-        lines.push(`  reaches ${c.linked_count} of ${c.linked_count + c.unlinked_count} important notes; not linked yet:`);
+        lines.push(`  reaches ${c.linked_count} of ${c.linked_count + c.unlinked_count} important notes; ${c.unlinked_count} not linked yet${c.unlinked.length > 0 ? ":" : "."}`);
         for (const u of c.unlinked) lines.push(`    [${E(u.id)}] ${u.type} - ${cut(u.title)}`);
-        if (c.unlinked_count > c.unlinked.length) lines.push(`    (+${c.unlinked_count - c.unlinked.length} more; collab_doctor lists all)`);
+        const onCard = c.unlinked_on_card ?? [];
+        if (onCard.length > 0) lines.push(`    also not linked (in the lists below): ${onCard.map(E).join(", ")}`);
+        const shown = c.unlinked.length + onCard.length;
+        if (c.unlinked_count > shown) lines.push(`    (+${c.unlinked_count - shown} more; collab_doctor lists all)`);
       }
       if (c.expired.length > 0) lines.push(`  ${c.expired.length} link(s) point at retired notes (ignored; collab_doctor lists them).`);
     }

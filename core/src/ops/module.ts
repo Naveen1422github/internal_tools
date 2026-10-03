@@ -113,7 +113,12 @@ export function getModule(db: DB, slug: string): ModuleCard {
   // Membership is now many-to-many: match any entry that has an entry_modules
   // row for this slug (so multi-module entries surface in EVERY module they
   // belong to), not just entries whose primary entries.module = slug.
-  const indexes = db
+  // Claude reads the structured card, so the token budget is enforced here (collab E-704).
+  const hubFull = getHubStatus(db, slug, Number.MAX_SAFE_INTEGER);
+  const indexes: ModuleCard["indexes"] =
+    hubFull.state === "ok"
+      ? []
+      : (db
     .prepare(
       `
     SELECT id, title, summary FROM entries
@@ -122,7 +127,7 @@ export function getModule(db: DB, slug: string): ModuleCard {
     ORDER BY created_at DESC LIMIT 5
   `
     )
-    .all(slug) as ModuleCard["indexes"];
+    .all(slug) as ModuleCard["indexes"]);
 
   const recent_decisions = db
     .prepare(
@@ -157,7 +162,18 @@ export function getModule(db: DB, slug: string): ModuleCard {
     )
     .all(slug) as ModuleCard["recent_handoffs"];
 
-  // 3 titles keeps the card's main-note section at <= 6 lines (T-011 token budget).
-  const hub = getHubStatus(db, slug, 3);
+  const onCard = new Set([...top_gotchas, ...recent_decisions].map((e) => e.id));
+  let hub: ModuleCard["hub"] = hubFull;
+  if (hubFull.state === "ok" && hubFull.coverage) {
+    const all = hubFull.coverage.unlinked;
+    hub = {
+      state: "ok",
+      coverage: {
+        ...hubFull.coverage,
+        unlinked: all.filter((u) => !onCard.has(u.id)).slice(0, 3),
+        unlinked_on_card: all.filter((u) => onCard.has(u.id)).map((u) => u.id),
+      },
+    };
+  }
   return { module, active_tasks, indexes, recent_decisions, top_gotchas, recent_handoffs, hub };
 }
