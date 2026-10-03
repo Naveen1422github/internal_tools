@@ -17,7 +17,8 @@
     "test:golden": "tsx --test test/golden/tools.golden.test.ts",
     "inspect-db": "tsx src/scripts/inspect-db.ts",
     "log-collab": "tsx src/scripts/log-collab.ts",
-    "sweep-deps": "tsx src/scripts/sweep-deps.ts"
+    "sweep-deps": "tsx src/scripts/sweep-deps.ts",
+    "sync:enable": "tsx src/scripts/sync-enable.ts"
   },
   "dependencies": {
     "@collab-mcp/core": "*",

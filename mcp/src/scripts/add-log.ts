@@ -1,4 +1,4 @@
-import { getDb, addEntry } from "@collab-mcp/core";
+import { getDb, addEntryAsync } from "@collab-mcp/core";
 
 const [type, title, summary, description, moduleName] = process.argv.slice(2);
 
@@ -9,7 +9,7 @@ if (!type || !title || !summary) {
 
 try {
   const db = getDb();
-  const res = addEntry(db, {
+  const res = await addEntryAsync(db, {
     type: type as any,
     title,
     summary,

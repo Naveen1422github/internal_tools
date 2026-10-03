@@ -1,4 +1,4 @@
-import { getDb, migrate, addEntry, initModule, closeDb, type EntryType, type Category } from "@collab-mcp/core";
+import { getDb, migrate, addEntryAsync, initModule, closeDb, type EntryType, type Category } from "@collab-mcp/core";
 
 const [type, title, summary, description, moduleName, category, status] = process.argv.slice(2);
 
@@ -15,7 +15,7 @@ try {
     initModule(db, { slug: moduleName, name: moduleName });
     console.log(`Created placeholder module: ${moduleName}`);
   }
-  const { id } = addEntry(db, {
+  const { id } = await addEntryAsync(db, {
     type: type as EntryType,
     title,
     summary,

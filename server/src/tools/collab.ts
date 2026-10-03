@@ -1,7 +1,7 @@
 import http from 'node:http';
 import {
   getDb, estimateTokens, KIND_BY_TYPE, SLUG_REGEX, validateEntryInput, buildFtsMatch,
-  addEntry, getEntry, deleteEntry, supersede, doctor, ownerOf, replaceLinks, insertEntryModules,
+  addEntry, addEntryAsync, getEntry, deleteEntry, supersede, doctor, ownerOf, replaceLinks, insertEntryModules,
   liveEntry, ftsJoin, hasUlidPrimaryKey,
 } from '@collab-mcp/core';
 
@@ -204,7 +204,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
 
       if (!id) {
         // Create: core owns id/ulid/author/links at every schema level.
-        const { id: newId } = addEntry(db, {
+        const { id: newId } = await addEntryAsync(db, {
           type, title, summary, description, agent: agent || undefined,
           module: primaryModule ?? undefined, modules: orderedModules, category: resolvedCategory as any,
           task_id: task_id || undefined, refs: normRefs,

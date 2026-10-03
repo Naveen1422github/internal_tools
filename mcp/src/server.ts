@@ -17,6 +17,7 @@ import {
   migrate,
   searchEntries,
   addEntry,
+  addEntryAsync,
   updateEntry,
   updateEntryRefs,
   getEntry,
@@ -293,7 +294,7 @@ server.registerTool(
     },
   },
   async (args) => {
-    const result = addEntry(db, {
+    const result = await addEntryAsync(db, {
       type: args.type,
       title: args.title,
       summary: args.summary,

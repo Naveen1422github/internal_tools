@@ -36,7 +36,7 @@
  */
 import { readFileSync } from "node:fs";
 import { getDb, getDbPath, migrate, closeDb } from "@collab-mcp/core";
-import { addEntry } from "@collab-mcp/core";
+import { addEntryAsync } from "@collab-mcp/core";
 import {
   parseIntoDraft,
   type IngestArgs,
@@ -252,7 +252,7 @@ const db = getDb(args.db);
 migrate(db);
 
 const refs: RefInput[] | undefined = result.draft_entry.refs;
-const saved = addEntry(db, {
+const saved = await addEntryAsync(db, {
   type: result.draft_entry.type,
   title: result.draft_entry.title,
   summary: result.draft_entry.summary,

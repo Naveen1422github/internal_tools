@@ -19,6 +19,7 @@
     "test": "npm -w @collab-mcp/server run build && tsx --test test/**/*.test.mts",
     "build": "npm -w @collab-mcp/core run build && npm run build --workspaces --if-present",
     "bundle": "node scripts/bundle.mjs",
+    "fetch:crsqlite": "node scripts/fetch-crsqlite.mjs",
     "test:all": "npm run test --workspaces --if-present && tsx --test test/**/*.test.mts",
     "lint": "eslint .",
     "format": "prettier --write .",

@@ -16,6 +16,7 @@ export/
 node_modules/
 dist/
 dist-share/
+vendor/
 *.tsbuildinfo
 data/sessions.json
 

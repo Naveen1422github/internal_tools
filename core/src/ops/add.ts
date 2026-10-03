@@ -2,6 +2,9 @@ import type { DB } from "../db.js";
 import { estimateTokens } from "../db.js";
 import { autoAdvanceTaskForEntry, type TaskStatus } from "./task.js";
 import { insertEntryRow, insertEntryModules, insertRefs } from "../entry-write.js";
+import { isSyncEnabled } from "../sync/state.js";
+import { getAllocator, PostOfficeUnreachableError } from "../sync/allocator.js";
+import { newUlid } from "../ulid.js";
 
 // ------------------------------------------------------------
 // Types
@@ -34,6 +37,7 @@ export interface AddEntryArgs {
   category?: Category;          // omitted -> derived from type (see CATEGORY_BY_TYPE)
   task_id?: string;
   refs?: RefInput[];
+  assigned?: { ulid: string; id: number }; // internal: set only by addEntryAsync
 }
 
 // ------------------------------------------------------------
@@ -79,14 +83,16 @@ function decodeOnce(s: string): string {
 // ------------------------------------------------------------
 // addEntry
 // ------------------------------------------------------------
-export function addEntry(
-  db: DB,
-  args: AddEntryArgs,
-): {
+export type AddEntryResult = {
   id: number;
   taskTransition?: { id: string; from: TaskStatus; to: TaskStatus };
   normalizedDescription?: boolean;
-} {
+};
+
+export function addEntry(
+  db: DB,
+  args: AddEntryArgs,
+): AddEntryResult {
   if (!args.title || args.title.trim().length === 0) {
     throw new Error("title is required");
   }
@@ -138,6 +144,7 @@ export function addEntry(
       task_id: a.task_id ?? null,
       tokens_estimate: tokens,
       category,
+      assigned: a.assigned,
     });
     insertEntryModules(db, owner, orderedModules, primaryModule);
     insertRefs(db, owner, a.refs ?? []);
@@ -164,4 +171,23 @@ export function addEntry(
     // rewriting what the author submitted.
     ...(normalizedDescription ? { normalizedDescription: true } : {}),
   };
+}
+
+/**
+ * The entry point for every async caller. Sharing off: identical to addEntry.
+ * Sharing on: ask the post office for the number FIRST; if that fails,
+ * nothing is written (E-708: refuse to save).
+ */
+export async function addEntryAsync(db: DB, args: AddEntryArgs): Promise<AddEntryResult> {
+  if (!isSyncEnabled(db)) return addEntry(db, args);
+  const allocator = getAllocator();
+  if (!allocator) throw new PostOfficeUnreachableError("no post office connection is configured on this machine");
+  const ulid = newUlid();
+  let id: number;
+  try {
+    id = await allocator.allocate(ulid);
+  } catch (e) {
+    throw new PostOfficeUnreachableError((e as Error).message);
+  }
+  return addEntry(db, { ...args, assigned: { ulid, id } });
 }

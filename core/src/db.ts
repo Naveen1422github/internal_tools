@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { backfillUlids } from "./backfill.js";
 import { preflight0006 } from "./preflight-0006.js";
+import { hasCrrTables, loadCrsqlite, isCrsqliteLoaded } from "./sync/extension.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -114,6 +115,9 @@ export function getDb(dbPath?: string, opts: GetDbOptions = {}): DB {
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
   db.pragma("foreign_keys = ON");
+  if (hasCrrTables(db)) {
+    try { loadCrsqlite(db); } catch (e) { db.close(); throw e; }
+  }
   _db = db;
   _dbPath = path;
   return db;
@@ -139,6 +143,8 @@ export function hasUlidColumns(db: DB): boolean {
 
 export function closeDb(): void {
   if (_db) {
+    // cr-sqlite requires finalize before close on a connection that loaded it.
+    if (isCrsqliteLoaded(_db)) { try { _db.prepare("SELECT crsql_finalize()").get(); } catch { /* closing anyway */ } }
     _db.close();
     _db = null;
     _dbPath = null;

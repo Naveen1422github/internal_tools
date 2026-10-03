@@ -2,6 +2,7 @@ import type { DB } from "../db.js";
 import { parseEntryRef } from "../ulid.js";
 import { getHubStatus, IMPORTANT_TYPES } from "./hub.js";
 import { liveEntry } from "../schema.js";
+import { hasCrrTables, isCrsqliteLoaded } from "../sync/extension.js";
 
 export interface DoctorCheck {
   name: string; // short id, e.g. "schema.tables"
@@ -166,12 +167,19 @@ export function doctor(db: DB): DoctorResult {
   const has0005 = applied("0005_ulid_expand");
   const has0006 = applied("0006_ulid_contract");
 
-  const expectedTables = has0006 ? EXPECTED_TABLES_0006
-    : has0005 ? union(EXPECTED_TABLES, EXPECTED_TABLES_0005) : EXPECTED_TABLES;
+  // Copied: the 0007 line below adds to it, and the constants are shared.
+  const expectedTables = new Set(has0006 ? EXPECTED_TABLES_0006
+    : has0005 ? union(EXPECTED_TABLES, EXPECTED_TABLES_0005) : EXPECTED_TABLES);
   const expectedIndexes = has0006 ? EXPECTED_INDEXES_0006
     : has0005 ? union(EXPECTED_INDEXES, EXPECTED_INDEXES_0005) : EXPECTED_INDEXES;
   const expectedTriggers = has0006 ? EXPECTED_TRIGGERS_0006
     : has0005 ? union(EXPECTED_TRIGGERS, EXPECTED_TRIGGERS_0005) : EXPECTED_TRIGGERS;
+  // 0007 (staged) adds the local-only sync_state table.
+  if (applied("0007_sync_prep")) expectedTables.add("sync_state");
+  // A shared DB carries cr-sqlite's own bookkeeping (crsql_*, <t>__crsql_clock/
+  // _pks/_itrig...). Those are the extension's, not ours: not "extra".
+  const shared = hasCrrTables(db);
+  const ours = (name: string) => !(shared && name.includes("crsql"));
 
   // 1) schema.tables
   const tableRows = db
@@ -187,7 +195,7 @@ export function doctor(db: DB): DoctorResult {
       `,
     )
     .all() as Array<{ name: string }>;
-  const actualTables = new Set(tableRows.map((r) => r.name));
+  const actualTables = new Set(tableRows.map((r) => r.name).filter(ours));
   checks.push(schemaCheck("schema.tables", actualTables, expectedTables, "tables"));
 
   // 2) schema.indexes
@@ -201,7 +209,7 @@ export function doctor(db: DB): DoctorResult {
       `,
     )
     .all() as Array<{ name: string }>;
-  const actualIndexes = new Set(indexRows.map((r) => r.name));
+  const actualIndexes = new Set(indexRows.map((r) => r.name).filter(ours));
   checks.push(schemaCheck("schema.indexes", actualIndexes, expectedIndexes, "indexes"));
 
   // 3) schema.triggers
@@ -214,7 +222,7 @@ export function doctor(db: DB): DoctorResult {
       `,
     )
     .all() as Array<{ name: string }>;
-  const actualTriggers = new Set(triggerRows.map((r) => r.name));
+  const actualTriggers = new Set(triggerRows.map((r) => r.name).filter(ours));
   checks.push(schemaCheck("schema.triggers", actualTriggers, expectedTriggers, "triggers"));
 
   // 4) data.orphan_refs.task
@@ -458,6 +466,25 @@ export function doctor(db: DB): DoctorResult {
       severity: expired.length > 0 ? "warn" : "ok",
       detail: expired.length > 0 ? `${expired.length} main-note link(s) point at retired notes (remove with collab_update_refs)` : "no expired main-note links",
       items: expired.length > 0 ? expired : undefined,
+    });
+  }
+
+  // Sync v1 (plan 1): forks awaiting a person, and the extension a shared DB needs.
+  if (db.prepare(`SELECT 1 FROM pragma_table_info('entries') WHERE name = 'needs_merge'`).get()) {
+    const nm = db.prepare(`SELECT id FROM entries WHERE needs_merge = 1 AND deprecated = 0 ORDER BY id`).all() as Array<{ id: number }>;
+    checks.push({
+      name: "sync.needs_merge",
+      severity: nm.length > 0 ? "warn" : "ok",
+      detail: nm.length > 0 ? `${nm.length} note(s) have edits the post office could not merge; pick the final text` : "no unmerged edits",
+      items: nm.length > 0 ? nm.map((r) => toEntryId(r.id)) : undefined,
+    });
+  }
+  if (hasCrrTables(db)) {
+    const loaded = isCrsqliteLoaded(db);
+    checks.push({
+      name: "sync.extension",
+      severity: loaded ? "ok" : "error",
+      detail: loaded ? "cr-sqlite loaded" : "this DB shares notes but cr-sqlite is not loaded on this connection: writes will fail",
     });
   }
 
