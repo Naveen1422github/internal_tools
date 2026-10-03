@@ -391,7 +391,8 @@ Why: besides the revision trigger, five more triggers write rows on their own (`
 // file: core/test/sync-triggers.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { freshDb, ship, ownChanges } from './helpers/sync.js';
+import { freshDb, ship, ownChanges, dbVersion } from './helpers/sync.js';
+import { updateEntry } from '../src/ops/update.js';
 import { addEntry, addEntryAsync } from '../src/ops/add.js';
 import { enableSync } from '../src/sync/enable.js';
 import { setAllocator } from '../src/sync/allocator.js';
@@ -413,6 +414,28 @@ test('a received link is not re-resolved against the receiver\'s own numbers', a
   } finally { setAllocator(null); a.cleanup(); b.cleanup(); }
 });
 
+test('applying a remote change runs no local bookkeeping trigger (updated_at stays as received)', async () => {
+  const a = freshDb({ shared: true }), b = freshDb({ shared: true });
+  try {
+    setAllocator({ allocate: async () => 101 });
+    const { id } = await addEntryAsync(a.db, { type: 'decision', title: 'x', summary: 's', module: 'm' });
+    a.db.prepare(`UPDATE entries SET updated_at = '2000-01-01 00:00:00' WHERE id = ?`).run(id);
+    ship(a.db, b.db);
+    const v = dbVersion(a.db);
+    updateEntry(a.db, { id, title: 'y' });
+    // Only the title change (a later batch may carry updated_at; the trigger must not fire meanwhile).
+    const rows = a.db.prepare(`SELECT "table", pk, cid, val, col_version, db_version, site_id, cl, seq FROM crsql_changes WHERE db_version > ? AND "table" = 'entries' AND cid = 'title'`).all(v) as any[];
+    assert.equal(rows.length, 1);
+    const before = (b.db.prepare(`SELECT updated_at u FROM entries WHERE id = ?`).get(id) as { u: string }).u;
+    b.db.prepare(`INSERT INTO crsql_changes ("table", pk, cid, val, col_version, db_version, site_id, cl, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(rows[0].table, rows[0].pk, rows[0].cid, rows[0].val, rows[0].col_version, rows[0].db_version, rows[0].site_id, rows[0].cl, rows[0].seq);
+    const after = b.db.prepare(`SELECT title, updated_at u FROM entries WHERE id = ?`).get(id) as { title: string; u: string };
+    assert.equal(after.title, 'y');
+    assert.equal(before, '2000-01-01 00:00:00');
+    assert.equal(after.u, before, 'B did not stamp its own updated_at while applying');
+  } finally { setAllocator(null); a.cleanup(); b.cleanup(); }
+});
+
 test('local writes still run the bookkeeping triggers once sharing is on', () => {
   const { db, cleanup } = freshDb();
   try {
@@ -425,7 +448,7 @@ test('local writes still run the bookkeeping triggers once sharing is on', () =>
 });
 ```
 
-- [ ] **Step 2: Run and confirm it fails.** Run: `cd core && npx tsx --test test/sync-triggers.test.ts`. Expected: the first test FAILS on `B must hold exactly what A sent` (B's trigger filled B's own E-5 ulid); the second passes already.
+- [ ] **Step 2: Run and confirm it fails.** Run: `cd core && npx tsx --test test/sync-triggers.test.ts`. Expected: `applying a remote change runs no local bookkeeping trigger` FAILS with `B did not stamp its own updated_at while applying`. The link test and the local-writes test already pass (built deviation: the link test was planned as the failing one, but A's own NULL `target_ulid` arrives after B's trigger and overwrites it, so it cannot fail; it stays as a regression guard, and the updated_at test pins the mechanism).
 
 - [ ] **Step 3: Implement.** In `core/src/sync/enable.ts` add (after `SYNCED_TABLES`):
 
