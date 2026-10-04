@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { upsertEntry, type Entry } from '../api/client';
 import { useUi } from '../store/ui';
+import { useSyncOverview } from '../sync/useSyncOverview';
+import { saveNote } from '../sync/view';
 
 const TYPES = ['handoff', 'review', 'proposal', 'counter', 'decision', 'gotcha', 'session-note', 'changelog'];
 
@@ -18,6 +20,8 @@ export function draftErrors(d: Partial<Entry>): string[] {
 export default function DraftCard({ draft }: { draft: Partial<Entry>; validation: { ok: boolean; errors: string[] } }) {
   const { openDrawer } = useUi();
   const [edited, setEdited] = useState<Partial<Entry>>(draft);
+  const sync = useSyncOverview();
+  const note = saveNote(edited.module, sync);
   const [savedId, setSavedId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -86,6 +90,8 @@ export default function DraftCard({ draft }: { draft: Partial<Entry>; validation
         </ul>
       )}
       {saveError && <div className="text-[11px] text-red-600 dark:text-red-400">{saveError}</div>}
+
+      {note && <div className="text-[11px] text-blue-700 dark:text-blue-300">{note}</div>}
 
       <div className="flex gap-2 pt-1">
         <button onClick={save} disabled={!canSave}

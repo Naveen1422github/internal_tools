@@ -1,6 +1,6 @@
 // file: ui/src/sync/view.test.ts
 import { describe, it, expect } from 'vitest';
-import { barView, ago, fieldDiff, versionLabel } from './view';
+import { barView, ago, fieldDiff, versionLabel, shareLabel, saveNote } from './view';
 
 const now = new Date('2026-10-04T10:10:00Z');
 const base = {
@@ -47,5 +47,21 @@ describe('merge view', () => {
   it('versionLabel shows number, author and time; unknown author says so', () => {
     expect(versionLabel(v({}), 0)).toBe('Version 1 · naveen · 15:35');
     expect(versionLabel(v({ author: null }), 1)).toBe('Version 2 · unknown author · 15:35');
+  });
+});
+
+describe('sharing labels', () => {
+  const on = { ...base, sharedModules: ['portfolio'] };
+  it('labels only when sharing is on', () => {
+    expect(shareLabel('portfolio', on)).toBe('shared');
+    expect(shareLabel('custom-reports', on)).toBe('private');
+    expect(shareLabel('portfolio', { enabled: false })).toBeNull();
+    expect(shareLabel('portfolio', null)).toBeNull();
+    expect(shareLabel(null, on)).toBe('private');
+  });
+  it('save note only for a shared module', () => {
+    expect(saveNote('portfolio', on)).toBe('⇄ portfolio is shared: when you save, this note goes to everyone on the team.');
+    expect(saveNote('custom-reports', on)).toBeNull();
+    expect(saveNote('portfolio', { enabled: false })).toBeNull();
   });
 });

@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useUi } from '../store/ui';
 import { getEntry, upsertEntry, supersede, deleteEntry, type Entry } from '../api/client';
 import Drawer from './Drawer';
 import Markdown from './Markdown';
+import { useSyncOverview } from '../sync/useSyncOverview';
+import { shareLabel, saveNote, SHARED_LABEL, PRIVATE_LABEL } from '../sync/view';
 
 export default function EntryDrawer() {
   const { drawerEntryId, closeDrawer, openDrawer } = useUi();
@@ -11,6 +14,7 @@ export default function EntryDrawer() {
   const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<Partial<Entry>>({});
+  const sync = useSyncOverview();
 
   useEffect(() => {
     if (drawerEntryId) {
@@ -95,9 +99,30 @@ export default function EntryDrawer() {
                 ) : (
                   <h2 className="text-xl font-bold leading-tight">{entry.title}</h2>
                 )}
+                {(() => {
+                  const label = shareLabel(entry.module, sync);
+                  if (!label && !entry.author) return null;
+                  return (
+                    <div className="mt-1 text-xs text-gray-500 flex items-center gap-1">
+                      {label && (
+                        <span className={`px-1.5 py-0.5 rounded ${label === 'shared' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}`}>
+                          {label === 'shared' ? SHARED_LABEL : PRIVATE_LABEL}
+                        </span>
+                      )}
+                      {entry.author && <span>· by {entry.author}</span>}
+                    </div>
+                  );
+                })()}
              </div>
              <div className="text-xs font-mono text-gray-400">E-{String(entry.id).padStart(5, '0')}</div>
           </header>
+
+          {entry.needs_merge === 1 && (
+            <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded text-sm text-amber-800 dark:text-amber-200 flex items-center justify-between">
+              <span>⚠ This note needs a merge: two versions exist.</span>
+              <Link to={`/merge/${entry.id}`} onClick={() => closeDrawer()} className="font-bold underline">Pick the final text</Link>
+            </div>
+          )}
 
           {entry.superseded_by && (
             <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded text-sm text-amber-800 dark:text-amber-200 flex items-center justify-between">
@@ -196,6 +221,11 @@ export default function EntryDrawer() {
           )}
 
           <div className="pt-8 flex flex-col gap-2">
+             {isEditing && saveNote(editData.module ?? entry.module, sync) && (
+               <div className="p-2 bg-blue-50 dark:bg-blue-900/20 rounded text-xs text-blue-800 dark:text-blue-200">
+                 {saveNote(editData.module ?? entry.module, sync)}
+               </div>
+             )}
              {isEditing ? (
                <div className="flex gap-2">
                  <button onClick={handleSave} className="flex-1 py-2 px-4 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 transition-colors">Save Changes</button>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { modules, moduleCard } from '../api/client';
 import { useUi } from '../store/ui';
+import { SHARED_LABEL, PRIVATE_LABEL } from '../sync/view';
 
 export default function Modules() {
   const { openDrawer } = useUi();
@@ -56,6 +57,15 @@ export default function Modules() {
                 </span>
                 <span className="text-[10px] font-mono text-gray-400">{m.slug}</span>
               </div>
+              {m.shared !== undefined && (
+                <div className="mt-2">
+                  <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
+                    m.shared ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
+                  }`}>
+                    {m.shared ? SHARED_LABEL : PRIVATE_LABEL}
+                  </span>
+                </div>
+              )}
             </button>
           ))}
         </div>

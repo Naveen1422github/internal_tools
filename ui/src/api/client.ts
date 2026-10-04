@@ -18,6 +18,8 @@ export interface Entry {
   created_at?: string;
   modules?: string[];
   refs?: Array<{ ref_type: string; ref_value: string }>;
+  author?: string | null;
+  needs_merge?: number;
 }
 
 export interface Stats {

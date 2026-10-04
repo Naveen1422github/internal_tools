@@ -47,3 +47,15 @@ export function versionLabel(v: MergeVersion, i: number): string {
   const hhmm = /\d{2}:\d{2}/.exec(v.created_at)?.[0] ?? v.created_at;
   return `Version ${i + 1} · ${v.author ?? 'unknown author'} · ${hhmm}`;
 }
+
+export const SHARED_LABEL = '⇄ Shared with team';
+export const PRIVATE_LABEL = '🔒 Only on this laptop';
+
+export function shareLabel(module: string | null | undefined, o: SyncOverview | null): null | 'shared' | 'private' {
+  if (!o || !o.enabled) return null;
+  return module && o.sharedModules.includes(module) ? 'shared' : 'private';
+}
+
+export function saveNote(module: string | null | undefined, o: SyncOverview | null): string | null {
+  return shareLabel(module, o) === 'shared' ? `⇄ ${module} is shared: when you save, this note goes to everyone on the team.` : null;
+}
