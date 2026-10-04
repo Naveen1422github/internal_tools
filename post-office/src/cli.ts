@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import Database from "better-sqlite3";
-import { generateSelfSignedCert, formatJoinCode } from "@collab-mcp/core";
+import { generateSelfSignedCert, formatJoinCode, describeMemberState, TEAM_STATUS_NOTE } from "@collab-mcp/core";
 import {
   createStore, openStore, closeStore, addMember, revokeMember, teamStatus, setModuleShared, sharedModules,
   nextNumber, JOIN_TTL_HOURS, StoreError, type Store,
@@ -158,9 +158,10 @@ export async function runCli(argv: string[], io: Io): Promise<{ code: number; of
           if (rows.length === 0) { io.out("no members yet: collab-post-office add-member <name>"); return; }
           io.out(`${"DEVICE".padEnd(14)}${"NAME".padEnd(22)}${"STATE".padEnd(20)}LAST SEEN`);
           for (const r of rows) {
-            const state = r.state === "behind" ? `behind ${r.behind}` : r.state;
+            const state = describeMemberState(r.state, r.behind);
             io.out(`${r.device_id.padEnd(14)}${r.name.padEnd(22)}${state.padEnd(20)}${r.last_seen_at ?? "-"}`);
           }
+          io.out(TEAM_STATUS_NOTE);
         });
         return { code: 0 };
       }

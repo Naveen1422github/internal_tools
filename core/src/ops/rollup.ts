@@ -3,6 +3,7 @@ import { estimateTokens } from "../db.js";
 import type { EntryType, Agent, RefInput } from "./add.js";
 import { insertEntryRow, insertRefs, ownerOf } from "../entry-write.js";
 import { liveEntry, hasUlidPrimaryKey } from "../schema.js";
+import { ensureCrsqlite } from "../sync/extension.js";
 
 // ------------------------------------------------------------
 // Public types
@@ -212,6 +213,7 @@ function deprecateOriginals(db: DB, entryIds: number[]): void {
 // Main entry point
 // ------------------------------------------------------------
 export function rollup(db: DB, args: RollupArgs): RollupResult {
+  ensureCrsqlite(db);
   // Validate: exactly one of {task_id} or {since} must be present.
   const hasTask = !!args.task_id;
   const hasSince = !!args.since;
@@ -365,6 +367,7 @@ function selectArchiveEntries(db: DB, args: ArchiveArgs): RawEntryRow[] {
 }
 
 export function archive(db: DB, args: ArchiveArgs): RollupResult {
+  ensureCrsqlite(db);
   const isDry = args.dry_run !== false; // SAFE DEFAULT: dry-run unless explicitly false
 
   const rows = selectArchiveEntries(db, args);

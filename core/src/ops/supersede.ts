@@ -2,6 +2,7 @@ import type { DB } from "../db.js";
 import { hasUlidColumns } from "../db.js";
 import { hasUlidPrimaryKey } from "../schema.js";
 import { ownerOf, type InsertedEntry } from "../entry-write.js";
+import { ensureCrsqlite } from "../sync/extension.js";
 
 // ------------------------------------------------------------
 // Types
@@ -28,6 +29,7 @@ function toEntryId(id: number): string {
 // history. The existing FTS update trigger keeps the index in sync.
 // ------------------------------------------------------------
 export function supersede(db: DB, args: SupersedeArgs): SupersedeResult {
+  ensureCrsqlite(db);
   const { ids, by } = args;
 
   if (!ids || ids.length === 0) {

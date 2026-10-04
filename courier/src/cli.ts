@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import {
   resolveDbPath, loadCrsqlite, getSyncValue, postOfficeTargetFromDb, readOwnChanges, requestJson, type PostOfficeTarget,
+  describeMemberState, TEAM_STATUS_NOTE,
 } from "@collab-mcp/core";
 import { Courier, type CourierStatus } from "./engine.js";
 import { COURIER_KEYS } from "./keys.js";
@@ -218,8 +219,9 @@ export async function runCli(argv: string[], io: Io, deps: CliDeps = {}): Promis
           const r = await requestJson(target(), "GET", "/v1/status");
           io.out(`team (deliveries: ${r.body?.last_seq ?? "?"}):`);
           for (const m of (r.body?.members ?? []) as Array<{ device_id: string; name: string; state: string; behind: number; last_seen_at: string | null }>) {
-            io.out(`  ${m.device_id.padEnd(14)}${m.name.padEnd(22)}${(m.state === "behind" ? `behind ${m.behind}` : m.state).padEnd(18)}${m.last_seen_at ?? "-"}`);
+            io.out(`  ${m.device_id.padEnd(14)}${m.name.padEnd(22)}${describeMemberState(m.state, m.behind).padEnd(18)}${m.last_seen_at ?? "-"}`);
           }
+          io.out(`  ${TEAM_STATUS_NOTE}`);
         }
         return { code: 0 };
       }

@@ -1,6 +1,7 @@
 import type { DB } from "../db.js";
 import { liveEntry } from "../schema.js";
 import { getHubStatus, type HubState, type HubCoverage } from "./hub.js";
+import { ensureCrsqlite } from "../sync/extension.js";
 
 // ------------------------------------------------------------
 // Types
@@ -47,6 +48,7 @@ const SLUG_REGEX = /^[a-z0-9][a-z0-9-]{0,59}$/;
 // initModule — idempotent via INSERT OR IGNORE
 // ------------------------------------------------------------
 export function initModule(db: DB, args: InitModuleArgs): { slug: string } {
+  ensureCrsqlite(db);
   if (!SLUG_REGEX.test(args.slug)) {
     throw new Error(
       `invalid slug '${args.slug}': must be lowercase alphanumeric or hyphens, 1-60 chars, no underscores, start with alphanumeric`
@@ -206,6 +208,7 @@ export interface UpsertModuleArgs {
 
 /** Insert a module, or overwrite every field of an existing one (missing fields become NULL, status 'active'). */
 export function upsertModule(db: DB, args: UpsertModuleArgs): { slug: string } {
+  ensureCrsqlite(db);
   if (!args.slug || !SLUG_REGEX.test(args.slug)) {
     throw new Error(
       `invalid slug '${args.slug}': must be lowercase alphanumeric or hyphens, 1-60 chars, no underscores, start with alphanumeric`
@@ -228,6 +231,7 @@ export function upsertModule(db: DB, args: UpsertModuleArgs): { slug: string } {
 export function deleteModule(
   db: DB, slug: string,
 ): { deleted: true } | { deleted: false; entry_count: number; task_count: number } {
+  ensureCrsqlite(db);
   const refs = db.prepare(`
     SELECT (SELECT COUNT(*) FROM entries WHERE module=?) AS entry_count,
            (SELECT COUNT(*) FROM tasks WHERE module=?) AS task_count

@@ -5,6 +5,7 @@ import { validateEntryInput } from "../validate.js";
 import { hasUlidPrimaryKey } from "../schema.js";
 import { ownerOf, replaceLinks, insertEntryModules } from "../entry-write.js";
 import { snapshotForRevision, finishRevision } from "../revisions.js";
+import { ensureCrsqlite } from "../sync/extension.js";
 
 // The REST server's note writes, moved here unchanged (collab E-720): every
 // write to a synced table goes through core (revisions, checks, future rules).
@@ -32,6 +33,7 @@ export interface EditEntryArgs {
 
 /** Rewrite an entry's fields and replace ALL its refs and module rows (the REST upsert's edit semantics). */
 export function editEntry(db: DB, args: EditEntryArgs): { id: number } {
+  ensureCrsqlite(db);
   const { id, type, title, summary, description, agent, module, modules, category, task_id, refs } = args;
   const v = validateEntryInput({ type, title, summary, category });
   if (!v.ok) throw new Error(v.errors[0]);
@@ -75,6 +77,7 @@ export function editEntry(db: DB, args: EditEntryArgs): { id: number } {
 
 /** Make `module` the primary module of each entry in `ids`. Unknown ids are skipped. */
 export function reassignModule(db: DB, ids: number[], module: string): { updated: number } {
+  ensureCrsqlite(db);
   const exists = db.prepare("SELECT slug FROM modules WHERE slug = ?").get(module);
   if (!exists) throw new Error(`target module '${module}' does not exist`);
 

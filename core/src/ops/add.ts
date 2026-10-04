@@ -17,6 +17,7 @@ import {
   KIND_BY_TYPE,
   CATEGORY_BY_TYPE,
 } from "../constants.js";
+import { ensureCrsqlite } from "../sync/extension.js";
 
 export type { EntryType, Agent, RefType, Category };
 
@@ -128,6 +129,7 @@ export function addEntry(
   db: DB,
   args: AddEntryArgs,
 ): AddEntryResult {
+  ensureCrsqlite(db);
   validateAddEntryArgs(args);
 
   // Repair a double-encoded description before anything downstream sees it --
@@ -204,6 +206,7 @@ export function addEntry(
  * written (E-708: refuse to save).
  */
 export async function addEntryAsync(db: DB, args: AddEntryArgs): Promise<AddEntryResult> {
+  ensureCrsqlite(db);
   validateAddEntryArgs(args);
   if (!isSyncEnabled(db)) return addEntry(db, args);
   const allocator = resolveAllocator(db);

@@ -61,6 +61,8 @@ test('add-member prints a join code; status, revoke, share', async () => {
     let s = io();
     await runCli(['status', '--data', data], s.io);
     assert.match(s.out.join('\n'), /second laptop\s+waiting to join/);
+    // E-739 #3: the office only sees the RECEIVE side; say so instead of "up to date".
+    assert.match(s.out.join('\n'), /what each device still has to receive/);
     assert.equal((await runCli(['share', 'sync', '--data', data], io().io)).code, 0);
     s = io();
     await runCli(['modules', '--data', data], s.io);

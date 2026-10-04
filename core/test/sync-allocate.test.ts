@@ -2,7 +2,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { freshDb } from './helpers/sync.js';
-import { addEntryAsync, type AddEntryArgs } from '../src/ops/add.js';
+import { addEntry, addEntryAsync, type AddEntryArgs } from '../src/ops/add.js';
+import { updateEntry } from '../src/ops/update.js';
+import { enableSync } from '../src/sync/enable.js';
+import { isCrsqliteLoaded, CrsqliteMissingError } from '../src/sync/extension.js';
+import Database from 'better-sqlite3';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { setAllocator, setAllocationRetry, PostOfficeUnreachableError, type Allocator } from '../src/sync/allocator.js';
 
 /** An in-memory post office counter, idempotent by ulid (what Task 7 builds for real). */
@@ -126,4 +132,64 @@ test('a non-retriable refusal (revoked key) is not retried', async () => {
     await assert.rejects(addEntryAsync(db, ok), /access revoked/);
     assert.equal(po.calls.length, 1);
   } finally { setAllocator(null); cleanup(); }
+});
+
+// Go-live bug (E-739 #2): a connection opened BEFORE `sync setup` has no cr-sqlite.
+// It used to take a number from the post office and only then fail on the insert,
+// burning that number. Writers now load the extension themselves, before asking.
+test('a connection opened before sharing was switched on loads cr-sqlite itself; no number is wasted', async () => {
+  const t = freshDb();
+  const other = new Database(t.path);
+  const po = fakeOffice();
+  try {
+    enableSync(other);
+    assert.equal(isCrsqliteLoaded(t.db), false, 'the old connection starts without the extension');
+    setAllocator(po.allocator);
+    const r = await addEntryAsync(t.db, ok);
+    assert.equal(r.id, 1);
+    assert.equal(po.calls.length, 1);
+    assert.equal(count(t.db), 1);
+  } finally {
+    setAllocator(null);
+    try { other.prepare('SELECT crsql_finalize()').get(); } catch { /* closing anyway */ }
+    other.close();
+    t.cleanup();
+  }
+});
+
+test('the extension missing on disk: refused BEFORE a number is asked for', async () => {
+  const t = freshDb();
+  const other = new Database(t.path);
+  const po = fakeOffice();
+  const saved = process.env.COLLAB_CRSQLITE_PATH;
+  try {
+    enableSync(other);
+    process.env.COLLAB_CRSQLITE_PATH = join(tmpdir(), 'no-such-crsqlite');
+    setAllocator(po.allocator);
+    await assert.rejects(addEntryAsync(t.db, ok), CrsqliteMissingError);
+    assert.equal(po.calls.length, 0, 'no number was consumed');
+    assert.equal(count(other), 0);
+  } finally {
+    if (saved === undefined) delete process.env.COLLAB_CRSQLITE_PATH; else process.env.COLLAB_CRSQLITE_PATH = saved;
+    setAllocator(null);
+    try { other.prepare('SELECT crsql_finalize()').get(); } catch { /* closing anyway */ }
+    other.close();
+    t.cleanup();
+  }
+});
+
+test('an edit through a connection opened before sharing was switched on works', () => {
+  const t = freshDb();
+  const other = new Database(t.path);
+  try {
+    const { id } = addEntry(t.db, ok);
+    enableSync(other);
+    updateEntry(t.db, { id, summary: 'edited after sharing was switched on' });
+    const row = other.prepare('SELECT summary FROM entries WHERE id = ?').get(id) as { summary: string };
+    assert.equal(row.summary, 'edited after sharing was switched on');
+  } finally {
+    try { other.prepare('SELECT crsql_finalize()').get(); } catch { /* closing anyway */ }
+    other.close();
+    t.cleanup();
+  }
 });

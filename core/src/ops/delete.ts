@@ -1,6 +1,7 @@
 import type { DB } from "../db.js";
 import { hasUlidPrimaryKey } from "../schema.js";
 import { ownerOf } from "../entry-write.js";
+import { ensureCrsqlite } from "../sync/extension.js";
 
 /**
  * After 0006: a tombstone (deleted_at). The row, its refs and its module rows
@@ -13,6 +14,7 @@ import { ownerOf } from "../entry-write.js";
  * triggers remove refs/module rows.
  */
 export function deleteEntry(db: DB, id: number): { id: number; tombstoned: boolean } {
+  ensureCrsqlite(db);
   if (!Number.isInteger(id) || id < 1) throw new Error("id must be a positive integer");
   if (hasUlidPrimaryKey(db)) {
     const owner = ownerOf(db, id);

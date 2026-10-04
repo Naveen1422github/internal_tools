@@ -1,6 +1,7 @@
 import type { DB } from "../db.js";
 import { liveEntry } from "../schema.js";
 import type { Agent } from "./add.js";
+import { ensureCrsqlite } from "../sync/extension.js";
 
 // ------------------------------------------------------------
 // Types
@@ -159,6 +160,7 @@ export function autoAdvanceTaskForEntry(
   entryType: string,
   taskId: string | null | undefined,
 ): { id: string; from: TaskStatus; to: TaskStatus } | null {
+  ensureCrsqlite(db);
   if (!taskId) return null;
   if (entryType !== "changelog" && entryType !== "session-note") return null;
 

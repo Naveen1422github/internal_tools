@@ -2,6 +2,7 @@ import type { DB } from "../db.js";
 import { hasUlidColumns } from "../db.js";
 import { liveEntry } from "../schema.js";
 import { ownerOf } from "../entry-write.js";
+import { ensureCrsqlite } from "../sync/extension.js";
 
 // T-011: one main note (hub) per module (E-657). All "is it linked?" logic
 // lives here. Rules:
@@ -60,6 +61,7 @@ export function setModuleHub(
   db: DB,
   args: { slug: string; id: number | null },
 ): { slug: string; hub: { id: number; ulid: string; title: string } | null } {
+  ensureCrsqlite(db);
   if (!hasUlidColumns(db)) throw new Error("main notes need migration 0005 or later");
   const mod = db.prepare(`SELECT slug FROM modules WHERE slug = ?`).get(args.slug);
   if (!mod) throw new Error(`module '${args.slug}' not found; create it with collab_module_init first`);

@@ -35,6 +35,17 @@ export function isCrsqliteLoaded(db: DB): boolean {
   try { db.prepare(`SELECT crsql_db_version()`).get(); return true; } catch { return false; }
 }
 
+/**
+ * Every writer calls this first. A connection opened BEFORE `sync setup` has no
+ * cr-sqlite, and its writes would fail on the CRR triggers; worse, a new note
+ * would have taken a post-office number first and burned it (E-739 #2). Loading
+ * the extension into the open connection heals it; if the extension is missing
+ * on disk, this throws CrsqliteMissingError before anything is asked or written.
+ */
+export function ensureCrsqlite(db: DB): void {
+  if (hasCrrTables(db) && !isCrsqliteLoaded(db)) loadCrsqlite(db);
+}
+
 export function loadCrsqlite(db: DB): void {
   if (isCrsqliteLoaded(db)) return;
   const p = crsqlitePath();

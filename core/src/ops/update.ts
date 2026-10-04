@@ -4,6 +4,7 @@ import type { RefInput } from "./add.js";
 import { hasUlidPrimaryKey } from "../schema.js";
 import { ownerOf, insertRefs, deleteRef } from "../entry-write.js";
 import { snapshotForRevision, finishRevision } from "../revisions.js";
+import { ensureCrsqlite } from "../sync/extension.js";
 
 // ------------------------------------------------------------
 // Types
@@ -30,6 +31,7 @@ export interface UpdateEntryResult {
 // Scope is deliberately minimal: refs are NOT mutated here (delete+reinsert is a
 // future extension). Use this to correct/clarify durable entries, not to churn them.
 export function updateEntry(db: DB, args: UpdateEntryArgs): UpdateEntryResult {
+  ensureCrsqlite(db);
   if (!Number.isInteger(args.id) || args.id < 1) {
     throw new Error("id must be a positive integer");
   }
@@ -95,6 +97,7 @@ export function updateEntry(db: DB, args: UpdateEntryArgs): UpdateEntryResult {
  * head into one revision and clears the flag; replicates like any edit.
  */
 export function resolveNeedsMerge(db: DB, id: number): { id: number } {
+  ensureCrsqlite(db);
   const owner = ownerOf(db, id);
   if (!owner || !owner.ulid) throw new Error(`no entry found with id ${id}`);
   db.transaction(() => {
@@ -131,6 +134,7 @@ export interface UpdateEntryRefsResult {
 }
 
 export function updateEntryRefs(db: DB, args: UpdateEntryRefsArgs): UpdateEntryRefsResult {
+  ensureCrsqlite(db);
   if (!Number.isInteger(args.id) || args.id < 1) {
     throw new Error("id must be a positive integer");
   }
