@@ -1,7 +1,7 @@
 // file: courier/test/cli.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
@@ -180,4 +180,23 @@ test('anything else prints the usage', async () => {
   assert.equal((await runCli(['sync', 'frobnicate'], c.io, { courierDir: '/nonexistent' })).code, 2);
   assert.match(c.err.join('\n'), /collab sync setup/);
   assert.equal((await runCli(['other'], io().io)).code, 2);
+});
+
+test('sync run refuses to start when its notebook is missing, with the doctor sentence (spec P12)', async () => {
+  const t = tempDir();
+  const saved = process.env.COLLAB_DATA_DIR;
+  process.env.COLLAB_DATA_DIR = join(t.dir, 'data');
+  try {
+    const courierDir = join(t.dir, 'courier');
+    mkdirSync(courierDir, { recursive: true });
+    writeFileSync(join(courierDir, 'config.json'), JSON.stringify({ dbPath: join(t.dir, 'gone.db'), postOffice: 'https://127.0.0.1:1', device: 'd', autostart: false, backup: null }));
+    const c = io();
+    const r = await runCli(['sync', 'run'], c.io, { courierDir });
+    assert.equal(r.code, 2);
+    assert.match(c.err.join('\n'), /can't start/);
+    assert.match(c.err.join('\n'), /fix:/);
+  } finally {
+    if (saved === undefined) delete process.env.COLLAB_DATA_DIR; else process.env.COLLAB_DATA_DIR = saved;
+    t.cleanup();
+  }
 });

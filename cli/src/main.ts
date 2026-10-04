@@ -24,6 +24,7 @@ const USAGE = `usage: collab [--notebook <name>] <command>
   collab --version`;
 
 type CourierModule = { runCli(argv: string[], io: Io): Promise<{ code: number; stop?: () => Promise<void> }> };
+type WebModule = { start(): Promise<{ port: number; host: string }> };
 type OfficeModule = { runCli(argv: string[], io: Io): Promise<{ code: number; office?: { close(): Promise<void> } }> };
 
 export async function main(argv: string[], io: Io, deps: Deps = {}): Promise<CliResult> {
@@ -57,10 +58,14 @@ export async function main(argv: string[], io: Io, deps: Deps = {}): Promise<Cli
       // Top-level code of the MCP server starts the stdio server.
       await importModule("collab-mcp/dist/server.js");
       return { code: 0 };
-    case "web":
+    case "web": {
       process.env.COLLAB_UI_DIST ??= join(installRoot(), "ui", "dist");
-      await importModule("@collab-mcp/server/dist/server.js");
+      // The server listens by itself only when run as server.js; here we start it.
+      const web = (await importModule("@collab-mcp/server/dist/server.js")) as WebModule;
+      const r = await web.start();
+      io.out(`collab web: http://${r.host}:${r.port}/  (Ctrl+C to stop)`);
       return { code: 0 };
+    }
     case "notebook":
       return runNotebook(rest, io);
     case "doctor":

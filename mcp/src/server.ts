@@ -42,21 +42,56 @@ import {
   doctor,
   savingsReport,
   formatSavingsReport,
+  startupProblem,
+  runSetupDoctor,
+  formatSetupReport,
+  startHeartbeat,
+  runtimeDirFor,
+  readBuildInfo,
+  lastResolution,
+  type DB,
 } from "@collab-mcp/core";
 
 // ------------------------------------------------------------
-// Server boot
+// Server boot (spec P12): a setup problem starts the server DEGRADED instead
+// of exiting, because Claude Code shows an exited server only as "failed" and
+// never shows its stderr. Every tool then answers with the doctor sentence.
 // ------------------------------------------------------------
-const db = getDb();
-const appliedMigrations = migrate(db);
-if (appliedMigrations.length > 0) {
-  console.error(`[collab-mcp] applied migrations: ${appliedMigrations.join(", ")}`);
+const problem = await startupProblem();
+let db!: DB;
+let degradedText: string | null = null;
+if (problem) {
+  degradedText = `collab can't work yet: ${problem.text}.${problem.fix ? ` Fix: ${problem.fix}` : ""} (Run collab_doctor for the full report.)`;
+} else {
+  try {
+    db = getDb();
+    const appliedMigrations = migrate(db);
+    if (appliedMigrations.length > 0) {
+      console.error(`[collab-mcp] applied migrations: ${appliedMigrations.join(", ")}`);
+    }
+  } catch (e) {
+    degradedText = `collab can't open its notebook: ${(e as Error).message.replace(/^\[collab(-mcp)?\] /, "")}`;
+  }
 }
 
 const server = new McpServer({
   name: "collab",
   version: "0.2.0",
 });
+
+if (degradedText) {
+  console.error(`[collab-mcp] DEGRADED: ${degradedText}`);
+  const register = server.registerTool.bind(server);
+  (server as any).registerTool = (name: string, config: any, _handler: unknown) =>
+    register(name, config, async () =>
+      name === "collab_doctor"
+        ? { content: [{ type: "text" as const, text: formatSetupReport(await runSetupDoctor()) }] }
+        : { content: [{ type: "text" as const, text: degradedText! }], isError: true });
+} else {
+  const r = lastResolution()!;
+  const { version, build } = readBuildInfo();
+  startHeartbeat(runtimeDirFor(r), { program: "mcp", version, build, dbPath: r.path, notebook: r.name });
+}
 
 // MCP requires structuredContent to satisfy { [k: string]: unknown }.
 // Our domain types are sealed interfaces, so widen at the boundary.

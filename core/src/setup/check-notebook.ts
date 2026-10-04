@@ -53,6 +53,8 @@ export function checkNotebook(ctx: SetupContext, st: GroupState): SetupCheck[] {
 
   tryCheck("notebook.file", () => {
     if (!existsSync(r.path)) {
+      // COLLAB_DB_CREATE=1 (init paths, tests) explicitly allows creating it (E-689).
+      if (ctx.env.COLLAB_DB_CREATE === "1") return { group: G, id: "notebook.file", mark: "warn", text: `No notebook file at ${r.path} yet; COLLAB_DB_CREATE=1 lets the program create it`, fix: "unset COLLAB_DB_CREATE once the notebook exists" };
       return { group: G, id: "notebook.file", mark: "error", text: `No notebook file at ${r.path}`, fix: "collab notebook adopt <path> --name <name> or collab notebook new <name>" };
     }
     try { accessSync(r.path, constants.W_OK); } catch {

@@ -16,6 +16,7 @@ import type { GroupId, GroupState, SetupCheck, SetupContext, SetupReport } from 
 // failed is shown as "skipped: needs <group>", never as a pass. One check that
 // throws becomes an error line; the others still run.
 
+const OPEN_FIX = "collab doctor --fix (if the sync add-on is missing), else ask for help with this message";
 const ORDER: GroupId[] = ["install", "notebook", "version", "programs", "sync", "claude", "notes"];
 
 const defaultIsAlive = (pid: number): boolean => {
@@ -110,7 +111,7 @@ export async function runSetupDoctor(partial: Partial<SetupContext> = {}): Promi
         catch (e) { lines = [{ group: "notebook", id: "notebook.choice", mark: "error", text: `doctor could not run this check: ${(e as Error).message}` }]; }
         openReadOnly(st);
         if (st.dbOpenError) {
-          lines.push({ group: "notebook", id: "notebook.open", mark: "error", text: `The notebook can't be opened: ${st.dbOpenError}`, fix: "collab doctor --fix (if the sync add-on is missing), else ask for help with this message" });
+          lines.push({ group: "notebook", id: "notebook.open", mark: "error", text: `The notebook can't be opened: ${st.dbOpenError}`, fix: OPEN_FIX });
         }
         if (wanted.has("notebook")) checks.push(...lines);
         continue;
@@ -142,8 +143,31 @@ export async function runSetupDoctor(partial: Partial<SetupContext> = {}): Promi
   };
 }
 
-/** Startup check for the MCP, courier and web server (spec P12): install + notebook only. */
+/**
+ * Startup check for the MCP, courier and web server (spec P12): install +
+ * notebook only; the first error, or null. Synchronous on purpose: the web
+ * server must refuse to start BEFORE a sibling import opens the DB, and ES
+ * modules don't wait for a sibling's top-level await.
+ */
+export function startupProblemSync(partial: Partial<SetupContext> = {}): SetupCheck | null {
+  const ctx = context(partial);
+  const st: GroupState = { resolution: null, db: null, dbOpenError: null };
+  const checks: SetupCheck[] = [];
+  try {
+    for (const s of GROUPS.install.steps) {
+      try { const r = s.run(ctx, st) as SetupCheck; if (r) checks.push(r); }
+      catch (e) { checks.push({ group: "install", id: s.id, mark: "error", text: `doctor could not run this check: ${(e as Error).message}` }); }
+    }
+    try { checks.push(...checkNotebook(ctx, st)); }
+    catch (e) { checks.push({ group: "notebook", id: "notebook.choice", mark: "error", text: `doctor could not run this check: ${(e as Error).message}` }); }
+    openReadOnly(st);
+    if (st.dbOpenError) checks.push({ group: "notebook", id: "notebook.open", mark: "error", text: `The notebook can't be opened: ${st.dbOpenError}`, fix: OPEN_FIX });
+  } finally {
+    try { st.db?.close(); } catch { /* closing anyway */ }
+  }
+  return checks.find((c) => c.mark === "error") ?? null;
+}
+
 export async function startupProblem(partial: Partial<SetupContext> = {}): Promise<SetupCheck | null> {
-  const r = await runSetupDoctor({ ...partial, groups: ["install", "notebook"] });
-  return r.checks.find((c) => c.mark === "error") ?? null;
+  return startupProblemSync(partial);
 }

@@ -1,10 +1,11 @@
 import './env.js'; // must stay first: loads .env before tools/collab.js opens the DB
+import './preflight.js'; // must stay second: refuses to start on a setup problem (spec P12)
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { migrate } from '@collab-mcp/core';
+import { migrate, lastResolution, readBuildInfo, runtimeDirFor, startHeartbeat } from '@collab-mcp/core';
 import * as collab from './tools/collab.js';
 import * as ai from './tools/ai.js';
 import * as sync from './tools/sync.js';
@@ -23,6 +24,13 @@ const uiBuilt = () => fsSync.existsSync(path.join(UI_DIST, 'index.html'));
 const appliedMigrations = migrate();
 if (appliedMigrations.length > 0) {
   console.log(`[migrate] applied: ${appliedMigrations.join(', ')}`);
+}
+
+// "I'm alive" file so collab doctor can tell which code this server runs (spec P9).
+{
+  const r = lastResolution()!;
+  const { version, build } = readBuildInfo();
+  startHeartbeat(runtimeDirFor(r), { program: 'web', version, build, dbPath: r.path, notebook: r.name });
 }
 
 // Add more tools by requiring their module and spreading its .routes here.

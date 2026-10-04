@@ -10,6 +10,8 @@ export async function startTestServer({ level = '0005' } = {}) {
   const tmpFile = path.join(os.tmpdir(), `collab-test-${crypto.randomUUID()}.db`);
   process.env.COLLAB_DB_PATH = tmpFile;
   process.env.COLLAB_DB_CREATE = '1'; // test DBs are created on purpose
+  // Heartbeats and notebook lookups go to a temp data folder, never the real one.
+  process.env.COLLAB_DATA_DIR ??= fs.mkdtempSync(path.join(os.tmpdir(), 'collab-test-data-'));
   const keyFile = path.join(os.tmpdir(), `collab-web-key-${crypto.randomUUID()}`);
   process.env.COLLAB_WEB_KEY_FILE = keyFile;
   // dynamic import AFTER env is set so the singleton binds to the temp DB

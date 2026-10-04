@@ -8,12 +8,13 @@ import Database from "better-sqlite3";
 import {
   resolveDbPath, loadCrsqlite, getSyncValue, postOfficeTargetFromDb, unsentSharedCount, requestJson, type PostOfficeTarget,
   describeMemberState, TEAM_STATUS_NOTE,
+  startupProblem, startHeartbeat, runtimeDirFor, readBuildInfo, nameForPath,
 } from "@collab-mcp/core";
 import { Courier, type CourierStatus } from "./engine.js";
 import { COURIER_KEYS } from "./keys.js";
 import { courierDir as defaultCourierDir, courierFiles } from "./paths.js";
 import { autostartPlan, installAutostart, removeAutostart, type AutostartContext, type AutostartDeps } from "./autostart.js";
-import { setup, uninstall, readCourierConfig, writeCourierConfig } from "./setup.js";
+import { setup, uninstall, readCourierConfig, writeCourierConfig, type CourierConfig } from "./setup.js";
 
 export interface Io { out(line: string): void; err(line: string): void }
 
@@ -122,6 +123,17 @@ export async function runCli(argv: string[], io: Io, deps: CliDeps = {}): Promis
       return t;
     } finally { closeReadable(db); }
   };
+  // Spec P12: refuse to start on a setup problem, with the doctor sentence. The
+  // courier's notebook is the one in its config, not the folder it runs from,
+  // so a .collab clash is not its problem.
+  const startupRefusal = async (cfg: CourierConfig): Promise<CliResult | null> => {
+    const env: NodeJS.ProcessEnv = { ...process.env, COLLAB_DB_PATH: cfg.dbPath };
+    delete env.COLLAB_NOTEBOOK;
+    const p = await startupProblem({ env, cwd: dir });
+    if (!p || p.id === "notebook.clash") return null;
+    io.err(`collab sync can't start: ${p.text}${p.fix ? `\n  fix: ${p.fix}` : ""}`);
+    return { code: 2 };
+  };
   const stopRunning = async (): Promise<boolean> => {
     const pid = readPid(files.pid);
     if (pid === null || !isAlive(pid)) { rmSync(files.pid, { force: true }); return false; }
@@ -150,7 +162,8 @@ export async function runCli(argv: string[], io: Io, deps: CliDeps = {}): Promis
       }
 
       case "start": {
-        needConfig();
+        const refused = await startupRefusal(needConfig());
+        if (refused) return refused;
         const pid = readPid(files.pid);
         if (pid !== null && isAlive(pid)) { io.out(`the courier is already running (pid ${pid})`); return { code: 0 }; }
         if (opt.foreground === true) return runCli(["sync", "run"], io, deps);
@@ -170,6 +183,8 @@ export async function runCli(argv: string[], io: Io, deps: CliDeps = {}): Promis
 
       case "run": {
         const cfg = needConfig();
+        const refused = await startupRefusal(cfg);
+        if (refused) return refused;
         const other = readPid(files.pid);
         if (other !== null && other !== process.pid && isAlive(other)) throw new Error(`a courier is already running (pid ${other}); one per machine`);
         mkdirSync(dir, { recursive: true });
@@ -181,7 +196,12 @@ export async function runCli(argv: string[], io: Io, deps: CliDeps = {}): Promis
         });
         courier.start();
         say(`courier started for ${cfg.dbPath} -> ${cfg.postOffice}`);
+        let name: string | null = null;
+        try { name = nameForPath(cfg.dbPath); } catch { /* unreadable config.json: doctor reports it */ }
+        const { version, build } = readBuildInfo();
+        const heartbeat = startHeartbeat(runtimeDirFor({ path: cfg.dbPath, name }), { program: "courier", version, build, dbPath: cfg.dbPath, notebook: name });
         const stop = async () => {
+          heartbeat.stop();
           await courier.stop();
           if (readPid(files.pid) === process.pid) rmSync(files.pid, { force: true });
           say("courier stopped");
