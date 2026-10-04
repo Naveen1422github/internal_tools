@@ -7,12 +7,16 @@ import { fileURLToPath } from 'node:url';
 import { migrate } from '@collab-mcp/core';
 import * as collab from './tools/collab.js';
 import * as ai from './tools/ai.js';
+import { checkApiRequest, checkHost, type GuardRefusal } from './guard.js';
+import { createWebKey, injectKey } from './web-key.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = Number(process.env.PORT || 7473);
 const HOST = '127.0.0.1';
-const UI_DIST = path.join(__dirname, '..', '..', 'ui', 'dist');
+const UI_DIST = process.env.COLLAB_UI_DIST || path.join(__dirname, '..', '..', 'ui', 'dist');
+const WEB_KEY = createWebKey();
+let boundPort = PORT; // the real port once listening (tests use port 0)
 const uiBuilt = () => fsSync.existsSync(path.join(UI_DIST, 'index.html'));
 
 const appliedMigrations = migrate();
@@ -51,6 +55,12 @@ function readBody(req: http.IncomingMessage): Promise<any> {
   });
 }
 
+/** index.html carries the access key; never cached, so a restart's new key is picked up on reload. */
+function sendIndex(res: http.ServerResponse, content: Buffer) {
+  res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-store' });
+  res.end(injectKey(content.toString('utf8'), WEB_KEY));
+}
+
 async function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, urlPath: string) {
   if (!uiBuilt()) {
     res.writeHead(503, { 'Content-Type': 'text/plain' });
@@ -64,6 +74,7 @@ async function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, 
   try {
     const content = await fs.readFile(filePath);
     const ext = path.extname(filePath).toLowerCase();
+    if (path.basename(filePath) === 'index.html') return sendIndex(res, content);
     res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
     res.end(content);
   } catch {
@@ -71,10 +82,7 @@ async function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, 
     // so client-side routes (/knowledge, /tasks, ...) work on hard refresh.
     if (uiBuilt() && !path.extname(rel)) {
       try {
-        const html = await fs.readFile(path.join(UI_DIST, 'index.html'));
-        res.writeHead(200, { 'Content-Type': MIME['.html'] });
-        res.end(html);
-        return;
+        return sendIndex(res, await fs.readFile(path.join(UI_DIST, 'index.html')));
       } catch {}
     }
     res.writeHead(404, { 'Content-Type': 'text/plain' });
@@ -92,6 +100,17 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(status, { 'Content-Type': isString ? 'text/plain' : 'application/json' });
     res.end(payload);
   };
+
+  const refuse = (r: GuardRefusal) => {
+    console.error(`[guard] refused ${req.method} ${urlPath}: ${r.reason}`);
+    send(r.status, { error: r.status === 415 ? 'unsupported content type' : 'forbidden' });
+  };
+  const hostRefusal = checkHost(req.headers, boundPort);
+  if (hostRefusal) return refuse(hostRefusal);
+  if (urlPath.startsWith('/api/')) {
+    const r = checkApiRequest(req, { port: boundPort, key: WEB_KEY });
+    if (r) return refuse(r);
+  }
 
   const handler = routes[key];
   if (handler) {
@@ -115,10 +134,11 @@ const server = http.createServer(async (req, res) => {
   send(404, { error: 'not found' });
 });
 
-function start(port = PORT, host = HOST): Promise<{ server: http.Server; port: number; host: string }> {
+function start(port = PORT, host = HOST): Promise<{ server: http.Server; port: number; host: string; key: string }> {
   return new Promise((resolve) => {
     server.listen(port, host, () => {
       const actualPort = (server.address() as any).port;
+      boundPort = actualPort;
       const isMain = process.argv[1] ? (
         path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)) ||
         process.argv[1].endsWith('server.js') ||
@@ -128,7 +148,7 @@ function start(port = PORT, host = HOST): Promise<{ server: http.Server; port: n
         console.log(`Internal tools server:  http://${host}:${actualPort}/`);
         console.log('Press Ctrl+C to stop.');
       }
-      resolve({ server, port: actualPort, host });
+      resolve({ server, port: actualPort, host, key: WEB_KEY });
     });
   });
 }

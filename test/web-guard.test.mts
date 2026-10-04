@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { checkApiRequest, checkHost } from '../server/src/guard.ts';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { createWebKey, readWebKey, injectKey } from '../server/src/web-key.ts';
 
 const PORT = 7473;
 const KEY = 'a'.repeat(64);
@@ -51,4 +56,35 @@ test('body without JSON type -> 415; JSON body or empty POST allowed', () => {
   assert.deepEqual(check(post({ 'transfer-encoding': 'chunked' })), { status: 415, reason: 'content-type' });
   assert.equal(check(post({ 'content-length': '5', 'content-type': 'application/json; charset=utf-8' })), null);
   assert.equal(check(post({ 'content-length': '0' })), null);
+});
+
+test('createWebKey writes a fresh 64-hex key that readWebKey reads back', () => {
+  const file = path.join(os.tmpdir(), `collab-web-key-${crypto.randomUUID()}`, 'key');
+  try {
+    const k1 = createWebKey(file);
+    assert.match(k1, /^[0-9a-f]{64}$/);
+    assert.equal(readWebKey(file), k1);
+    const k2 = createWebKey(file);
+    assert.notEqual(k2, k1, 'a new key on every start');
+    assert.equal(readWebKey(file), k2);
+  } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
+});
+
+test('an unwritable key file does not stop the server: createWebKey still returns a key', () => {
+  const blocker = path.join(os.tmpdir(), `collab-web-blocker-${crypto.randomUUID()}`);
+  fs.writeFileSync(blocker, 'a file, not a folder');
+  try {
+    const k = createWebKey(path.join(blocker, 'web', 'key'));
+    assert.match(k, /^[0-9a-f]{64}$/);
+  } finally { fs.rmSync(blocker, { force: true }); }
+});
+
+test('readWebKey returns null when the file is missing', () => {
+  assert.equal(readWebKey(path.join(os.tmpdir(), `nope-${crypto.randomUUID()}`)), null);
+});
+
+test('injectKey puts the meta tag in <head>, or in front when there is no head', () => {
+  assert.equal(injectKey('<html><head><title>x</title></head></html>', 'k'),
+    '<html><head><title>x</title><meta name="collab-key" content="k"></head></html>');
+  assert.equal(injectKey('<p>x</p>', 'k'), '<meta name="collab-key" content="k"><p>x</p>');
 });
