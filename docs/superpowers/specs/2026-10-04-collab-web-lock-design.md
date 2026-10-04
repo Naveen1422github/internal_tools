@@ -16,7 +16,7 @@ The web UI's server (`server/`, port 7473) only listens on this laptop, but toda
 | Attack | How it works | Stopped by |
 |---|---|---|
 | Cross-site request forgery (CSRF) | A web page you have open sends a hidden `POST http://127.0.0.1:7473/api/...` | Key header (the page cannot know it) + Origin check + JSON-only bodies |
-| "Simple" form posts | `Content-Type: text/plain` / form posts skip the browser's CORS preflight | Mutating requests must be `application/json` |
+| "Simple" form posts | `Content-Type: text/plain` / form posts skip the browser's CORS preflight | Non-empty bodies must be `application/json` (and the key header is required anyway) |
 | DNS rebinding | An attacker domain is pointed at 127.0.0.1 so the browser treats it as same-site, then reads `index.html` to steal the key | `Host` must be `127.0.0.1:<port>` or `localhost:<port>` |
 | Key leaks | Key appears in logs or API responses | Never logged; never in any `/api` response; only in `index.html` and the key file |
 
@@ -34,15 +34,17 @@ For every request whose path starts with `/api/`:
 1. `Host` must equal `127.0.0.1:<port>` or `localhost:<port>`; else 403.
 2. If `Origin` is present it must be `http://127.0.0.1:<port>` or `http://localhost:<port>`; else 403.
 3. `X-Collab-Key` must equal the key (constant-time compare, `crypto.timingSafeEqual`); else 403.
-4. For POST/PUT/PATCH/DELETE: `Content-Type` must start with `application/json`; else 415.
+4. A request with a non-empty body must have `Content-Type` starting with `application/json`; else 415. (Empty-body POSTs such as doctor are allowed; the key header already forces a CORS preflight, so this is defence in depth.)
 - No CORS headers are ever sent, so preflights fail and cross-origin JS cannot read anything.
 - The `Host` check also applies to static files (`index.html` carries the key).
 - A refusal logs one line: method, path, which check failed. Never the key or the header value.
 - Code lives in a new `server/src/guard.ts` (pure function `checkRequest(req, {port, key}) → null | {status, reason}`) so it is unit-testable without a socket.
 
 ### 3. The UI
-- `ui/src/main.tsx` installs one fetch wrapper at startup: reads the meta tag once, and for same-origin requests to `/api/...` adds `X-Collab-Key`. All ~10 existing direct `fetch('/api/...')` call sites keep working untouched, and new code cannot forget the header.
+- Every UI request already goes through `ui/src/api/client.ts` (`getJson` / `postJson`; verified 2026-10-04, no other `fetch(` in `ui/src`). Those two functions add `X-Collab-Key`, read once from the meta tag. One choke point, and new code that uses the client cannot forget the header.
 - If the meta tag is missing (UI opened from a stale build or the wrong server), the app shows one line: "This page can't talk to collab. Restart the collab web server and reload."
+
+- The key file path can be overridden with `COLLAB_WEB_KEY_FILE` (tests use a temp file, never the real one).
 
 ### 4. Dev mode and tests
 - `ui/vite.config.ts`: the `/api` proxy reads the key file and adds `X-Collab-Key`, and rewrites `Host`/`Origin` to the server's address (`changeOrigin`).
