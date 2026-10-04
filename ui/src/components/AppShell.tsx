@@ -4,6 +4,7 @@ import CommandPalette from './CommandPalette';
 import EntryDrawer from './EntryDrawer';
 import AiPanel from './AiPanel';
 import KeyMissingNotice from './KeyMissingNotice';
+import SyncBar from './SyncBar';
 import { useUi } from '../store/ui';
 
 export default function AppShell({ children }: { children: ReactNode }) {
@@ -13,6 +14,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
       <Sidebar />
       <main className="flex-1 min-w-0 flex flex-col">
         <KeyMissingNotice />
+        <SyncBar />
         <header className="h-12 shrink-0 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between px-4">
           <button onClick={() => setPaletteOpen(true)} className="text-sm text-gray-500 hover:text-gray-900 dark:hover:text-gray-100 font-medium">Search ⌘K</button>
           <button onClick={toggleAiPanel} className="text-sm text-gray-500 hover:text-gray-900 dark:hover:text-gray-100 font-medium">AI Assistant</button>

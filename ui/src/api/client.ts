@@ -135,3 +135,25 @@ export const aiChat = (messages: Array<{ role: ChatRole; content: string }>) =>
 export function isDraft(r: AiResponse): r is AiDraft {
   return 'draft' in r;
 }
+
+// --- Sync (web UI part 2) ---
+export type SyncOverview =
+  | { enabled: false }
+  | {
+      enabled: true; postOffice: string; deviceId: string; sharedModules: string[]; unsent: number;
+      courier: { running: boolean; state: string; lastError: string | null; lastPushAt: string | null; lastPullAt: string | null };
+      lastContactAt: string | null;
+      health: 'ok' | 'behind' | 'not-syncing' | 'needs-update' | 'revoked' | 'unknown';
+    };
+export interface MergeVersion { rev_id: string; title: string; summary: string; description: string | null; author: string | null; created_at: string }
+export interface MergeView { id: number; current: { title: string; summary: string; description: string | null }; heads: MergeVersion[] }
+export interface NeedsMergeRow { id: number; title: string; module: string | null; type: string; updated_at: string }
+export type MergeChoice = 'keep-current' | { title: string; summary: string; description: string | null };
+export const VERSIONS_CHANGED = 'versions-changed';
+
+export const syncStatus = () => getJson<SyncOverview>('/api/sync/status');
+export const needsMerge = () => getJson<{ results: NeedsMergeRow[] }>('/api/sync/needs-merge');
+export const mergeVersions = (id: number) => getJson<MergeView>(`/api/sync/versions${qs({ id: String(id) })}`);
+export const resolveMerge = (id: number, expectedHeads: string[], choice: MergeChoice) =>
+  postJson<{ ok: true; id: number }>('/api/sync/resolve', { id, expectedHeads, choice });
+export const explainMerge = (id: number) => postJson<{ text: string }>('/api/sync/explain', { id });
