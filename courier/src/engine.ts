@@ -1,7 +1,5 @@
 // file: courier/src/engine.ts
 import Database from "better-sqlite3";
-import { watch, type FSWatcher } from "node:fs";
-import { basename, dirname } from "node:path";
 import {
   loadCrsqlite, isCrsqliteLoaded, isSyncEnabled, getSyncValue, setSyncValue, postOfficeTargetFromDb,
   readOwnChanges, decodeChange, applyChanges, reindexFts, entryUlidOf, requestJson, openEventStream,
@@ -10,9 +8,9 @@ import {
 import { COURIER_KEYS as K } from "./keys.js";
 
 // The courier (spec Components 2, D4). One per machine, client-agnostic: it
-// opens the notes DB itself. Push on write (a watch on the DB and its WAL,
-// ~200 ms debounce), pull when the doorbell rings (SSE), retry every 30 s after
-// a failure, nothing at all while nothing changes. All network work runs one
+// opens the notes DB itself. Push on write (SQLite's data_version checked 4x a
+// second, ~200 ms debounce), pull when the doorbell rings (SSE), retry every
+// 30 s after a failure, no network while nothing changes. All network work runs one
 // job at a time. Bookmarks make every step safe to repeat: the sent-bookmark
 // moves only after the post office acknowledged; the receive-bookmark moves in
 // the same transaction as the rows it covers.
@@ -38,8 +36,10 @@ export interface CourierOptions {
   maxReconnectMs?: number;
   /** Changes per request. */
   batchSize?: number;
-  /** Watch the DB file (off in unit tests that drive push/pull by hand). */
+  /** Notice saves by other programs (off in unit tests that drive push/pull by hand). */
   watch?: boolean;
+  /** How often to check for saves (250 ms). A check is a ~9 µs local read, no network. */
+  pollMs?: number;
   log?: (line: string) => void;
   onStatus?: (s: CourierStatus) => void;
 }
@@ -54,7 +54,8 @@ export class Courier {
   private readonly opt: Required<Omit<CourierOptions, "log" | "onStatus">> & Pick<CourierOptions, "log" | "onStatus">;
   private st: CourierStatus = { state: "starting", lastError: null, lastPushAt: null, lastPullAt: null, sentTotal: 0, receivedTotal: 0 };
   private stream: EventStream | null = null;
-  private watcher: FSWatcher | null = null;
+  private poller: ReturnType<typeof setInterval> | null = null;
+  private lastDataVersion = 0;
   private debounceTimer: Timer | null = null;
   private retryTimer: Timer | null = null;
   private reconnectTimer: Timer | null = null;
@@ -63,7 +64,7 @@ export class Courier {
   private stopped = false;
 
   constructor(opts: CourierOptions) {
-    this.opt = { retryMs: 30_000, debounceMs: 200, maxReconnectMs: 30_000, batchSize: 2000, watch: true, ...opts };
+    this.opt = { retryMs: 30_000, debounceMs: 200, maxReconnectMs: 30_000, batchSize: 2000, watch: true, pollMs: 250, ...opts };
     this.db = new Database(opts.dbPath, { fileMustExist: true });
     try {
       this.db.pragma("journal_mode = WAL");
@@ -102,8 +103,7 @@ export class Courier {
     if (this.stopped) return;
     this.stopped = true;
     this.clearTimers();
-    this.watcher?.close();
-    this.watcher = null;
+    this.stopPolling();
     this.stream?.close();
     this.stream = null;
     await this.chain;
@@ -176,8 +176,7 @@ export class Courier {
     this.clearTimers();
     this.stream?.close();
     this.stream = null;
-    this.watcher?.close();
-    this.watcher = null;
+    this.stopPolling();
     this.set({ state: "revoked", lastError: e?.message ?? "access revoked: the post office refused this machine's key; ask its owner for a new join code" });
     this.log("access revoked: the post office refused this machine's key. Stopped (no retries). Ask its owner for a new join code.");
   }
@@ -289,20 +288,36 @@ export class Courier {
     }
   }
 
-  /** Push on write: any change to the DB or its WAL, debounced. */
+  /**
+   * Push on write: a save by any other connection (MCP, REST, scripts, Codex)
+   * bumps SQLite's data_version on this one; our own writes (applying pulled
+   * changes) do not, so nothing echoes back. Debounced.
+   * Not fs.watch: on Windows it misses nearly every write to a file another
+   * process holds open (collab E-716).
+   */
   private watchDb(): void {
-    const dir = dirname(this.opt.dbPath);
-    const base = basename(this.opt.dbPath);
-    this.watcher = watch(dir, (_event, name) => {
-      const n = name === null || name === undefined ? null : String(name);
-      if (n !== null && n !== base && n !== `${base}-wal`) return;
+    this.lastDataVersion = this.dataVersion();
+    this.poller = setInterval(() => {
+      if (this.stopped) return;
+      let v: number;
+      try { v = this.dataVersion(); } catch (e) { this.log(`checking for saves failed: ${(e as Error).message}`); return; }
+      if (v === this.lastDataVersion) return;
+      this.lastDataVersion = v;
       if (this.debounceTimer) clearTimeout(this.debounceTimer);
       this.debounceTimer = setTimeout(() => {
         this.debounceTimer = null;
         void this.pushNow();
       }, this.opt.debounceMs);
-    });
-    this.watcher.on("error", (e) => this.log(`file watch failed: ${e.message}`));
+    }, this.opt.pollMs);
+  }
+
+  private dataVersion(): number {
+    return this.db.pragma("data_version", { simple: true }) as number;
+  }
+
+  private stopPolling(): void {
+    if (this.poller) clearInterval(this.poller);
+    this.poller = null;
   }
 
   /** The doorbell. On (re)connect: catch up both ways. Dropped: reconnect with back-off up to 30 s. */
