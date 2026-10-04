@@ -1,8 +1,9 @@
 import http from 'node:http';
 import {
-  getDb, estimateTokens, KIND_BY_TYPE, SLUG_REGEX, validateEntryInput, buildFtsMatch,
-  addEntry, addEntryAsync, getEntry, deleteEntry, supersede, doctor, ownerOf, replaceLinks, insertEntryModules,
-  liveEntry, ftsJoin, hasUlidPrimaryKey, snapshotForRevision, finishRevision,
+  getDb, SLUG_REGEX, validateEntryInput, buildFtsMatch,
+  addEntry, addEntryAsync, getEntry, deleteEntry, supersede, doctor,
+  editEntry, EntryNotFoundError, reassignModule, upsertModule, deleteModule,
+  liveEntry, ftsJoin,
 } from '@collab-mcp/core';
 
 const db = getDb();
@@ -183,7 +184,6 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     const { id, type, title, summary, description, agent, module, modules, category, task_id, refs } = body;
     const v = validateEntryInput({ type, title, summary, category });
     if (!v.ok) return send(400, { error: v.errors[0] });
-    const kind = KIND_BY_TYPE[type as keyof typeof KIND_BY_TYPE];
     const resolvedCategory = v.category!;
 
     const moduleCandidates = [
@@ -212,25 +212,15 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
         return send(200, { ok: true, id: newId });
       }
 
-      // Edit: resolve the E-number to its owner (lowest live ulid at 0006,
-      // where id is not unique; F3) and write by the level's real key.
-      const owner = ownerOf(db, Number(id));
-      if (!owner) return send(404, { error: `entry ${id} not found` });
-      const byUlid = hasUlidPrimaryKey(db);
-      const tokens = estimateTokens(description);
-      const tx = db.transaction(() => {
-        // Spec "Edits write revisions" (0007+; no-op below 0007).
-        const before = byUlid ? snapshotForRevision(db, owner.ulid as string) : null;
-        db.prepare(`
-          UPDATE entries SET type=?, kind=?, title=?, summary=?, description=?, agent=?, module=?, task_id=?, tokens_estimate=?, category=?
-          WHERE ${byUlid ? 'ulid = ?' : 'id = ?'}
-        `).run(type, kind, title, summary, description, agent, primaryModule, task_id, tokens, resolvedCategory, byUlid ? owner.ulid : owner.id);
-        replaceLinks(db, owner, orderedModules, primaryModule, normRefs);
-        finishRevision(db, before);
+      // Edit: core resolves the E-number to its owner and writes by the level's
+      // real key, with a revision (moved from here, collab E-720).
+      const r = editEntry(db, {
+        id: Number(id), type, title, summary, description, agent,
+        modules: orderedModules, category: resolvedCategory, task_id, refs: normRefs,
       });
-      tx();
-      send(200, { ok: true, id: owner.id });
+      send(200, { ok: true, id: r.id });
     } catch (err: any) {
+      if (err instanceof EntryNotFoundError) return send(404, { error: err.message });
       send(500, { error: err.message });
     }
   },
@@ -278,36 +268,11 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       return send(400, { error: "'module' (target slug) is required" });
     }
     try {
-      const exists = db.prepare('SELECT slug FROM modules WHERE slug = ?').get(module);
-      if (!exists) return send(400, { error: `target module '${module}' does not exist` });
-
-      // Works at 0005 and 0006: no ON CONFLICT(entry_id, module) (that PK is gone
-      // at 0006). Writes key on the level's real key, as entry-write.ts does (F3):
-      // ulid at 0006; id / entry_id at 0005, where a link row's entry_ulid is only
-      // trigger-filled and may be NULL.
-      const byUlid = hasUlidPrimaryKey(db);
-      const entryKey = byUlid ? 'ulid' : 'id';
-      const linkKey = byUlid ? 'entry_ulid' : 'entry_id';
-      const setPrimary = db.prepare(`UPDATE entries SET module = ? WHERE ${entryKey} = ?`);
-      const clearOld = db.prepare(`DELETE FROM entry_modules WHERE ${linkKey} = ? AND is_primary = 1`);
-      const promote = db.prepare(`UPDATE entry_modules SET is_primary = 1 WHERE ${linkKey} = ? AND module = ?`);
-      const uniqueIds = [...new Set(ids)] as number[];
-      let updated = 0;
-      const tx = db.transaction(() => {
-        for (const id of uniqueIds) {
-          const owner = ownerOf(db, Number(id));
-          if (!owner) continue;
-          const key = byUlid ? owner.ulid : owner.id;
-          setPrimary.run(module, key);
-          clearOld.run(key);
-          // Promote an existing secondary membership, or add a new primary one.
-          if (promote.run(key, module).changes === 0) insertEntryModules(db, owner, [module], module);
-          updated += 1;
-        }
-      });
-      tx();
+      const { updated } = reassignModule(db, ids, module);
       send(200, { ok: true, updated, module });
-    } catch (err: any) { send(500, { error: err.message }); }
+    } catch (err: any) {
+      send(/does not exist/.test(err.message) ? 400 : 500, { error: err.message });
+    }
   },
 
   // --- TASKS ---
@@ -365,16 +330,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       return send(400, { error: `invalid slug '${slug}': must be lowercase alphanumeric or hyphens, 1-60 chars, no underscores, start with alphanumeric` });
     }
     try {
-      db.prepare(`
-        INSERT INTO modules (slug, name, summary, description, current_goal, status)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(slug) DO UPDATE SET
-          name=excluded.name,
-          summary=excluded.summary,
-          description=excluded.description,
-          current_goal=excluded.current_goal,
-          status=excluded.status
-      `).run(slug, name, summary, description, current_goal, status || 'active');
+      upsertModule(db, { slug, name, summary, description, current_goal, status });
       send(200, { ok: true, slug });
     } catch (err: any) {
       send(500, { error: err.message });
@@ -419,18 +375,14 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
   'POST /api/collab/module/delete': async (req, res, send, body) => {
     if (!body.slug) return send(400, { error: 'slug required' });
     try {
-      // Refuse if there are entries or tasks pinned to this module — better to surface than orphan.
-      const refs: any = db.prepare(`
-        SELECT (SELECT COUNT(*) FROM entries WHERE module=?) AS entry_count,
-               (SELECT COUNT(*) FROM tasks WHERE module=?) AS task_count
-      `).get(body.slug, body.slug);
-      if (refs.entry_count > 0 || refs.task_count > 0) {
+      // Core refuses if entries or tasks are pinned to this module (better to surface than orphan).
+      const r = deleteModule(db, body.slug);
+      if (!r.deleted) {
         return send(409, {
-          error: `module '${body.slug}' has ${refs.entry_count} entries and ${refs.task_count} tasks. Reassign or delete those first.`,
-          ...refs,
+          error: `module '${body.slug}' has ${r.entry_count} entries and ${r.task_count} tasks. Reassign or delete those first.`,
+          entry_count: r.entry_count, task_count: r.task_count,
         });
       }
-      db.prepare('DELETE FROM modules WHERE slug=?').run(body.slug);
       send(200, { ok: true });
     } catch (err: any) { send(500, { error: err.message }); }
   },

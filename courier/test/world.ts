@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import {
   migrateTo, enableSync, generateSelfSignedCert, formatJoinCode, hasCrrTables, loadCrsqlite, isCrsqliteLoaded,
-  setSyncValue, requestJson, SYNC_KEYS,
+  setSyncValue, requestJson, SYNC_KEYS, installSyncPing,
 } from '@collab-mcp/core';
 import { createStore, closeStore, startPostOffice, addMember, type PostOffice, type Store } from '@collab-mcp/post-office';
 
@@ -23,11 +23,12 @@ export function tempDir(prefix = 'collab-courier-'): { dir: string; cleanup: () 
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-/** A writer connection, opened the way core's getDb opens one (cr-sqlite loaded when the DB shares). */
+/** A writer connection, opened the way core's getDb opens one (cr-sqlite loaded, save ping installed when the DB shares). */
 export function openWriter(path: string): Database.Database {
   const db = new Database(path);
   db.pragma('journal_mode = WAL');
   if (hasCrrTables(db)) loadCrsqlite(db);
+  installSyncPing(db);
   return db;
 }
 export function closeWriter(db: Database.Database): void {
