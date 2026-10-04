@@ -112,6 +112,19 @@ export const doctor = () =>
   postJson<{ ok: boolean; checks: Array<{ name: string; severity: string; detail: string; items?: unknown[] }> }>(
     `/api/collab/doctor`, {});
 
+// --- Setup doctor (same report as `collab doctor --json`) ---
+export type SetupGroup = 'install' | 'notebook' | 'version' | 'programs' | 'sync' | 'claude' | 'notes';
+export type SetupMark = 'ok' | 'warn' | 'error' | 'skipped';
+export interface SetupCheck { group: SetupGroup; id: string; mark: SetupMark; text: string; fix?: string }
+export interface SetupReport {
+  checks: SetupCheck[];
+  errors: number;
+  warnings: number;
+  exitCode: 0 | 1 | 2;
+  notebook: { name: string | null; path: string; source: string; described: string } | null;
+}
+export const setupDoctor = () => getJson<SetupReport>(`/api/doctor/setup`);
+
 // --- Tasks ---
 export const tasks = () => getJson<{ results: any[] }>(`/api/collab/tasks`);
 

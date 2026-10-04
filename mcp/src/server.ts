@@ -1168,7 +1168,7 @@ server.registerTool(
   {
     title: "Check schema + data integrity",
     description: [
-      "Runs lightweight schema and data integrity checks against the collab sqlite database.",
+      "Checks the whole setup (install, notebook, versions, running programs, sync, Claude Code) and the notes' schema + data integrity.",
       "Useful after migrations or when troubleshooting missing FTS rows / orphan refs.",
     ].join("\n"),
     inputSchema: {},
@@ -1191,8 +1191,9 @@ server.registerTool(
       }
     }
     lines.push(result.ok ? "Overall: ok" : "Overall: has errors");
+    const setup = formatSetupReport(await runSetupDoctor());
     return {
-      content: [{ type: "text", text: lines.join("\n") }],
+      content: [{ type: "text", text: `${setup}\n\n${lines.join("\n")}` }],
       structuredContent: structured(result),
     };
   }

@@ -1,12 +1,60 @@
 import { useEffect, useState } from 'react';
-import { doctor, reassignModule, upsertEntry } from '../api/client';
+import { doctor, reassignModule, setupDoctor, upsertEntry, type SetupGroup, type SetupMark, type SetupReport } from '../api/client';
+
+const SETUP_GROUPS: Array<[SetupGroup, string]> = [
+  ['install', 'Install'], ['notebook', 'Notebook'], ['version', 'Version'], ['programs', 'Programs'],
+  ['sync', 'Sync'], ['claude', 'Claude Code'], ['notes', 'Notes'],
+];
+const MARK: Record<SetupMark, { sign: string; tone: string }> = {
+  ok: { sign: '✓', tone: 'text-green-600' },
+  warn: { sign: '!', tone: 'text-amber-600' },
+  error: { sign: '✗', tone: 'text-red-600' },
+  skipped: { sign: '-', tone: 'text-gray-400' },
+};
+
+/** The whole-setup report: the same lines and words as `collab doctor` in a terminal (spec P10). */
+function SetupSection({ report, error }: { report: SetupReport | null; error: string | null }) {
+  if (error) return <p className="text-sm text-red-600">Setup check failed: {error}</p>;
+  if (!report) return <p className="text-sm text-gray-500 animate-pulse">Checking setup...</p>;
+  return (
+    <section className="border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-gray-950 p-4 space-y-4">
+      <h2 className="font-bold text-sm uppercase tracking-widest">Setup</h2>
+      {SETUP_GROUPS.map(([g, title]) => {
+        const checks = report.checks.filter((c) => c.group === g);
+        if (!checks.length) return null;
+        return (
+          <div key={g} className="space-y-1">
+            <h3 className="text-xs font-semibold text-gray-500">{title}</h3>
+            <ul className="space-y-1 text-sm">
+              {checks.map((c, i) => (
+                <li key={c.id + i} className={c.mark === 'skipped' ? 'text-gray-400' : ''}>
+                  <span className={`inline-block w-4 font-bold ${MARK[c.mark].tone}`}>{MARK[c.mark].sign}</span>
+                  <span>{c.text}</span>
+                  {c.fix && <div className="ml-4 text-xs text-gray-500">fix: <code>{c.fix}</code></div>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })}
+      <p className="text-sm font-medium">
+        {report.exitCode === 0 ? 'All good.' : `${report.errors} problem(s), ${report.warnings} warning(s).`}
+      </p>
+    </section>
+  );
+}
 
 export default function Health() {
   const [checks, setChecks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [setup, setSetup] = useState<SetupReport | null>(null);
+  const [setupError, setSetupError] = useState<string | null>(null);
 
   const fetchHealth = () => {
     setLoading(true);
+    setupDoctor()
+      .then((r) => { setSetup(r); setSetupError(null); })
+      .catch((e: Error) => setSetupError(e.message));
     doctor()
       .then(res => setChecks(res.checks))
       .catch(console.error)
@@ -39,7 +87,7 @@ export default function Health() {
     }
   };
 
-  if (loading && checks.length === 0) return <div className="p-8 text-gray-500 animate-pulse">Running system diagnostics...</div>;
+  if (loading && checks.length === 0 && !setup && !setupError) return <div className="p-8 text-gray-500 animate-pulse">Running system diagnostics...</div>;
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -56,6 +104,8 @@ export default function Health() {
           {loading ? 'Running...' : 'Run Doctor'}
         </button>
       </div>
+
+      <SetupSection report={setup} error={setupError} />
 
       <div className="space-y-6 pb-12">
         {checks.map((check, i) => (

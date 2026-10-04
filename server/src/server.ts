@@ -9,6 +9,7 @@ import { migrate, lastResolution, readBuildInfo, runtimeDirFor, startHeartbeat }
 import * as collab from './tools/collab.js';
 import * as ai from './tools/ai.js';
 import * as sync from './tools/sync.js';
+import * as setup from './tools/setup.js';
 import { checkApiRequest, checkHost, type GuardRefusal } from './guard.js';
 import { createWebKey, injectKey } from './web-key.js';
 
@@ -38,6 +39,7 @@ const routes: Record<string, any> = {
   ...collab.routes,
   ...ai.routes,
   ...sync.routes,
+  ...setup.routes,
 };
 
 const MIME: Record<string, string> = {
