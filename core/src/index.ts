@@ -46,3 +46,5 @@ export * from './settings.js';
 export * from './build-info.js';
 export * from './heartbeat.js';
 export * from './addon.js';
+export * from './setup/types.js';
+export * from './setup/engine.js';
