@@ -31,3 +31,6 @@ data/sessions.json
 backups/
 *.db.gz
 *.db.tmp
+
+# brainstorming companion mockups (local only)
+.superpowers/
