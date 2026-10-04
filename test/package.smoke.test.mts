@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -54,6 +55,18 @@ function startUntil(bin: string, args: string[], opts: { cwd: string; env: NodeJ
   if (input) child.stdin.write(input);
   return { child, done };
 }
+/**
+ * Stop a started command and WAIT until it is gone. On Windows `collab.cmd`
+ * runs through cmd.exe, so child.kill() would stop only the shell and leave
+ * the node program running (holding the notebook open): kill the whole tree.
+ */
+async function stop(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = once(child, 'exit');
+  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F']);
+  else child.kill();
+  await exited;
+}
 const INIT = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'smoke', version: '1' } } }) + '\n';
 
 test('the assembled package installs with no repo around it and works', { skip: process.env.COLLAB_PACKAGE_SMOKE !== '1', timeout: 900_000 }, async () => {
@@ -91,10 +104,10 @@ test('the assembled package installs with no repo around it and works', { skip: 
 
     // Without the add-on: the MCP still answers (degraded, spec P12); the web server refuses with the fix.
     const mcp0 = startUntil(bin, ['mcp'], { cwd, env }, /"result"/, INIT);
-    const m0 = await mcp0.done; mcp0.child.kill();
+    const m0 = await mcp0.done; await stop(mcp0.child);
     assert.ok(m0.line, `collab mcp did not answer initialize: ${m0.err}`);
     const web0 = startUntil(bin, ['web'], { cwd, env: { ...env, PORT: '0' } }, /^collab web: http/);
-    const w0 = await web0.done; web0.child.kill();
+    const w0 = await web0.done; await stop(web0.child);
     assert.equal(w0.code, 2, w0.err);
     assert.match(w0.err, /fix: collab doctor --fix/);
 
@@ -110,7 +123,7 @@ test('the assembled package installs with no repo around it and works', { skip: 
         const res = await fetch(url);
         assert.equal(res.status, 200);
         assert.match(await res.text(), /<div id="root">/);
-      } finally { web.child.kill(); }
+      } finally { await stop(web.child); }
     }
 
     const installed = walk(prefix).map((p) => p.replace(/\\/g, '/'));

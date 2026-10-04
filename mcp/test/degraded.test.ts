@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -53,7 +54,9 @@ test('no notebook: the MCP stays up, lists its tools, and every tool returns the
     assert.match(doc.result.content[0].text, /Notebook/);
     assert.equal(child.exitCode, null, 'the server must still be running');
   } finally {
-    child.kill();
+    // Wait for the exit, not just the kill: on Windows a process still shutting
+    // down keeps its working folder, and rmdir fails with EBUSY.
+    if (child.exitCode === null) { const exited = once(child, 'exit'); child.kill(); await exited; }
     rmSync(root, { recursive: true, force: true });
   }
 });

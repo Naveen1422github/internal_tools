@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
 import { describeResolution } from "../db.js";
 import { collabDataDir } from "../notebooks.js";
-import { hasCrrTables, loadCrsqlite } from "../sync/extension.js";
+import { hasCrrTables, isCrsqliteLoaded, loadCrsqlite } from "../sync/extension.js";
 import { checkAddonState, checkNode, checkSqlite } from "./check-install.js";
 import { checkNotebook } from "./check-notebook.js";
 import { checkNotebookVersion, checkOfficeVersion } from "./check-version.js";
@@ -95,6 +95,19 @@ function openReadOnly(st: GroupState): void {
   }
 }
 
+/**
+ * cr-sqlite must be finalized before close(), or close() returns while the file
+ * stays open: a leaked handle that, on Windows, blocks deleting or moving the
+ * notebook (same rule as closeDb in core/src/db.ts).
+ */
+function closeReadOnly(st: GroupState): void {
+  const db = st.db;
+  st.db = null;
+  if (!db) return;
+  if (isCrsqliteLoaded(db)) { try { db.prepare("SELECT crsql_finalize()").get(); } catch { /* closing anyway */ } }
+  try { db.close(); } catch { /* closing anyway */ }
+}
+
 export async function runSetupDoctor(partial: Partial<SetupContext> = {}): Promise<SetupReport> {
   const ctx = context(partial);
   const wanted = new Set(ctx.groups ?? ORDER);
@@ -129,7 +142,7 @@ export async function runSetupDoctor(partial: Partial<SetupContext> = {}): Promi
       checks.push(...(await runSteps(g, group.steps, ctx, st)));
     }
   } finally {
-    try { st.db?.close(); } catch { /* closing anyway */ }
+    closeReadOnly(st);
   }
   const errors = checks.filter((c) => c.mark === "error").length;
   const warnings = checks.filter((c) => c.mark === "warn").length;
@@ -163,7 +176,7 @@ export function startupProblemSync(partial: Partial<SetupContext> = {}): SetupCh
     openReadOnly(st);
     if (st.dbOpenError) checks.push({ group: "notebook", id: "notebook.open", mark: "error", text: `The notebook can't be opened: ${st.dbOpenError}`, fix: OPEN_FIX });
   } finally {
-    try { st.db?.close(); } catch { /* closing anyway */ }
+    closeReadOnly(st);
   }
   return checks.find((c) => c.mark === "error") ?? null;
 }

@@ -147,3 +147,25 @@ test('sync is one skipped line when sharing is off', async () => {
     assert.equal(sync[0].mark, 'skipped');
   } finally { s.done(); }
 });
+
+// A connection that loaded cr-sqlite must run crsql_finalize() before close(),
+// or close() returns while the file stays open (a leaked handle). Windows then
+// refuses to delete or move the notebook; Linux doesn't notice, so this test
+// only fails on Windows, which is where the leak hurts.
+test('doctor and the startup check release a SHARED notebook file when they finish', async () => {
+  const s = setup();
+  try {
+    const { enableSync } = await import('../src/sync/enable.js');
+    const shared = join(s.root, 'shared.db');
+    const h = getDb(shared, { create: true }); migrate(h, { includeStaged: true }); enableSync(h); closeDb();
+    const env = { ...s.base.env, COLLAB_DB_PATH: shared };
+    const { startupProblemSync } = await import('../src/setup/engine.js');
+    startupProblemSync({ ...s.base, env });
+    await runSetupDoctor({ ...s.base, env });
+    const { unlinkSync } = await import('node:fs');
+    assert.doesNotThrow(() => unlinkSync(shared), 'the notebook file is still held open');
+  } finally {
+    // A leaked handle also blocks this cleanup; don't let that error hide the assertion above.
+    try { s.done(); } catch { /* reported by the assertion */ }
+  }
+});
