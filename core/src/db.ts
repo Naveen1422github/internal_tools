@@ -1,21 +1,16 @@
 import Database from "better-sqlite3";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import { backfillUlids } from "./backfill.js";
 import { preflight0006 } from "./preflight-0006.js";
 import { hasCrrTables, loadCrsqlite, isCrsqliteLoaded, ensureCrsqlite } from "./sync/extension.js";
 import { installSyncPing } from "./sync/ping.js";
+import { collabDataDir, readNotebookConfig, samePath, type NotebookConfig } from "./notebooks.js";
+import { installRoot } from "./install-root.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-// Migrations ship WITH the code, so they are resolved relative to the package.
-// Layout:
-//   internal-tools/mcp/
-//     migrations/*.sql
-//     src/db.ts      <- this file
-const MIGRATIONS_DIR = join(__dirname, "../../mcp/migrations");
+// Migrations ship WITH the code, so they are resolved relative to the install
+// root (the repo root in a checkout, the package folder when installed).
+const MIGRATIONS_DIR = join(installRoot(), "mcp", "migrations");
 
 // Migrations written but not yet released. Only tests and rehearsals read them
 // (includeStaged). Going live = moving the file up one folder, after every
@@ -24,39 +19,144 @@ const STAGED_DIR = join(MIGRATIONS_DIR, "staged");
 
 export type DB = Database.Database;
 
-export type DbPathSource = "argument" | "COLLAB_DB_PATH" | "cwd-fallback";
+export type DbPathSource =
+  | "argument" | "notebook-flag" | "COLLAB_DB_PATH" | "collab-file" | "cwd-existing" | "cwd-create" | "default";
 
 export interface DbPathResolution {
   path: string;
   source: DbPathSource;
+  /** Registered notebook name, or null for a path that isn't in config.json. */
+  name: string | null;
+  /** The .collab file that decided (or that disagrees with COLLAB_DB_PATH). */
+  collabFile: string | null;
+  /** COLLAB_DB_PATH won, but the nearest .collab names a different notebook (spec P7). */
+  clash: { collabFile: string; collabName: string; collabPath: string | null } | null;
+}
+
+export class NoNotebookError extends Error {
+  constructor(readonly known: string[], cwd: string) {
+    super(
+      `[collab] no notebook for ${cwd}. ` +
+        (known.length
+          ? `You have: ${known.join(", ")}. Fix: \`collab notebook default <name>\`, or put a .collab file with "notebook = <name>" in the project folder.`
+          : `No notebooks are registered. Fix: \`collab notebook adopt <path-to-collab.db> --name <name>\` or \`collab notebook new <name>\`.`),
+    );
+    this.name = "NoNotebookError";
+  }
+}
+
+export class UnknownNotebookError extends Error {
+  constructor(readonly name: string, readonly from: string, readonly known: string[]) {
+    super(`[collab] ${from} names notebook "${name}", which doesn't exist. Known: ${known.join(", ") || "none"}. Fix the name, or register it with \`collab notebook adopt\`.`);
+    this.name = "UnknownNotebookError";
+  }
+}
+
+/** Nearest .collab file at or above `startDir` (spec P7 rule 3: nearest wins). */
+export function findCollabFile(startDir: string): { file: string; name: string } | null {
+  let dir = resolvePath(startDir);
+  for (;;) {
+    const file = join(dir, ".collab");
+    if (existsSync(file)) {
+      for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
+        const m = line.replace(/#.*/, "").match(/^\s*notebook\s*=\s*(\S+)\s*$/);
+        if (m) return { file, name: m[1] };
+      }
+      throw new Error(`[collab] ${file} has no "notebook = <name>" line`);
+    }
+    const up = dirname(dir);
+    if (up === dir) return null;
+    dir = up;
+  }
 }
 
 /**
- * Decide which SQLite file to open, in priority order:
- *   1. an explicit path argument
+ * Decide which notebook to open (spec P7), first match wins:
+ *   0. an explicit path argument
+ *   1. $COLLAB_NOTEBOOK (set by `collab --notebook <name>`)
  *   2. $COLLAB_DB_PATH
- *   3. ./collab.db, relative to the CURRENT WORKING DIRECTORY
+ *   3. the nearest .collab file, in cwd or the closest parent
+ *   4. ./collab.db in the CURRENT WORKING DIRECTORY, only if it already exists
+ *   5. the default notebook in config.json
+ *   6. with allowCreate, a new ./collab.db; otherwise NoNotebookError
  *
- * Step 3 is deliberately cwd-relative and must NEVER resolve inside the
- * installation directory. A package-relative default is shared by every
- * project pointed at that install, which silently merges unrelated knowledge
- * bases into one file: see collab E-550, where a second workspace spent days
- * writing its entries into this repo's collab.db with no error and no warning.
+ * Nothing here ever resolves inside the installation directory. A
+ * package-relative default is shared by every project pointed at that install,
+ * which silently merges unrelated knowledge bases into one file: see collab
+ * E-550, where a second workspace spent days writing its entries into this
+ * repo's collab.db with no error and no warning.
  *
- * Contrast with MIGRATIONS_DIR above, which is package-relative on purpose.
- * Code belongs to the install; data belongs to the project.
+ * Contrast with MIGRATIONS_DIR above, which is install-relative on purpose.
+ * Code belongs to the install; data belongs to the user.
  */
-export function resolveDbPath(explicit?: string): DbPathResolution {
-  if (explicit) return { path: explicit, source: "argument" };
+export function resolveDbPath(
+  explicit?: string,
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv; dataDir?: string; allowCreate?: boolean } = {},
+): DbPathResolution {
+  const env = opts.env ?? process.env;
+  const cwd = opts.cwd ?? process.cwd();
+  const dataDir = opts.dataDir ?? collabDataDir(env);
+  const none = { collabFile: null, clash: null };
+  if (explicit) return { path: explicit, source: "argument", name: null, ...none };
 
-  const fromEnv = process.env.COLLAB_DB_PATH;
-  if (fromEnv) return { path: fromEnv, source: "COLLAB_DB_PATH" };
+  // config.json is read lazily: a broken file must not block rules 0 and 2.
+  let cfg: NotebookConfig | null = null;
+  const config = () => (cfg ??= readNotebookConfig(dataDir));
+  const lookup = (name: string, from: string) => {
+    const nb = config().notebooks[name];
+    if (!nb) throw new UnknownNotebookError(name, from, Object.keys(config().notebooks));
+    return nb.path;
+  };
+  const nameOf = (p: string): string | null => {
+    try { return Object.entries(config().notebooks).find(([, v]) => samePath(v.path, p))?.[0] ?? null; } catch { return null; }
+  };
 
-  return { path: join(process.cwd(), "collab.db"), source: "cwd-fallback" };
+  if (env.COLLAB_NOTEBOOK) {
+    return { path: lookup(env.COLLAB_NOTEBOOK, "--notebook"), source: "notebook-flag", name: env.COLLAB_NOTEBOOK, ...none };
+  }
+  const found = findCollabFile(cwd);
+  if (env.COLLAB_DB_PATH) {
+    const path = env.COLLAB_DB_PATH;
+    let clash: DbPathResolution["clash"] = null;
+    if (found) {
+      let collabPath: string | null = null;
+      try { collabPath = config().notebooks[found.name]?.path ?? null; } catch { collabPath = null; }
+      if (!collabPath || !samePath(collabPath, path)) clash = { collabFile: found.file, collabName: found.name, collabPath };
+    }
+    return { path, source: "COLLAB_DB_PATH", name: nameOf(path), collabFile: found?.file ?? null, clash };
+  }
+  if (found) {
+    return { path: lookup(found.name, found.file), source: "collab-file", name: found.name, collabFile: found.file, clash: null };
+  }
+  const local = join(cwd, "collab.db");
+  if (existsSync(local)) return { path: local, source: "cwd-existing", name: nameOf(local), ...none };
+  const c = config();
+  if (c.default) return { path: c.notebooks[c.default].path, source: "default", name: c.default, ...none };
+  if (opts.allowCreate) return { path: local, source: "cwd-create", name: null, ...none };
+  throw new NoNotebookError(Object.keys(c.notebooks), cwd);
+}
+
+export function describeResolution(r: DbPathResolution): string {
+  const who = r.name ?? r.path;
+  switch (r.source) {
+    case "collab-file": return `${who} (from .collab in ${dirname(r.collabFile!)})`;
+    case "notebook-flag": return `${who} (from --notebook)`;
+    case "COLLAB_DB_PATH": return `${who} (from COLLAB_DB_PATH)`;
+    case "cwd-existing": return `${who} (collab.db in the current folder)`;
+    case "cwd-create": return `${who} (new collab.db in the current folder)`;
+    case "default": return `${who} (the default notebook)`;
+    default: return `${who} (given by the caller)`;
+  }
 }
 
 let _db: DB | null = null;
 let _dbPath: string | null = null;
+let _resolution: DbPathResolution | null = null;
+
+/** How the open database was chosen (doctor and heartbeats), or null if none is open. */
+export function lastResolution(): DbPathResolution | null {
+  return _resolution;
+}
 
 export interface GetDbOptions {
   /** Allow creating the file when it does not exist. Only init paths pass this. */
@@ -71,9 +171,11 @@ export interface GetDbOptions {
 export class MissingDatabaseError extends Error {
   constructor(path: string, source: DbPathSource) {
     super(
-      `[collab-mcp] no database at ${path} (resolved from ${source}). Refusing to create an empty one.
+      `[collab-mcp] no database at ${path} (chosen by ${source}). Refusing to create an empty one.
 ` +
-        `[collab-mcp] To create a new knowledge base there, run once: ` +
+        `[collab-mcp] Fix: register an existing notebook with \`collab notebook adopt <path> --name <name>\`, ` +
+        `or start a new one with \`collab notebook new <name>\`. ` +
+        `To create a new knowledge base at this exact path, run once: ` +
         `COLLAB_DB_PATH="${path}" npm --prefix mcp run migrate  (or set COLLAB_DB_CREATE=1).`,
     );
     this.name = "MissingDatabaseError";
@@ -94,23 +196,20 @@ export function getDb(dbPath?: string, opts: GetDbOptions = {}): DB {
     return _db;
   }
 
-  const { path, source } = resolveDbPath(dbPath);
-
   const mayCreate = opts.create === true || process.env.COLLAB_DB_CREATE === "1";
+  const r = resolveDbPath(dbPath, { allowCreate: mayCreate });
+  const { path, source } = r;
   if (path !== ":memory:" && !mayCreate && !existsSync(path)) {
     throw new MissingDatabaseError(path, source);
   }
-
-  // The fallback is safe (per-project) but implicit, so say so out loud.
-  // stderr keeps this off the MCP stdio channel.
-  if (source === "cwd-fallback") {
+  // First line of every program (spec P12): which notebook and why. stderr: stdout is the MCP channel.
+  console.error(`[collab] opened ${describeResolution(r)}: ${path}`);
+  if (r.clash) {
     console.error(
-      `[collab-mcp] COLLAB_DB_PATH is not set - opening ${path}\n` +
-        `[collab-mcp] Set COLLAB_DB_PATH to pin this project to a specific knowledge base.`,
+      `[collab] WARNING: COLLAB_DB_PATH chose ${path}, but ${r.clash.collabFile} says notebook "${r.clash.collabName}". ` +
+        `Notes are going to ${path}. Remove COLLAB_DB_PATH from this program's settings to use the project's notebook.`,
     );
   }
-  // One line per process: which file this process is actually using (E-689).
-  console.error(`[collab-mcp] db: ${path} (${source})`);
 
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
@@ -125,6 +224,7 @@ export function getDb(dbPath?: string, opts: GetDbOptions = {}): DB {
   }
   _db = db;
   _dbPath = path;
+  _resolution = r;
   return db;
 }
 
@@ -153,6 +253,7 @@ export function closeDb(): void {
     _db.close();
     _db = null;
     _dbPath = null;
+    _resolution = null;
   }
 }
 
@@ -292,6 +393,12 @@ export function latestMigration(db: DB): string | null {
   const has = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`).get();
   if (!has) return null;
   return (db.prepare(`SELECT MAX(version) v FROM schema_migrations`).get() as { v: string | null }).v;
+}
+
+/** Newest RELEASED migration this install knows (doctor check 3). */
+export function latestAvailableMigration(): string | null {
+  const files = readdirSync(MIGRATIONS_DIR).filter((f) => /^\d{4}_.+\.sql$/.test(f)).sort();
+  return files.length ? files[files.length - 1].replace(/\.sql$/, "") : null;
 }
 
 /** Apply any un-applied migrations in lexical order. Idempotent. */

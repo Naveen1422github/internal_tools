@@ -1,21 +1,21 @@
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import type { DB } from "../db.js";
+import { installRoot } from "../install-root.js";
 
 // cr-sqlite is a loadable SQLite extension. Once any table is a CRR, its
 // triggers call crsql_* functions, so EVERY connection that writes this file
 // must load the extension or its writes fail (spec D2, risks).
-const __dirname = dirname(fileURLToPath(import.meta.url));
-// core/src/sync (tsx) and core/dist/sync (built) are both 3 levels below internal-tools/.
-const DEFAULT_BASE = join(__dirname, "../../../vendor/crsqlite/crsqlite");
+// The add-on belongs to the install (addon-manifest.json marks its root), so it
+// is found the same way from core/src, core/dist and an installed package.
+const DEFAULT_BASE = join(installRoot(), "vendor", "crsqlite", "crsqlite");
 const SUFFIXES = [".dll", ".so", ".dylib"];
 
 export class CrsqliteMissingError extends Error {
   constructor(dbPath: string, tried: string) {
     super(
       `[collab-mcp] ${dbPath} shares notes (it has cr-sqlite tables), but the cr-sqlite extension was not found at ${tried}.\n` +
-        `[collab-mcp] Fix: run \`npm run fetch:crsqlite\` in internal-tools, or set COLLAB_CRSQLITE_PATH.`,
+        `[collab-mcp] Fix: \`collab doctor --fix\` (or in a checkout: \`npm run fetch:crsqlite\`), or set COLLAB_CRSQLITE_PATH.`,
     );
     this.name = "CrsqliteMissingError";
   }

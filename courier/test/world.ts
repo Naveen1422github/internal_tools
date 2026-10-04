@@ -9,6 +9,10 @@ import {
 } from '@collab-mcp/core';
 import { createStore, closeStore, startPostOffice, addMember, type PostOffice, type Store } from '@collab-mcp/post-office';
 
+// Heartbeats of couriers started by these tests (and their children) go to a
+// temp data folder, never the real one.
+process.env.COLLAB_DATA_DIR ??= mkdtempSync(join(tmpdir(), 'collab-courier-data-'));
+
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export async function until(cond: () => boolean, ms = 5000, what = 'the condition'): Promise<void> {
   const end = Date.now() + ms;

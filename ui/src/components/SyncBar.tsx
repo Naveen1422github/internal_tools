@@ -1,5 +1,6 @@
 // file: ui/src/components/SyncBar.tsx
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { syncStatus, type SyncOverview } from '../api/client';
 import { barView } from '../sync/view';
 
@@ -25,7 +26,7 @@ export default function SyncBar() {
   if (!v) return null;
   return (
     <div role="status" className={`px-4 py-1.5 text-xs flex justify-between gap-4 ${TONE[v.tone]}`}>
-      <span>{v.text}{v.fix ? <> · <code>{v.fix}</code></> : null}</span>
+      <span>{v.text}{v.fix ? <> · <code>{v.fix}</code></> : null} · <Link to="/health" className="underline">check setup</Link></span>
       {o?.enabled && <span className="opacity-70">shared: {o.sharedModules.join(', ') || 'none'}</span>}
     </div>
   );

@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolveDbPath, getDb, closeDb, MissingDatabaseError } from '../src/db.js';
+import { resolveDbPath, getDb, closeDb, MissingDatabaseError, NoNotebookError } from '../src/db.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -36,12 +36,31 @@ test('falls back to COLLAB_DB_PATH when no argument is given', () => {
   });
 });
 
-test('falls back to collab.db in the CURRENT WORKING DIRECTORY', () => {
-  withEnv(undefined, () => {
-    const r = resolveDbPath();
-    assert.equal(r.path, join(process.cwd(), 'collab.db'));
-    assert.equal(r.source, 'cwd-fallback');
-  });
+// Rules 4-6 (spec P7): ./collab.db is used only when it already exists; with
+// nothing registered and no file, there is no silent new database (E-689).
+// COLLAB_DATA_DIR points at an empty temp folder so no real notebook is read.
+function withEmptyData(fn: (data: string) => void): void {
+  const data = mkdtempSync(join(tmpdir(), 'collab-data-'));
+  const previous = process.env.COLLAB_DATA_DIR;
+  process.env.COLLAB_DATA_DIR = data;
+  try { fn(data); } finally {
+    if (previous === undefined) delete process.env.COLLAB_DATA_DIR;
+    else process.env.COLLAB_DATA_DIR = previous;
+    rmSync(data, { recursive: true, force: true });
+  }
+}
+
+test('collab.db in the CURRENT WORKING DIRECTORY is used only when it exists', () => {
+  withEnv(undefined, () => withEmptyData(() => {
+    const cwd = mkdtempSync(join(tmpdir(), 'collab-cwd-'));
+    try {
+      assert.throws(() => resolveDbPath(undefined, { cwd }), NoNotebookError);
+      writeFileSync(join(cwd, 'collab.db'), '');
+      const r = resolveDbPath(undefined, { cwd });
+      assert.equal(r.path, join(cwd, 'collab.db'));
+      assert.equal(r.source, 'cwd-existing');
+    } finally { rmSync(cwd, { recursive: true, force: true }); }
+  }));
 });
 
 // The regression this file exists for: collab E-550. The old default was
@@ -50,26 +69,28 @@ test('falls back to collab.db in the CURRENT WORKING DIRECTORY', () => {
 // entries into another project's knowledge base for days, with no error.
 // This must never come back, at any cwd.
 test('the fallback is never the old package-relative path', () => {
-  withEnv(undefined, () => {
+  withEnv(undefined, () => withEmptyData(() => {
     const packageRelative = join(HERE, '..', '..', 'mcp', 'collab.db');
     assert.notEqual(
-      resolveDbPath().path,
+      resolveDbPath(undefined, { allowCreate: true }).path,
       packageRelative,
       'fallback resolved inside the install; it must be relative to cwd',
     );
-  });
+  }));
 });
 
 test('the fallback tracks cwd rather than the module location', () => {
-  withEnv(undefined, () => {
+  withEnv(undefined, () => withEmptyData(() => {
     const original = process.cwd();
     try {
       process.chdir(HERE);
-      assert.equal(resolveDbPath().path, join(HERE, 'collab.db'));
+      const r = resolveDbPath(undefined, { allowCreate: true });
+      assert.equal(r.path, join(HERE, 'collab.db'));
+      assert.equal(r.source, 'cwd-create');
     } finally {
       process.chdir(original);
     }
-  });
+  }));
 });
 
 function withVar(name: string, value: string | undefined, fn: () => void): void {

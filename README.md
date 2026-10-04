@@ -10,17 +10,28 @@ No cloud, no account, no telemetry. The data is one SQLite file you own.
 Works with any MCP-capable agent — Claude Code, Codex, agy, Cursor, Cline, Windsurf, Zed.
 You need one of them, not all of them.
 
-## Requirements
+## Install
 
-Node.js ≥ 20.9. That's it.
+Needs Node 20.9 or newer (Node 22 LTS recommended).
 
-## Quick start
+    npm install -g <package or release URL>
+    collab notebook new my-team        # or: collab notebook adopt path/to/collab.db --name my-team
+    claude mcp add collab -- collab mcp
+    collab doctor
+
+`collab doctor` checks everything and prints the exact fix for anything that's wrong.
+Notebooks live in your user folder (Windows: %LOCALAPPDATA%\collab), never in the install folder.
+A project picks its notebook with a `.collab` file containing `notebook = <name>`.
+Settings for the web UI (PORT, GROQ_API_KEY, ...) go in `settings.env` in the same folder.
+
+## Working on collab itself
 
 ```bash
 git clone <this repo>
 cd collab-mcp
 npm install
 npm run build
+npm run fetch:crsqlite   # the sync add-on, checked against addon-manifest.json
 ```
 
 Then open your agent **in the project where you want the knowledge base**, and paste the
@@ -28,7 +39,8 @@ prompt from [`SETUP-PROMPT.md`](./SETUP-PROMPT.md) with this folder's path fille
 registers the MCP server, merges the conventions into your `CLAUDE.md` / `AGENTS.md`,
 installs the workflow skill, and verifies the connection — then tells you what it changed.
 
-To update later: `git pull && npm install && npm run build`.
+To update later: `git pull && npm install && npm run build`. `npm run package` assembles the
+installable package (`dist-package/`) from the build.
 
 ## Where your data lives — read this once
 
@@ -127,7 +139,8 @@ collab-mcp/
 │   └── claude/         # slash commands + session hooks
 ├── server/       # REST host; also serves the built UI
 ├── ui/           # React + Vite SPA (optional)
-├── scripts/      # codex dispatch, bundle.mjs, seed-starter.mjs
+├── cli/          # the `collab` command
+├── scripts/      # codex dispatch, package.mjs, seed-starter.mjs
 └── gemini-mcp/   # deprecated, scheduled for removal
 ```
 
@@ -136,9 +149,9 @@ it, which is why the MCP tools and the web UI can never disagree about your data
 
 ## Sharing it
 
-`npm run bundle` emits `dist-share/collab-mcp.zip` — source, migrations and onboarding docs,
-with the database, `.env` and UI excluded. Useful for handing someone a copy offline;
-cloning this repo is the better path for anyone who wants updates.
+`npm run package` emits `dist-package/collab-mcp-collab-<version>.tgz`: the prebuilt package,
+with no database, `.env` or add-on binary inside (the add-on is downloaded and checked at
+install). Install it anywhere with `npm install -g <that file>`.
 
 ## License
 
