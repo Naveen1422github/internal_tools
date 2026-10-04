@@ -42,3 +42,4 @@ export * from './sync/team-status.js';
 export * from './ops/merge.js';
 export * from './install-root.js';
 export * from './notebooks.js';
+export * from './settings.js';

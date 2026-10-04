@@ -6,7 +6,7 @@
   "description": "Domain core for internal-tools: db + collab operations, transport-agnostic.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "exports": { ".": "./dist/index.js" },
+  "exports": { ".": "./dist/index.js", "./settings": "./dist/settings.js" },
   "scripts": {
     "build": "tsc",
     "test": "tsx --test test/**/*.test.ts"
