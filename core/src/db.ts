@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { backfillUlids } from "./backfill.js";
 import { preflight0006 } from "./preflight-0006.js";
 import { hasCrrTables, loadCrsqlite, isCrsqliteLoaded } from "./sync/extension.js";
+import { installSyncPing } from "./sync/ping.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -117,6 +118,10 @@ export function getDb(dbPath?: string, opts: GetDbOptions = {}): DB {
   db.pragma("foreign_keys = ON");
   if (hasCrrTables(db)) {
     try { loadCrsqlite(db); } catch (e) { db.close(); throw e; }
+  }
+  // Push on write: tell the courier after each save (never blocks the save).
+  try { installSyncPing(db); } catch (e) {
+    console.error(`[collab-mcp] sync ping not installed (the courier will only catch up on restart): ${(e as Error).message}`);
   }
   _db = db;
   _dbPath = path;
