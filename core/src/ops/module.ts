@@ -190,3 +190,51 @@ export function getModule(db: DB, slug: string): ModuleCard {
 
   return { module, active_tasks, indexes, recent_decisions, top_gotchas, needs_merge, recent_handoffs, hub };
 }
+
+// ------------------------------------------------------------
+// upsertModule / deleteModule — the REST server's module writes, moved here
+// unchanged (collab E-720): every write to a synced table goes through core.
+// ------------------------------------------------------------
+export interface UpsertModuleArgs {
+  slug: string;
+  name?: string | null;
+  summary?: string | null;
+  description?: string | null;
+  current_goal?: string | null;
+  status?: string;
+}
+
+/** Insert a module, or overwrite every field of an existing one (missing fields become NULL, status 'active'). */
+export function upsertModule(db: DB, args: UpsertModuleArgs): { slug: string } {
+  if (!args.slug || !SLUG_REGEX.test(args.slug)) {
+    throw new Error(
+      `invalid slug '${args.slug}': must be lowercase alphanumeric or hyphens, 1-60 chars, no underscores, start with alphanumeric`
+    );
+  }
+  db.prepare(`
+    INSERT INTO modules (slug, name, summary, description, current_goal, status)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(slug) DO UPDATE SET
+      name=excluded.name,
+      summary=excluded.summary,
+      description=excluded.description,
+      current_goal=excluded.current_goal,
+      status=excluded.status
+  `).run(args.slug, args.name ?? null, args.summary ?? null, args.description ?? null, args.current_goal ?? null, args.status || "active");
+  return { slug: args.slug };
+}
+
+/** Delete a module, unless entries or tasks still point at it (better to surface than orphan). */
+export function deleteModule(
+  db: DB, slug: string,
+): { deleted: true } | { deleted: false; entry_count: number; task_count: number } {
+  const refs = db.prepare(`
+    SELECT (SELECT COUNT(*) FROM entries WHERE module=?) AS entry_count,
+           (SELECT COUNT(*) FROM tasks WHERE module=?) AS task_count
+  `).get(slug, slug) as { entry_count: number; task_count: number };
+  if (refs.entry_count > 0 || refs.task_count > 0) {
+    return { deleted: false, entry_count: refs.entry_count, task_count: refs.task_count };
+  }
+  db.prepare("DELETE FROM modules WHERE slug=?").run(slug);
+  return { deleted: true };
+}
