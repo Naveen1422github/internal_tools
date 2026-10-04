@@ -1,5 +1,5 @@
 // file: ui/src/sync/view.ts
-import type { SyncOverview } from '../api/client';
+import type { MergeVersion, SyncOverview } from '../api/client';
 
 // Pure view logic for sync in the web UI (spec part 2). Components stay thin;
 // this file is what the tests pin down. Plain words, no sync jargon.
@@ -36,4 +36,14 @@ export function barView(o: SyncOverview, now: Date): null | { tone: 'ok' | 'warn
     default:
       return { tone: 'bad', text: '● Sync status unknown', fix: 'how to fix: run collab sync status in a terminal' };
   }
+}
+
+export function fieldDiff(heads: MergeVersion[]): { title: boolean; summary: boolean; description: boolean } {
+  const differs = (k: 'title' | 'summary' | 'description') => new Set(heads.map((h) => h[k] ?? '')).size > 1;
+  return { title: differs('title'), summary: differs('summary'), description: differs('description') };
+}
+
+export function versionLabel(v: MergeVersion, i: number): string {
+  const hhmm = /\d{2}:\d{2}/.exec(v.created_at)?.[0] ?? v.created_at;
+  return `Version ${i + 1} · ${v.author ?? 'unknown author'} · ${hhmm}`;
 }

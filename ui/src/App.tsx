@@ -6,6 +6,7 @@ import Modules from './pages/Modules';
 import Tasks from './pages/Tasks';
 import Health from './pages/Health';
 import NeedsMerge from './pages/NeedsMerge';
+import Merge from './pages/Merge';
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/health" element={<Health />} />
         <Route path="/needs-merge" element={<NeedsMerge />} />
+        <Route path="/merge/:id" element={<Merge />} />
       </Routes>
     </AppShell>
   );

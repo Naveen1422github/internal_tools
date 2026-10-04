@@ -1,6 +1,6 @@
 // file: ui/src/sync/view.test.ts
 import { describe, it, expect } from 'vitest';
-import { barView, ago } from './view';
+import { barView, ago, fieldDiff, versionLabel } from './view';
 
 const now = new Date('2026-10-04T10:10:00Z');
 const base = {
@@ -35,5 +35,17 @@ describe('ago', () => {
     expect(ago('2026-10-04T10:06:00Z', now)).toBe('4 min ago');
     expect(ago('2026-10-04T07:10:00Z', now)).toBe('3 h ago');
     expect(ago(null, now)).toBe('never');
+  });
+});
+
+describe('merge view', () => {
+  const v = (o: Partial<any>) => ({ rev_id: 'r', title: 'T', summary: 'S', description: 'D', author: 'naveen', created_at: '2026-10-04 15:35:22.949', ...o });
+  it('fieldDiff marks only the fields that differ', () => {
+    expect(fieldDiff([v({ summary: 'Edited on NAVEEN' }), v({ summary: 'Edited on RINKU' })])).toEqual({ title: false, summary: true, description: false });
+    expect(fieldDiff([v({}), v({ description: null })]).description).toBe(true);
+  });
+  it('versionLabel shows number, author and time; unknown author says so', () => {
+    expect(versionLabel(v({}), 0)).toBe('Version 1 · naveen · 15:35');
+    expect(versionLabel(v({ author: null }), 1)).toBe('Version 2 · unknown author · 15:35');
   });
 });
