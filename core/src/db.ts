@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { backfillUlids } from "./backfill.js";
 import { preflight0006 } from "./preflight-0006.js";
-import { hasCrrTables, loadCrsqlite, isCrsqliteLoaded } from "./sync/extension.js";
+import { hasCrrTables, loadCrsqlite, isCrsqliteLoaded, ensureCrsqlite } from "./sync/extension.js";
 import { installSyncPing } from "./sync/ping.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -238,12 +238,39 @@ const BEFORE_MIGRATION: Record<string, (db: DB) => unknown> = {
   "0006_ulid_contract": preflight0006,
 };
 
+/** True when `table` is a cr-sqlite CRR in this file. */
+function isCrr(db: DB, table: string): boolean {
+  return !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(`${table}__crsql_clock`);
+}
+
+/**
+ * Migrations that ALTER a CRR table. cr-sqlite needs the change wrapped in
+ * crsql_begin_alter / crsql_commit_alter, and the whole thing must be atomic.
+ * Their SQL files carry no BEGIN/COMMIT.
+ */
+const CRR_ALTERS: Record<string, string> = {
+  "0008_revision_author": "entry_revisions",
+};
+
 function applyMigrations(db: DB, pending: Pending[]): string[] {
   if (pending.length > 0) backupBeforeMigrating(db, pending[0].version);
   for (const m of pending) {
     BEFORE_MIGRATION[m.version]?.(db);
-    // Each migration file owns its BEGIN/COMMIT; we just exec.
-    db.exec(readFileSync(m.file, "utf-8"));
+    const sql = readFileSync(m.file, "utf-8");
+    const crrTable = CRR_ALTERS[m.version];
+    if (crrTable) {
+      // No BEGIN/COMMIT in these files: one transaction around the whole alter.
+      const crr = isCrr(db, crrTable);
+      if (crr) ensureCrsqlite(db);
+      db.transaction(() => {
+        if (crr) db.prepare(`SELECT crsql_begin_alter(?)`).get(crrTable);
+        db.exec(sql);
+        if (crr) db.prepare(`SELECT crsql_commit_alter(?)`).get(crrTable);
+      })();
+    } else {
+      // Each migration file owns its BEGIN/COMMIT; we just exec.
+      db.exec(sql);
+    }
   }
   // Runs every startup, not only when 0005 applies: it repairs rows written by
   // paths that bypass core (scripts, the REST server). Cheap: WHERE ... IS NULL.
@@ -258,6 +285,13 @@ function applyMigrations(db: DB, pending: Pending[]): string[] {
     }
   }
   return pending.map((m) => m.version);
+}
+
+/** The newest applied migration, e.g. "0008_revision_author" (null on an empty file). */
+export function latestMigration(db: DB): string | null {
+  const has = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`).get();
+  if (!has) return null;
+  return (db.prepare(`SELECT MAX(version) v FROM schema_migrations`).get() as { v: string | null }).v;
 }
 
 /** Apply any un-applied migrations in lexical order. Idempotent. */

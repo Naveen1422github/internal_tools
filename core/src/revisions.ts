@@ -1,5 +1,6 @@
 // file: core/src/revisions.ts
 import type { DB } from "./db.js";
+import { resolveAuthor } from "./author.js";
 
 // Spec "Edits write revisions" + D8. Until 0007 a trigger wrote entry_revisions.
 // It also fired when cr-sqlite applied a REMOTE edit, minting rows that exist on
@@ -13,12 +14,18 @@ export interface RevisionRow extends EntryText {
   parent_rev_id: string | null;
   merged_from: string | null;
   created_at: string;
+  author: string | null;
 }
 export interface TextSnapshot extends EntryText { ulid: string; created_at: string; needs_merge: number }
 
 /** 0007+: the trigger is gone and entry_revisions.merged_from exists. */
 export function writesRevisionsInCode(db: DB): boolean {
   return !!db.prepare(`SELECT 1 FROM pragma_table_info('entry_revisions') WHERE name = 'merged_from'`).get();
+}
+
+/** 0008+: entry_revisions.author exists. New code must still run on a 0007 file. */
+export function hasRevisionAuthor(db: DB): boolean {
+  return !!db.prepare(`SELECT 1 FROM pragma_table_info('entry_revisions') WHERE name = 'author'`).get();
 }
 
 /**
@@ -33,9 +40,10 @@ export function splitMerged(s: string | null): string[] {
 }
 
 export function revisionsOf(db: DB, ulid: string): RevisionRow[] {
+  const author = hasRevisionAuthor(db) ? "author" : "NULL AS author";
   return db
     .prepare(
-      `SELECT rev_id, entry_ulid, parent_rev_id, merged_from, title, summary, description, created_at
+      `SELECT rev_id, entry_ulid, parent_rev_id, merged_from, title, summary, description, created_at, ${author}
          FROM entry_revisions WHERE entry_ulid = ? ORDER BY created_at, rev_id`,
     )
     .all(ulid) as RevisionRow[];
@@ -78,12 +86,21 @@ export function finishRevision(db: DB, before: TextSnapshot | null): string | nu
   const resolving = before.needs_merge === 1;
   if (!resolving && sameText(after, before)) return null;
 
+  const withAuthor = hasRevisionAuthor(db);
   let revs = revisionsOf(db, before.ulid);
   if (revs.length === 0) {
-    db.prepare(
-      `INSERT OR IGNORE INTO entry_revisions (rev_id, entry_ulid, parent_rev_id, title, summary, description, created_at)
-       VALUES (?, ?, NULL, ?, ?, ?, ?)`,
-    ).run(rootRevId(before.ulid), before.ulid, before.title, before.summary, before.description, before.created_at);
+    if (withAuthor) {
+      // The root holds the text before the first edit, so it takes the NOTE's author.
+      db.prepare(
+        `INSERT OR IGNORE INTO entry_revisions (rev_id, entry_ulid, parent_rev_id, title, summary, description, created_at, author)
+         VALUES (?, ?, NULL, ?, ?, ?, ?, (SELECT author FROM entries WHERE ulid = ?))`,
+      ).run(rootRevId(before.ulid), before.ulid, before.title, before.summary, before.description, before.created_at, before.ulid);
+    } else {
+      db.prepare(
+        `INSERT OR IGNORE INTO entry_revisions (rev_id, entry_ulid, parent_rev_id, title, summary, description, created_at)
+         VALUES (?, ?, NULL, ?, ?, ?, ?)`,
+      ).run(rootRevId(before.ulid), before.ulid, before.title, before.summary, before.description, before.created_at);
+    }
     revs = revisionsOf(db, before.ulid);
   }
   const newestFirst = [...revs].reverse();
@@ -91,12 +108,20 @@ export function finishRevision(db: DB, before: TextSnapshot | null): string | nu
   const folded = resolving
     ? headsOf(revs).filter((h) => h.rev_id !== parent.rev_id).map((h) => h.rev_id)
     : [];
-  const row = db
-    .prepare(
-      `INSERT INTO entry_revisions (entry_ulid, parent_rev_id, merged_from, title, summary, description)
-       VALUES (?, ?, ?, ?, ?, ?) RETURNING rev_id`,
-    )
-    .get(before.ulid, parent.rev_id, folded.length ? folded.join(",") : null, after.title, after.summary, after.description) as {
+  const mergedFrom = folded.length ? folded.join(",") : null;
+  const row = (withAuthor
+    ? db
+        .prepare(
+          `INSERT INTO entry_revisions (entry_ulid, parent_rev_id, merged_from, title, summary, description, author)
+           VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING rev_id`,
+        )
+        .get(before.ulid, parent.rev_id, mergedFrom, after.title, after.summary, after.description, resolveAuthor())
+    : db
+        .prepare(
+          `INSERT INTO entry_revisions (entry_ulid, parent_rev_id, merged_from, title, summary, description)
+           VALUES (?, ?, ?, ?, ?, ?) RETURNING rev_id`,
+        )
+        .get(before.ulid, parent.rev_id, mergedFrom, after.title, after.summary, after.description)) as {
     rev_id: string;
   };
   if (resolving) db.prepare(`UPDATE entries SET needs_merge = 0 WHERE ulid = ?`).run(before.ulid);
