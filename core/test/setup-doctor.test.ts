@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSetupDoctor, startupProblem } from '../src/setup/engine.js';
 import { getDb, closeDb, migrate } from '../src/db.js';
+import { addEntry } from '../src/ops/add.js';
+import { runtimeDirFor } from '../src/heartbeat.js';
 import { addNotebook } from '../src/notebooks.js';
 
 function setup() {
@@ -73,5 +75,75 @@ test('startupProblem returns the first blocking error, or null', async () => {
     addNotebook('emp1st', s.nb, s.data);
     const p = await startupProblem({ ...s.base });
     assert.ok(p === null || p.group === 'install', 'only an install problem (e.g. add-on missing in CI) may remain');
+  } finally { s.done(); }
+});
+
+test('programs: an MCP running older code than is installed is an error with the /mcp fix', async () => {
+  const s = setup();
+  const prevRoot = process.env.COLLAB_INSTALL_ROOT;
+  try {
+    addNotebook('emp1st', s.nb, s.data);
+    const fake = join(s.root, 'install');
+    mkdirSync(fake, { recursive: true });
+    writeFileSync(join(fake, 'addon-manifest.json'), JSON.stringify({ version: 'v0.16.3', platforms: {} }));
+    writeFileSync(join(fake, 'package.json'), JSON.stringify({ version: '0.1.0', engines: { node: '>=20.9.0' } }));
+    writeFileSync(join(fake, 'build-info.json'), JSON.stringify({ version: '0.1.0', build: 'new', builtAt: '2026-10-05T18:40:00Z' }));
+    process.env.COLLAB_INSTALL_ROOT = fake;
+    const run = join(runtimeDirFor({ path: s.nb, name: 'emp1st' }, s.data), 'running');
+    mkdirSync(run, { recursive: true });
+    const now = new Date().toISOString();
+    writeFileSync(join(run, `mcp-${process.pid}.json`), JSON.stringify({ program: 'mcp', version: '0.1.0', build: 'old', pid: process.pid, startedAt: now, beatAt: now, dbPath: s.nb, notebook: 'emp1st' }));
+    const r = await runSetupDoctor({ ...s.base, groups: ['notebook', 'programs'] });
+    assert.equal(by(r, 'programs.mcp').mark, 'error');
+    assert.match(by(r, 'programs.mcp').text, /running older code than is installed/);
+    assert.match(by(r, 'programs.mcp').fix, /\/mcp/);
+  } finally {
+    if (prevRoot === undefined) delete process.env.COLLAB_INSTALL_ROOT; else process.env.COLLAB_INSTALL_ROOT = prevRoot;
+    s.done();
+  }
+});
+
+test('claude: a file-path entry is a warning with the replacement; collab mcp is ok; none is a warning', async () => {
+  const s = setup();
+  try {
+    addNotebook('emp1st', s.nb, s.data);
+    const f = join(s.proj, '.mcp.json');
+    const run = () => runSetupDoctor({ ...s.base, claudeConfigFiles: [f], groups: ['notebook', 'claude'] });
+    writeFileSync(f, JSON.stringify({ mcpServers: { collab: { command: 'node', args: ['internal-tools/mcp/dist/server.js'] } } }));
+    let c = by(await run(), 'claude.registered');
+    assert.equal(c.mark, 'warn');
+    assert.match(c.fix, /"command": "collab", "args": \["mcp"\]/);
+    writeFileSync(f, JSON.stringify({ mcpServers: { collab: { command: 'collab', args: ['mcp'] } } }));
+    assert.equal(by(await run(), 'claude.registered').mark, 'ok');
+    rmSync(f);
+    c = by(await run(), 'claude.registered');
+    assert.equal(c.mark, 'warn');
+    assert.match(c.fix, /claude mcp add/);
+  } finally { s.done(); }
+});
+
+test('notes: a live note missing from the search index is an error with the reindex fix', async () => {
+  const s = setup();
+  try {
+    addNotebook('emp1st', s.nb, s.data);
+    const db = getDb(s.nb);
+    addEntry(db, { type: 'decision', title: 'findable', summary: 's' });
+    db.exec('DELETE FROM entries_fts');
+    closeDb();
+    const r = await runSetupDoctor({ ...s.base, groups: ['notebook', 'notes'] });
+    assert.equal(by(r, 'notes.search').mark, 'error');
+    assert.equal(by(r, 'notes.search').text, "1 note(s) can't be found by search");
+    assert.match(by(r, 'notes.search').fix, /collab notebook reindex/);
+  } finally { s.done(); }
+});
+
+test('sync is one skipped line when sharing is off', async () => {
+  const s = setup();
+  try {
+    addNotebook('emp1st', s.nb, s.data);
+    const r = await runSetupDoctor({ ...s.base, groups: ['notebook', 'sync'] });
+    const sync = r.checks.filter((c: any) => c.group === 'sync');
+    assert.equal(sync.length, 1);
+    assert.equal(sync[0].mark, 'skipped');
   } finally { s.done(); }
 });

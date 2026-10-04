@@ -6,6 +6,10 @@ import { hasCrrTables, loadCrsqlite } from "../sync/extension.js";
 import { checkAddonState, checkNode, checkSqlite } from "./check-install.js";
 import { checkNotebook } from "./check-notebook.js";
 import { checkNotebookVersion, checkOfficeVersion } from "./check-version.js";
+import { checkPrograms } from "./check-programs.js";
+import { checkSync, defaultProbe } from "./check-sync.js";
+import { checkClaude, defaultClaudeConfigFiles } from "./check-claude.js";
+import { checkNoteData, checkSearchIndex } from "./check-notes.js";
 import type { GroupId, GroupState, SetupCheck, SetupContext, SetupReport } from "./types.js";
 
 // Spec P10: 7 check groups in dependency order. A group whose prerequisite
@@ -21,7 +25,7 @@ const defaultIsAlive = (pid: number): boolean => {
 type Step = (ctx: SetupContext, st: GroupState) => Promise<SetupCheck | SetupCheck[] | null> | SetupCheck | SetupCheck[] | null;
 interface Group { needs: "nothing" | "resolution" | "db"; steps: Array<{ id: string; run: Step }> }
 
-const GROUPS: Partial<Record<GroupId, Group>> = {
+const GROUPS: Record<Exclude<GroupId, "notebook">, Group> = {
   install: {
     needs: "nothing",
     steps: [
@@ -37,17 +41,28 @@ const GROUPS: Partial<Record<GroupId, Group>> = {
       { id: "version.office", run: checkOfficeVersion },
     ],
   },
+  programs: { needs: "resolution", steps: [{ id: "programs", run: checkPrograms }] },
+  sync: { needs: "db", steps: [{ id: "sync", run: checkSync }] },
+  claude: { needs: "nothing", steps: [{ id: "claude.registered", run: checkClaude }] },
+  notes: {
+    needs: "db",
+    steps: [
+      { id: "notes.data", run: checkNoteData },
+      { id: "notes.search", run: checkSearchIndex },
+    ],
+  },
 };
 
 function context(partial: Partial<SetupContext>): SetupContext {
   const env = partial.env ?? process.env;
+  const cwd = partial.cwd ?? process.cwd();
   return {
-    cwd: partial.cwd ?? process.cwd(),
+    cwd,
     env,
     dataDir: partial.dataDir ?? collabDataDir(env),
     now: partial.now ?? new Date(),
-    probePostOffice: partial.probePostOffice !== undefined ? partial.probePostOffice : null,
-    claudeConfigFiles: partial.claudeConfigFiles ?? [],
+    probePostOffice: partial.probePostOffice !== undefined ? partial.probePostOffice : defaultProbe,
+    claudeConfigFiles: partial.claudeConfigFiles ?? defaultClaudeConfigFiles(cwd),
     isAlive: partial.isAlive ?? defaultIsAlive,
     groups: partial.groups,
   };
@@ -102,7 +117,6 @@ export async function runSetupDoctor(partial: Partial<SetupContext> = {}): Promi
       }
       if (!wanted.has(g)) continue;
       const group = GROUPS[g];
-      if (!group) continue;
       if (group.needs === "resolution" && !st.resolution) {
         checks.push({ group: g, id: `${g}.skipped`, mark: "skipped", text: "skipped: needs notebook" });
         continue;
