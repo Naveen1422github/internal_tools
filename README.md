@@ -77,7 +77,18 @@ node server/server.js
 Open <http://127.0.0.1:7473/>. For hot reload, run `node server/server.js` and
 `cd ui && npm run dev` in parallel, then use <http://localhost:5173/>.
 
-**Localhost-only, and it has no authentication.** Do not expose it to a network.
+**Localhost-only, with no user accounts.** Do not expose it to a network.
+
+### REST API access
+
+The web server only answers its own UI. Every `/api` request needs the header
+`X-Collab-Key`; the key is new on every server start and is written to
+`%LOCALAPPDATA%\collab\web\key` (Windows) or `~/.local/share/collab/web/key`.
+A script on this machine can read that file:
+
+    curl -H "X-Collab-Key: $(cat ~/.local/share/collab/web/key)" http://127.0.0.1:7473/api/collab/stats
+
+Requests from other websites, with a wrong Host/Origin, or with a non-JSON body are refused.
 
 ## Optional: dispatching to Codex
 
