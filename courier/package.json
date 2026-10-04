@@ -7,7 +7,6 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": { ".": "./dist/index.js" },
-  "bin": { "collab": "./dist/bin.js" },
   "scripts": {
     "build": "tsc",
     "pretest": "npm --prefix ../core run build && npm --prefix ../post-office run build",

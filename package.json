@@ -13,7 +13,8 @@
     "mcp",
     "server",
     "ui",
-    "gemini-mcp"
+    "gemini-mcp",
+    "cli"
   ],
   "scripts": {
     "start": "npm -w @collab-mcp/server run build && node server/dist/server.js",
