@@ -6,6 +6,7 @@ import { hasUlidPrimaryKey } from "../schema.js";
 import { ownerOf, replaceLinks, insertEntryModules } from "../entry-write.js";
 import { snapshotForRevision, finishRevision } from "../revisions.js";
 import { ensureCrsqlite } from "../sync/extension.js";
+import { NeedsMergeError } from "./merge.js";
 
 // The REST server's note writes, moved here unchanged (collab E-720): every
 // write to a synced table goes through core (revisions, checks, future rules).
@@ -64,6 +65,7 @@ export function editEntry(db: DB, args: EditEntryArgs): { id: number } {
   const tx = db.transaction(() => {
     // Spec "Edits write revisions" (0007+; no-op below 0007).
     const before = byUlid ? snapshotForRevision(db, owner.ulid as string) : null;
+    if (before?.needs_merge === 1) throw new NeedsMergeError(owner.id); // V9
     db.prepare(`
       UPDATE entries SET type=?, kind=?, title=?, summary=?, description=?, agent=?, module=?, task_id=?, tokens_estimate=?, category=?
       WHERE ${byUlid ? "ulid = ?" : "id = ?"}

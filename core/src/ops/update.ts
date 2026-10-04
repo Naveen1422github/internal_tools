@@ -5,6 +5,7 @@ import { hasUlidPrimaryKey } from "../schema.js";
 import { ownerOf, insertRefs, deleteRef } from "../entry-write.js";
 import { snapshotForRevision, finishRevision } from "../revisions.js";
 import { ensureCrsqlite } from "../sync/extension.js";
+import { assertHeads, NeedsMergeError } from "./merge.js";
 
 // ------------------------------------------------------------
 // Types
@@ -82,6 +83,8 @@ export function updateEntry(db: DB, args: UpdateEntryArgs): UpdateEntryResult {
   // in the same transaction as the edit (0007+; below 0007 the trigger does it).
   const tx = db.transaction(() => {
     const before = params.ulid ? snapshotForRevision(db, params.ulid as string) : null;
+    // V9: an ordinary edit would settle the conflict without seeing the other version.
+    if (before?.needs_merge === 1) throw new NeedsMergeError(args.id);
     const info = db.prepare(`UPDATE entries SET ${sets.join(", ")} WHERE ${where}`).run(params);
     if (info.changes === 0) throw new Error(`no entry found with id ${args.id}`);
     finishRevision(db, before);
@@ -93,16 +96,18 @@ export function updateEntry(db: DB, args: UpdateEntryArgs): UpdateEntryResult {
 
 /**
  * Spec D8: a person settles a needs_merge note while keeping its current text
- * (to change the text, just edit it: any edit settles it). Folds every pending
- * head into one revision and clears the flag; replicates like any edit.
+ * (to change the text, use resolveWithText). `expectedHeads` are the versions the
+ * person saw; if the set changed meanwhile, nothing is written (VersionsChangedError).
+ * Folds every pending head into one revision and clears the flag; replicates like any edit.
  */
-export function resolveNeedsMerge(db: DB, id: number): { id: number } {
+export function resolveNeedsMerge(db: DB, id: number, expectedHeads: string[]): { id: number } {
   ensureCrsqlite(db);
   const owner = ownerOf(db, id);
   if (!owner || !owner.ulid) throw new Error(`no entry found with id ${id}`);
   db.transaction(() => {
     const before = snapshotForRevision(db, owner.ulid as string);
     if (!before || before.needs_merge !== 1) throw new Error(`E-${id} is not waiting for a merge`);
+    assertHeads(db, id, owner.ulid as string, expectedHeads);
     finishRevision(db, before);
   })();
   return { id };

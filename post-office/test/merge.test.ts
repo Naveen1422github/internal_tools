@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import {
   addEntryAsync, setAllocator, updateEntry, resolveNeedsMerge, readOwnChanges, applyChanges, decodeChange,
-  reindexFts, revisionsOf, headsOf,
+  reindexFts, revisionsOf, headsOf, getMergeView, resolveWithText,
 } from '@collab-mcp/core';
 import { tempStore, laptop } from './helpers.js';
 import { acceptChanges, fetchDeliveries } from '../src/deliveries.js';
@@ -74,7 +74,9 @@ test('edits to the same line: needs_merge everywhere, both texts kept as revisio
     for (const db of [a.db, b.db, s.store]) assert.equal(row(db, id).needs_merge, 1);
     const texts = revisionsOf(s.store, row(s.store, id).ulid).map((r) => r.description);
     assert.ok(texts.includes('line ONE (a)\n\nline two') && texts.includes('line ONE (b)\n\nline two'), 'nothing is lost');
-    updateEntry(a.db, { id, description: 'line ONE (both)\n\nline two' });
+    // V9: an ordinary edit is refused on a flagged note; the person settles it with the versions they saw.
+    const v = getMergeView(a.db, id);
+    resolveWithText(a.db, { id, expectedHeads: v.heads.map((h) => h.rev_id), title: v.current.title, summary: v.current.summary, description: 'line ONE (both)\n\nline two' });
     a.push(s.store); b.pull(s.store);
     for (const db of [a.db, b.db, s.store]) {
       assert.equal(row(db, id).needs_merge, 0);
@@ -91,10 +93,10 @@ test('resolveNeedsMerge keeps the current text and clears the flag', async () =>
     updateEntry(b.db, { id, title: 'B' });
     a.push(s.store); b.push(s.store); a.pull(s.store);
     assert.equal(row(a.db, id).needs_merge, 1);
-    resolveNeedsMerge(a.db, id);
+    resolveNeedsMerge(a.db, id, getMergeView(a.db, id).heads.map((h) => h.rev_id));
     a.push(s.store);
     assert.equal(row(s.store, id).needs_merge, 0);
-    assert.throws(() => resolveNeedsMerge(a.db, id), /not waiting/);
+    assert.throws(() => resolveNeedsMerge(a.db, id, []), /not waiting/);
   } finally { done(); }
 });
 

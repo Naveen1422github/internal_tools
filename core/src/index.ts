@@ -39,3 +39,4 @@ export * from './sync/http.js';
 export * from './sync/changes.js';
 export * from './sync/ping.js';
 export * from './sync/team-status.js';
+export * from './ops/merge.js';
