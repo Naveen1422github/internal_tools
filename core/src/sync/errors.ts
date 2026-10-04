@@ -38,3 +38,12 @@ export class AccessRevokedError extends Error {
     this.name = "AccessRevokedError";
   }
 }
+
+/** 409 from the post office: this laptop and the office are on different migrations. */
+export class SchemaMismatchError extends Error {
+  readonly retriable = false;
+  constructor(readonly office: string, readonly device: string) {
+    super(`update this laptop: the post office is on ${office}, this notes DB is on ${device}`);
+    this.name = "SchemaMismatchError";
+  }
+}

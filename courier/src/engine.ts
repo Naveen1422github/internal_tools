@@ -4,7 +4,7 @@ import { createSocket, type Socket } from "node:dgram";
 import {
   loadCrsqlite, isCrsqliteLoaded, isSyncEnabled, getSyncValue, setSyncValue, postOfficeTargetFromDb,
   readOwnChanges, decodeChange, applyChanges, reindexFts, entryUlidOf, requestJson, openEventStream,
-  AccessRevokedError, COURIER_PORT_KEY, type PostOfficeTarget, type WireChange, type EventStream,
+  AccessRevokedError, SchemaMismatchError, COURIER_PORT_KEY, type PostOfficeTarget, type WireChange, type EventStream,
 } from "@collab-mcp/core";
 import { COURIER_KEYS as K } from "./keys.js";
 
@@ -16,7 +16,7 @@ import { COURIER_KEYS as K } from "./keys.js";
 // moves only after the post office acknowledged; the receive-bookmark moves in
 // the same transaction as the rows it covers.
 
-export type CourierState = "starting" | "connected" | "offline" | "revoked" | "stopped";
+export type CourierState = "starting" | "connected" | "offline" | "needs-update" | "revoked" | "stopped";
 
 export interface CourierStatus {
   state: CourierState;
@@ -161,6 +161,16 @@ export class Courier {
 
   private failed(e: Error): void {
     if (e instanceof AccessRevokedError) return this.revoked(e);
+    if (e instanceof SchemaMismatchError) {
+      // Paused, not offline: only updating this laptop (or the office) fixes it.
+      // Check again at the normal retry interval, never faster.
+      this.log(`paused: ${e.message}`);
+      this.set({ state: "needs-update", lastError: e.message });
+      if (!this.retryTimer && !this.stopped) {
+        this.retryTimer = setTimeout(() => { this.retryTimer = null; void this.syncNow(); }, this.opt.retryMs);
+      }
+      return;
+    }
     this.log(`sync failed, retrying in ${Math.round(this.opt.retryMs / 1000)} s: ${e.message}`);
     this.set({ state: "offline", lastError: e.message });
     if (!this.retryTimer && !this.stopped) {
@@ -349,6 +359,15 @@ export class Courier {
         this.stream = null;
         if (this.stopped || this.st.state === "revoked") return;
         if (err instanceof AccessRevokedError) return this.revoked(err);
+        if (err instanceof SchemaMismatchError) {
+          this.log(`paused: ${err.message}`);
+          this.set({ state: "needs-update", lastError: err.message });
+          this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            this.connect();
+          }, this.opt.retryMs);
+          return;
+        }
         this.set({ state: "offline", lastError: err?.message ?? this.st.lastError });
         const delay = Math.min(this.reconnectDelay, this.opt.maxReconnectMs);
         this.reconnectDelay = Math.min(delay * 2, this.opt.maxReconnectMs);

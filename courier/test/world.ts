@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import {
-  migrateTo, enableSync, generateSelfSignedCert, formatJoinCode, hasCrrTables, loadCrsqlite, isCrsqliteLoaded,
+  migrate, enableSync, generateSelfSignedCert, formatJoinCode, hasCrrTables, loadCrsqlite, isCrsqliteLoaded,
   setSyncValue, requestJson, SYNC_KEYS, installSyncPing,
 } from '@collab-mcp/core';
 import { createStore, closeStore, startPostOffice, addMember, type PostOffice, type Store } from '@collab-mcp/post-office';
@@ -87,7 +87,7 @@ export async function joinedDb(office: Office, dir: string, name: string): Promi
   const path = join(dir, name, 'collab.db');
   const db = new Database(path);
   try {
-    migrateTo(db, '0007', { includeStaged: true });
+    migrate(db); // same migration as the office, or the schema guard refuses it
     enableSync(db);
     const { deviceId, secret } = addMember(office.store, name);
     const r = await requestJson({ url: office.url, fingerprint: office.fingerprint }, 'POST', '/v1/join', { device: deviceId, secret });

@@ -2,7 +2,7 @@
 import Database from "better-sqlite3";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
-import { migrateTo, enableSync, loadCrsqlite, isCrsqliteLoaded, SLUG_REGEX } from "@collab-mcp/core";
+import { migrate, latestMigration, enableSync, loadCrsqlite, isCrsqliteLoaded, SLUG_REGEX } from "@collab-mcp/core";
 
 // The post office's ONE SQLite file (D14). The notes schema (0007 + CRRs) is a
 // replica of every shared row; the po_* tables are the office's own and never
@@ -82,7 +82,9 @@ export function createStore(path: string, opts: { seedMaxId: number }): Store {
   if (!Number.isInteger(opts.seedMaxId) || opts.seedMaxId < 0) throw new StoreError("the seed must be a whole number >= 0");
   const db = new Database(path);
   tune(db);
-  migrateTo(db, "0007", { includeStaged: true });
+  // A new office starts on the newest released migration: the schema guard
+  // only lets laptops on that same migration exchange changes with it.
+  migrate(db);
   enableSync(db);
   db.exec(PO_SCHEMA);
   const v = (db.prepare(`SELECT crsql_db_version() v`).get() as { v: number }).v;
@@ -99,8 +101,16 @@ export function openStore(path: string): Store {
   const db = new Database(path);
   tune(db);
   loadCrsqlite(db);
+  // `serve` brings the store to the newest released migration before any
+  // laptop does (core backs the file up first).
+  migrate(db);
   db.exec(PO_SCHEMA);
   return db;
+}
+
+/** The office's migration, compared with each request's X-Collab-Schema. */
+export function officeSchema(db: Store): string {
+  return latestMigration(db) ?? "unknown";
 }
 
 export function closeStore(db: Store): void {

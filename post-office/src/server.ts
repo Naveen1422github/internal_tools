@@ -3,7 +3,7 @@ import https from "node:https";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
-  StoreError, allocate, authenticate, redeemJoin, isRevoked, sharedModules, setModuleShared, teamStatus,
+  StoreError, allocate, authenticate, redeemJoin, isRevoked, sharedModules, setModuleShared, teamStatus, officeSchema,
   type Member, type Store,
 } from "./store.js";
 import { acceptChanges, fetchDeliveries, lastSeq } from "./deliveries.js";
@@ -76,6 +76,8 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
   const log = o.log ?? (() => {});
   const maxBody = o.maxBodyBytes ?? 64 * 1024 * 1024;
   const streams = new Set<{ device: string; res: ServerResponse }>();
+  // Read once at start: `serve` migrated the store before it got here.
+  const officeSchemaValue = officeSchema(o.store);
 
   function ring(event: string, data: unknown, except?: string): void {
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -124,6 +126,14 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
     if (!me) {
       req.resume();
       return send(res, 401, { error: "access revoked or unknown device" });
+    }
+    // Schema guard (spec V7): a laptop on another migration would receive or send
+    // columns the other side does not have. Refuse; its courier pauses.
+    const deviceSchema = String(req.headers["x-collab-schema"] ?? "unknown");
+    if (deviceSchema !== officeSchemaValue) {
+      req.resume();
+      log(`${me.name}: refused, schema ${deviceSchema} (office ${officeSchemaValue})`);
+      return send(res, 409, { error: "schema", office: officeSchemaValue, device: deviceSchema });
     }
     switch (route) {
       case "POST /v1/allocate": {

@@ -159,3 +159,22 @@ test('applying pulled changes does not make the courier ping itself (no push req
     assert.strictEqual(bPushes, 0, 'B pushed after only receiving');
   } finally { await ca.stop(); await cb.stop(); closeWriter(wa); closeWriter(wb); await office.close(); t.cleanup(); }
 });
+
+test('a schema mismatch puts the courier in needs-update and it does not hammer the office', async () => {
+  const t = tempDir();
+  const office = await startOffice(t.dir, 0);
+  const j = await joinedDb(office, t.dir, 'a');
+  const w = openWriter(j.path);
+  // This laptop claims a newer migration than the office has.
+  w.prepare(`INSERT INTO schema_migrations (version) VALUES ('9999_from_the_future')`).run();
+  const c = new Courier({ dbPath: j.path, watch: false, retryMs: 60_000 });
+  try {
+    await c.syncNow().catch(() => {});
+    assert.equal(c.status.state, 'needs-update');
+    assert.match(c.status.lastError ?? '', /update this laptop: the post office is on \S+, this notes DB is on 9999_from_the_future/);
+    const before = c.status.lastError;
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(c.status.state, 'needs-update', 'still paused, no retry storm inside the 60 s interval');
+    assert.equal(c.status.lastError, before);
+  } finally { await c.stop(); closeWriter(w); await office.close(); t.cleanup(); }
+});

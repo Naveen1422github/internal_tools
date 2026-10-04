@@ -3,7 +3,7 @@ import tls from "node:tls";
 import http from "node:http";
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
-import { PinMismatchError, AccessRevokedError } from "./errors.js";
+import { PinMismatchError, AccessRevokedError, SchemaMismatchError } from "./errors.js";
 import { normalizeFingerprint } from "./cert.js";
 
 // HTTPS to the post office with certificate PINNING (D13): the server's
@@ -12,7 +12,13 @@ import { normalizeFingerprint } from "./cert.js";
 // a byte of it (not even the key in the Authorization header). Hostnames are
 // not checked: the pin is the trust, so a changed LAN address still works.
 
-export interface PostOfficeTarget { url: string; fingerprint: string; auth?: { device: string; key: string } }
+export interface PostOfficeTarget {
+  url: string;
+  fingerprint: string;
+  auth?: { device: string; key: string };
+  /** Latest applied migration of this notes DB, sent as X-Collab-Schema (the office refuses a different one). */
+  schema?: string;
+}
 export interface JsonResponse { status: number; body: any }
 
 function hostPort(url: string): { host: string; port: number } {
@@ -57,6 +63,7 @@ export function connectPinned(target: PostOfficeTarget, timeoutMs = 5000): Promi
 function headers(target: PostOfficeTarget, extra: Record<string, string>): Record<string, string> {
   const h: Record<string, string> = { ...extra };
   if (target.auth) h.authorization = `Bearer ${target.auth.device}:${target.auth.key}`;
+  if (target.schema) h["x-collab-schema"] = target.schema;
   return h;
 }
 
@@ -91,6 +98,9 @@ export async function requestJson(
           const text = Buffer.concat(chunks).toString("utf8");
           let parsed: any = null;
           try { parsed = text ? JSON.parse(text) : null; } catch { parsed = { error: text.slice(0, 200) }; }
+          if (res.statusCode === 409 && parsed?.error === "schema") {
+            return reject(new SchemaMismatchError(String(parsed.office), String(parsed.device)));
+          }
           resolve({ status: res.statusCode ?? 0, body: parsed });
         });
       },
@@ -129,6 +139,19 @@ export function openEventStream(
         { method: "GET", path, host, port, headers: headers(target, { accept: "text/event-stream" }), createConnection: () => sock },
         (res) => {
           if (res.statusCode === 401) { res.resume(); return finish(new AccessRevokedError(target.url)); }
+          if (res.statusCode === 409) {
+            // Read the small JSON body: a schema refusal names both migrations.
+            const chunks: Buffer[] = [];
+            res.on("data", (c: Buffer) => chunks.push(c));
+            res.on("end", () => {
+              let b: any = null;
+              try { b = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { /* not JSON */ }
+              if (b?.error === "schema") return finish(new SchemaMismatchError(String(b.office ?? "unknown"), String(b.device ?? "unknown")));
+              finish(new Error(`the post office refused the event stream (409)`));
+            });
+            res.on("error", (e) => finish(e));
+            return;
+          }
           if (res.statusCode !== 200) { res.resume(); return finish(new Error(`the post office refused the event stream (${res.statusCode})`)); }
           res.setEncoding("utf8");
           let buf = "";

@@ -2,6 +2,7 @@
 import type { DB } from "../db.js";
 import type { Allocator } from "./allocator.js"; // type-only: no runtime cycle
 import { getSyncValue } from "./state.js";
+import { latestMigration } from "../db.js";
 import { requestJson, type PostOfficeTarget } from "./http.js";
 
 // The real allocator (spec D7): POST /v1/allocate {ulid} -> {id}. Its config
@@ -20,7 +21,7 @@ export function postOfficeTargetFromDb(db: DB): PostOfficeTarget | null {
   const device = getSyncValue(db, SYNC_KEYS.device);
   const key = getSyncValue(db, SYNC_KEYS.key);
   if (!url || !fingerprint || !device || !key) return null;
-  return { url, fingerprint, auth: { device, key } };
+  return { url, fingerprint, auth: { device, key }, schema: latestMigration(db) ?? undefined };
 }
 
 export class HttpAllocator implements Allocator {
