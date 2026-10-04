@@ -1,5 +1,12 @@
+// file: core/src/sync/allocator.ts
 // Sharing on => E-numbers come only from the post office (spec D7, collab
-// E-648/E-708). The real HTTP allocator is registered by Plan 2; tests use stubs.
+// E-648/E-708). E-713: idempotent by ulid, retried with the SAME ulid.
+import type { DB } from "../db.js";
+import { PostOfficeUnreachableError } from "./errors.js";
+import { httpAllocatorFromDb } from "./http-allocator.js";
+
+export { PostOfficeUnreachableError, SyncAllocationRequiredError } from "./errors.js";
+
 export interface Allocator {
   allocate(ulid: string): Promise<number>;
 }
@@ -7,15 +14,48 @@ let current: Allocator | null = null;
 export function setAllocator(a: Allocator | null): void { current = a; }
 export function getAllocator(): Allocator | null { return current; }
 
-export class PostOfficeUnreachableError extends Error {
-  constructor(detail: string) {
-    super(`[collab-mcp] Not saved: this notes database is shared, and a note number could not be obtained from the post office (${detail}). Nothing was written. Start the post office (or reconnect), then retry.`);
-    this.name = "PostOfficeUnreachableError";
-  }
+/** An explicitly registered allocator, else the HTTPS one this DB's sync_state configures. */
+export function resolveAllocator(db: DB): Allocator | null {
+  return current ?? httpAllocatorFromDb(db);
 }
-export class SyncAllocationRequiredError extends Error {
-  constructor() {
-    super(`[collab-mcp] This notes database is shared, so new note numbers must come from the post office. Use addEntryAsync. (rollup/archive are not available while sharing is on in v1.)`);
-    this.name = "SyncAllocationRequiredError";
+
+export interface RetryPolicy { attempts: number; timeoutMs: number; delaysMs: number[] }
+/** 3 tries, 1.5 s each, pauses of 250 ms and 750 ms: about 5 s at worst (E-713). */
+export const DEFAULT_RETRY: RetryPolicy = { attempts: 3, timeoutMs: 1500, delaysMs: [250, 750] };
+let policy: RetryPolicy = DEFAULT_RETRY;
+export function setAllocationRetry(p: Partial<RetryPolicy> | null): void {
+  policy = p ? { ...DEFAULT_RETRY, ...p } : DEFAULT_RETRY;
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let t: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((_, reject) => {
+    t = setTimeout(() => reject(new Error(`no answer within ${ms} ms`)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(t));
+}
+
+/**
+ * Ask for the number for `ulid`, retrying with the SAME ulid: the post office is
+ * idempotent by ulid, so if it assigned a number and the answer was lost, the
+ * retry gets that same number (E-713). Throws PostOfficeUnreachableError.
+ */
+export async function allocateWithRetry(a: Allocator, ulid: string): Promise<number> {
+  let last: unknown = new Error("no attempt was made");
+  const attempts = Math.max(1, policy.attempts);
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) await sleep(policy.delaysMs[Math.min(i - 1, policy.delaysMs.length - 1)] ?? 0);
+    try {
+      const id = await withTimeout(Promise.resolve().then(() => a.allocate(ulid)), policy.timeoutMs);
+      if (!Number.isInteger(id) || id < 1) {
+        throw Object.assign(new Error(`the post office returned an invalid number (${String(id)})`), { retriable: false });
+      }
+      return id;
+    } catch (e) {
+      last = e;
+      if ((e as { retriable?: boolean } | null)?.retriable === false) break;
+    }
   }
+  throw new PostOfficeUnreachableError(last instanceof Error ? last.message : String(last), last);
 }

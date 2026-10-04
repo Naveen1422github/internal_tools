@@ -2,7 +2,7 @@ import http from 'node:http';
 import {
   getDb, estimateTokens, KIND_BY_TYPE, SLUG_REGEX, validateEntryInput, buildFtsMatch,
   addEntry, addEntryAsync, getEntry, deleteEntry, supersede, doctor, ownerOf, replaceLinks, insertEntryModules,
-  liveEntry, ftsJoin, hasUlidPrimaryKey,
+  liveEntry, ftsJoin, hasUlidPrimaryKey, snapshotForRevision, finishRevision,
 } from '@collab-mcp/core';
 
 const db = getDb();
@@ -219,11 +219,14 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       const byUlid = hasUlidPrimaryKey(db);
       const tokens = estimateTokens(description);
       const tx = db.transaction(() => {
+        // Spec "Edits write revisions" (0007+; no-op below 0007).
+        const before = byUlid ? snapshotForRevision(db, owner.ulid as string) : null;
         db.prepare(`
           UPDATE entries SET type=?, kind=?, title=?, summary=?, description=?, agent=?, module=?, task_id=?, tokens_estimate=?, category=?
           WHERE ${byUlid ? 'ulid = ?' : 'id = ?'}
         `).run(type, kind, title, summary, description, agent, primaryModule, task_id, tokens, resolvedCategory, byUlid ? owner.ulid : owner.id);
         replaceLinks(db, owner, orderedModules, primaryModule, normRefs);
+        finishRevision(db, before);
       });
       tx();
       send(200, { ok: true, id: owner.id });

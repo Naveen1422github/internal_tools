@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+*.pem
+post-office-data/
 
 # Local DB — never commit
 collab.db
