@@ -1,9 +1,9 @@
 // file: courier/test/engine.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { addEntryAsync, getSyncValue, updateEntry } from '@collab-mcp/core';
+import { addEntryAsync, getSyncValue, updateEntry, COURIER_PORT_KEY } from '@collab-mcp/core';
 import { setModuleShared } from '@collab-mcp/post-office';
-import { tempDir, startOffice, joinedDb, openWriter, closeWriter, type Office } from './world.js';
+import { tempDir, startOffice, joinedDb, openWriter, closeWriter, until, type Office } from './world.js';
 import { Courier } from '../src/engine.js';
 import { COURIER_KEYS } from '../src/keys.js';
 
@@ -118,4 +118,44 @@ test('a DB that is not set up is refused with a clear message', () => {
     closeWriter(db);
     assert.throws(() => new Courier({ dbPath: `${t.dir}/plain.db`, watch: false }), /collab sync setup/);
   } finally { t.cleanup(); }
+});
+
+test('the courier publishes its ping port, a save pings it, the save is pushed; stop removes the port', async () => {
+  const t = tempDir();
+  const office = await startOffice(t.dir, 0);
+  setModuleShared(office.store, 'team', true);
+  const j = await joinedDb(office, t.dir, 'a');
+  const c = new Courier({ dbPath: j.path, retryMs: 60_000, maxReconnectMs: 200 });
+  const w = openWriter(j.path);
+  try {
+    c.start();
+    await until(() => c.status.state === 'connected' && c.pingPort !== null, 3000, 'connected + listening');
+    assert.strictEqual(getSyncValue(w, COURIER_PORT_KEY), String(c.pingPort));
+    const before = c.status.sentTotal;
+    await addEntryAsync(w, { type: 'decision', title: 'pinged', summary: 's', module: 'team' });
+    await until(() => c.status.sentTotal > before, 2000, 'the ping-triggered push');
+  } finally {
+    await c.stop();
+    assert.strictEqual(getSyncValue(w, COURIER_PORT_KEY), null, 'stop removes the port');
+    closeWriter(w); await office.close(); t.cleanup();
+  }
+});
+
+test('applying pulled changes does not make the courier ping itself (no push request after a pull)', async () => {
+  const t = tempDir();
+  const office = await startOffice(t.dir, 0);
+  setModuleShared(office.store, 'team', true);
+  const ja = await joinedDb(office, t.dir, 'a'), jb = await joinedDb(office, t.dir, 'b');
+  const ca = new Courier({ dbPath: ja.path, retryMs: 60_000, maxReconnectMs: 200 });
+  const cb = new Courier({ dbPath: jb.path, retryMs: 60_000, maxReconnectMs: 200 });
+  const wa = openWriter(ja.path), wb = openWriter(jb.path);
+  try {
+    ca.start(); cb.start();
+    await until(() => ca.status.state === 'connected' && cb.status.state === 'connected', 3000);
+    const { id } = await addEntryAsync(wa, { type: 'decision', title: 'echo-check', summary: 's', module: 'team' });
+    await until(() => wb.prepare('SELECT 1 FROM entries WHERE id = ?').get(id) !== undefined, 3000, 'B received');
+    await new Promise((r) => setTimeout(r, 500));
+    const bPushes = office.requests.filter((r) => r.device === jb.device && r.route.startsWith('POST /v1/changes')).length;
+    assert.strictEqual(bPushes, 0, 'B pushed after only receiving');
+  } finally { await ca.stop(); await cb.stop(); closeWriter(wa); closeWriter(wb); await office.close(); t.cleanup(); }
 });
