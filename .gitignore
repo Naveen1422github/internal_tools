@@ -37,3 +37,6 @@ backups/
 
 # Build identity (written by npm run build)
 build-info.json
+
+# Assembled package (npm run package)
+dist-package/

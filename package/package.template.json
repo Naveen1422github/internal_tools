@@ -1,0 +1,12 @@
+{
+  "name": "@collab-mcp/collab",
+  "version": "0.0.0",
+  "description": "Collab: a shared, searchable notebook for people and AI agents, local-first with optional team sync.",
+  "type": "module",
+  "bin": { "collab": "./cli/dist/bin.js" },
+  "scripts": { "postinstall": "node cli/dist/postinstall.js" },
+  "engines": { "node": ">=20.9.0" },
+  "dependencies": {},
+  "bundleDependencies": ["@collab-mcp/core", "@collab-mcp/courier", "@collab-mcp/post-office", "@collab-mcp/server", "collab-mcp"],
+  "files": ["addon-manifest.json", "build-info.json", "cli/dist", "ui/dist", "mcp/migrations", "vendor", "node_modules", "README.md"]
+}
