@@ -45,3 +45,4 @@ export * from './notebooks.js';
 export * from './settings.js';
 export * from './build-info.js';
 export * from './heartbeat.js';
+export * from './addon.js';
