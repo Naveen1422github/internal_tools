@@ -6,7 +6,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import {
-  resolveDbPath, loadCrsqlite, getSyncValue, postOfficeTargetFromDb, readOwnChanges, requestJson, type PostOfficeTarget,
+  resolveDbPath, loadCrsqlite, getSyncValue, postOfficeTargetFromDb, unsentSharedCount, requestJson, type PostOfficeTarget,
   describeMemberState, TEAM_STATUS_NOTE,
 } from "@collab-mcp/core";
 import { Courier, type CourierStatus } from "./engine.js";
@@ -205,7 +205,7 @@ export async function runCli(argv: string[], io: Io, deps: CliDeps = {}): Promis
         try {
           sent = Number(getSyncValue(db, COURIER_KEYS.sent) ?? 0);
           recv = Number(getSyncValue(db, COURIER_KEYS.recv) ?? 0);
-          unsent = readOwnChanges(db, sent).length;
+          unsent = unsentSharedCount(db);
         } finally { closeReadable(db); }
         io.out(`notes DB:     ${cfg.dbPath}`);
         io.out(`post office:  ${cfg.postOffice} (this machine: ${cfg.device})`);
@@ -213,7 +213,7 @@ export async function runCli(argv: string[], io: Io, deps: CliDeps = {}): Promis
         if (st?.state === "revoked") io.out(`              ACCESS REVOKED: ask the post office owner for a new join code`);
         if (st?.lastError) io.out(`last error:   ${st.lastError}`);
         io.out(`bookmarks:    sent up to local version ${sent}; received up to delivery #${recv}`);
-        io.out(`not yet sent: ${unsent} local change(s) (private-module changes are counted but never leave)`);
+        io.out(`not yet sent: ${unsent} change(s) in shared modules`);
         io.out(`start at login: ${cfg.autostart ? "yes" : "no"}`);
         if (opt.team === true) {
           const r = await requestJson(target(), "GET", "/v1/status");
