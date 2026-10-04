@@ -3,7 +3,7 @@ import {
   getDb, SLUG_REGEX, validateEntryInput, buildFtsMatch,
   addEntry, addEntryAsync, getEntry, deleteEntry, supersede, doctor,
   editEntry, EntryNotFoundError, reassignModule, upsertModule, deleteModule,
-  liveEntry, ftsJoin,
+  liveEntry, ftsJoin, readSyncOverview, NeedsMergeError,
 } from '@collab-mcp/core';
 
 const db = getDb();
@@ -221,6 +221,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       send(200, { ok: true, id: r.id });
     } catch (err: any) {
       if (err instanceof EntryNotFoundError) return send(404, { error: err.message });
+      if (err instanceof NeedsMergeError) return send(409, { error: err.message }); // V9: settle it on /merge/:id
       send(500, { error: err.message });
     }
   },
@@ -318,7 +319,10 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
   'GET /api/collab/modules': async (req, res, send) => {
     try {
       const rows = db.prepare('SELECT * FROM modules ORDER BY slug').all();
-      send(200, { results: rows });
+      // Sharing on: each module says whether it goes to the team (absent when off).
+      const overview = readSyncOverview(db);
+      const shared = overview.enabled ? new Set(overview.sharedModules) : null;
+      send(200, { results: shared ? rows.map((r: any) => ({ ...r, shared: shared.has(r.slug) })) : rows });
     } catch (err: any) {
       send(500, { error: err.message });
     }

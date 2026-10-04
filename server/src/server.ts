@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { migrate } from '@collab-mcp/core';
 import * as collab from './tools/collab.js';
 import * as ai from './tools/ai.js';
+import * as sync from './tools/sync.js';
 import { checkApiRequest, checkHost, type GuardRefusal } from './guard.js';
 import { createWebKey, injectKey } from './web-key.js';
 
@@ -28,6 +29,7 @@ if (appliedMigrations.length > 0) {
 const routes: Record<string, any> = {
   ...collab.routes,
   ...ai.routes,
+  ...sync.routes,
 };
 
 const MIME: Record<string, string> = {
