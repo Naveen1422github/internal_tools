@@ -90,6 +90,14 @@ A script on this machine can read that file:
 
 Requests from other websites, with a wrong Host/Origin, or with a non-JSON body are refused.
 
+### Updating a team after a migration
+
+1. Back up every notes DB and the post office store.
+2. Post office laptop: `git pull`, `npm run build`, restart `collab-post-office serve` (it migrates its store).
+3. Each laptop: `git pull`, `npm run build`, `npm --prefix mcp run migrate`, then restart the web server, the MCP connection and the courier.
+4. Until a laptop is updated, its sync bar says "update this laptop" and it neither sends nor receives.
+5. Nothing is lost while a laptop waits: its changes go out once it is on the same migration as the post office.
+
 ## Optional: dispatching to Codex
 
 `scripts/codex-dispatch.sh` sends a prompt to Codex and records the result as a collab entry

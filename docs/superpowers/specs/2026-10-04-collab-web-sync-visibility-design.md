@@ -55,11 +55,11 @@ Returns:
     courier: { running: boolean, state: string | "unknown", lastError: string | null,
                lastPushAt: string | null, lastPullAt: string | null },
     lastContactAt: string | null,                // max(lastPushAt, lastPullAt)
-    health: "ok" | "behind" | "not-syncing" | "needs-update" | "unknown" }
+    health: "ok" | "behind" | "not-syncing" | "needs-update" | "revoked" | "unknown" }
 ```
 - `unsent` logic moves here from `courier/src/cli.ts` (`sync status`); the CLI calls this function so there is one copy.
 - `running` = pid in `status.json` is alive.
-- `health`: courier not running → `not-syncing`; state `needs-update` → `needs-update`; `status.json` missing/unreadable → `unknown`; `unsent > 0` or last contact older than 60 s → `behind`; else `ok`.
+- `health` (corrected in the plan: the courier is silent while nothing changes, so the age of the last contact is NOT a health signal; it is shown as information only): `status.json` missing/unreadable → `unknown`; courier not running → `not-syncing`; state `needs-update` → `needs-update`; state `revoked` → `revoked`; state `offline`/`starting` or `unsent > 0` → `behind`; else `ok`.
 - Never includes `device_key` (test asserts the serialized object).
 - Courier dir default moves from `courier/src/paths.ts` to core so core doesn't import courier.
 
@@ -112,5 +112,6 @@ Returns:
 Buttons for start/stop/join/leave (part 3); members, share/unshare, revoke, post office control (part 4). Until part 3, the red bar's fix line names the command.
 
 ## Risks and open items
+- 0008 is released, not staged: merged code migrates on the next `migrate`/web-server start; the schema guard pauses out-of-date laptops.
 - 0008 is the first ALTER of a CRR table here; the plan's first task is a spike proving `crsql_begin_alter`/`commit_alter` + replication of the new column on our schema before anything else is built.
 - Rollout requires every laptop to update before editing resumes; the schema guard makes a missed laptop pause, not corrupt.
