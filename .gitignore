@@ -34,3 +34,6 @@ backups/
 
 # brainstorming companion mockups (local only)
 .superpowers/
+
+# Build identity (written by npm run build)
+build-info.json
