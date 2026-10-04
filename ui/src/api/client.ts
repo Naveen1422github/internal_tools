@@ -29,8 +29,30 @@ export interface Stats {
   recent: Entry[];
 }
 
+// The server only answers requests that carry its access key, which it puts
+// into index.html as <meta name="collab-key">. Read once, sent on every call.
+export const RELOAD_MESSAGE = "collab refused this request. The server was probably restarted: reload the page.";
+let cachedKey: string | null | undefined;
+export function collabKey(): string | null {
+  if (cachedKey === undefined) {
+    const doc = (globalThis as any).document as Document | undefined;
+    cachedKey = doc?.querySelector('meta[name="collab-key"]')?.getAttribute('content') || null;
+  }
+  return cachedKey;
+}
+export function resetCollabKeyForTests(): void { cachedKey = undefined; }
+function keyHeader(): Record<string, string> {
+  const k = collabKey();
+  return k ? { 'X-Collab-Key': k } : {};
+}
+export function keyMissingMessage(key: string | null, isDev: boolean): string | null {
+  if (key || isDev) return null; // dev: the vite proxy adds the key
+  return "This page can't talk to collab. Restart the collab web server and reload.";
+}
+
 async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url);
+  const res = await fetch(url, { headers: keyHeader() });
+  if (res.status === 403) throw new Error(RELOAD_MESSAGE);
   if (!res.ok) throw new Error(`GET ${url} -> ${res.status}`);
   return res.json() as Promise<T>;
 }
@@ -38,9 +60,10 @@ async function getJson<T>(url: string): Promise<T> {
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...keyHeader() },
     body: JSON.stringify(body),
   });
+  if (res.status === 403) throw new Error(RELOAD_MESSAGE);
   if (!res.ok) {
     let msg = `POST ${url} -> ${res.status}`;
     try { const j = await res.json(); if (j?.error) msg = j.error; } catch {}

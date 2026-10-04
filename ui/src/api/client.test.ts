@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as api from './client';
-import { aiChat, isDraft, type AiResponse } from './client';
+import { aiChat, isDraft, collabKey, resetCollabKeyForTests, keyMissingMessage, RELOAD_MESSAGE, type AiResponse } from './client';
 
 describe('api client', () => {
   beforeEach(() => {
@@ -31,6 +31,48 @@ describe('api client', () => {
   it('stats GETs the stats endpoint', async () => {
     await api.stats();
     expect((globalThis.fetch as any).mock.calls[0][0]).toBe('/api/collab/stats');
+  });
+
+  describe('access key', () => {
+    afterEach(() => { delete (globalThis as any).document; resetCollabKeyForTests(); });
+    const withMeta = (content: string | null) => {
+      (globalThis as any).document = {
+        querySelector: (sel: string) =>
+          sel === 'meta[name="collab-key"]' && content !== null ? { getAttribute: () => content } : null,
+      };
+      resetCollabKeyForTests();
+    };
+
+    it('GET and POST send X-Collab-Key from the meta tag', async () => {
+      withMeta('k123');
+      await api.stats();
+      await api.supersede([1], 2);
+      const [, getOpts] = (globalThis.fetch as any).mock.calls[0];
+      const [, postOpts] = (globalThis.fetch as any).mock.calls[1];
+      expect(getOpts.headers['X-Collab-Key']).toBe('k123');
+      expect(postOpts.headers['X-Collab-Key']).toBe('k123');
+      expect(postOpts.headers['Content-Type']).toBe('application/json');
+    });
+
+    it('no meta tag: no header, and collabKey() is null', async () => {
+      withMeta(null);
+      await api.stats();
+      const [, opts] = (globalThis.fetch as any).mock.calls[0];
+      expect(opts.headers['X-Collab-Key']).toBeUndefined();
+      expect(collabKey()).toBeNull();
+    });
+
+    it('a 403 tells the user to reload', async () => {
+      globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ error: 'forbidden' }), { status: 403 })) as any;
+      await expect(api.stats()).rejects.toThrow(RELOAD_MESSAGE);
+      await expect(api.supersede([1], 2)).rejects.toThrow(RELOAD_MESSAGE);
+    });
+
+    it('keyMissingMessage: only when the key is missing and not in dev', () => {
+      expect(keyMissingMessage(null, false)).toMatch(/Restart the collab web server and reload/);
+      expect(keyMissingMessage(null, true)).toBeNull();
+      expect(keyMissingMessage('k', false)).toBeNull();
+    });
   });
 });
 
