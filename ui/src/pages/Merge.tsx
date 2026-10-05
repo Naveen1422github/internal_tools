@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { mergeVersions, resolveMerge, explainMerge, VERSIONS_CHANGED, type MergeView, type MergeVersion } from '../api/client';
 import { fieldDiff, versionLabel } from '../sync/view';
+import { formatEntryRef } from '../format';
 
 type Draft = { title: string; summary: string; description: string | null };
 
@@ -57,7 +58,7 @@ export default function Merge() {
           <b>Someone changed this note while you were deciding.</b> Nothing was saved. Here are the versions now.
         </div>
       )}
-      <h1 className="text-xl font-bold">E-{String(id).padStart(5, '0')}</h1>
+      <h1 className="text-xl font-bold">{formatEntryRef(id)}</h1>
       <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${Math.min(view.heads.length, 3)}, minmax(0, 1fr))` }}>
         {view.heads.map((v, i) => (
           <div key={v.rev_id} className="border border-gray-300 dark:border-gray-700 rounded p-3 space-y-3 text-sm">

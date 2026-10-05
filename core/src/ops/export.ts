@@ -1,6 +1,8 @@
 import type { DB } from "../db.js";
+import { hasUlidColumns } from "../db.js";
 import { liveEntry } from "../schema.js";
 import type { EntryType } from "./add.js";
+import { formatEntryRef } from "../entry-ref.js";
 
 export interface ExportArgs {
   format: "json" | "markdown";
@@ -57,10 +59,6 @@ function parseSince(since: string): string {
   return d.toISOString().slice(0, 19).replace("T", " ");
 }
 
-function toEntryId(id: number): string {
-  return `E-${String(id).padStart(5, "0")}`;
-}
-
 function nonEmptyFilters(args: ExportArgs): Record<string, unknown> {
   const filters: Record<string, unknown> = {};
   if (args.module) filters.module = args.module;
@@ -80,6 +78,7 @@ function renderMarkdown(
       refs: Array<{ ref_type: string; ref_value: string }>;
     }
   >,
+  supersededLabel: (e: ExportEntryRow) => string | null,
 ): string {
   const lines: string[] = [];
 
@@ -98,7 +97,7 @@ function renderMarkdown(
   lines.push("");
 
   for (const e of entries) {
-    lines.push(`## [${toEntryId(e.id)}] ${e.type} — ${e.title}`);
+    lines.push(`## [${formatEntryRef(e.id)}] ${e.type} — ${e.title}`);
 
     const metaBits: string[] = [];
     if (e.agent) metaBits.push(`agent: ${e.agent}`);
@@ -107,7 +106,8 @@ function renderMarkdown(
     else if (e.module) metaBits.push(`module: ${e.module}`);
     if (e.task_id) metaBits.push(`task: ${e.task_id}`);
     if (e.status) metaBits.push(`status: ${e.status}`);
-    if (e.superseded_by != null) metaBits.push(`superseded by: ${toEntryId(e.superseded_by)}`);
+    const sup = supersededLabel(e);
+    if (sup !== null) metaBits.push(`superseded by: ${sup}`);
     lines.push(
       `- created: ${e.created_at}${metaBits.length > 0 ? " | " + metaBits.join(" | ") : ""}`,
     );
@@ -205,7 +205,7 @@ export function exportEntries(db: DB, args: ExportArgs): ExportResult {
   if (args.format === "json") {
     body = JSON.stringify({ exported_at, filters, entries }, null, 2);
   } else {
-    body = renderMarkdown(exported_at, filters, entries);
+    body = renderMarkdown(exported_at, filters, entries, supersededLabeller(db));
   }
 
   return {
@@ -215,3 +215,20 @@ export function exportEntries(db: DB, args: ExportArgs): ExportResult {
   };
 }
 
+/**
+ * "superseded by" is followed by superseded_by_ulid and printed as that note's
+ * CURRENT number (J17). Files without the column fall back to the integer.
+ */
+function supersededLabeller(db: DB): (e: ExportEntryRow) => string | null {
+  if (!hasUlidColumns(db)) return (e) => (e.superseded_by != null ? formatEntryRef(e.superseded_by) : null);
+  const stmt = db.prepare(
+    `SELECT e.superseded_by_ulid AS s, t.ulid AS t_ulid, t.id AS t_id
+       FROM entries e LEFT JOIN entries t ON t.ulid = e.superseded_by_ulid
+      WHERE e.ulid = ?`,
+  );
+  return (e) => {
+    const r = stmt.get(e.ulid) as { s: string | null; t_ulid: string | null; t_id: number | null } | undefined;
+    if (!r || r.s === null) return null;
+    return r.t_ulid === null ? `${formatEntryRef(null)} (not on this laptop)` : formatEntryRef(r.t_id);
+  };
+}

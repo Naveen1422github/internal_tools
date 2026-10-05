@@ -3,6 +3,7 @@ import { hasUlidColumns } from "../db.js";
 import { liveEntry } from "../schema.js";
 import { ownerOf } from "../entry-write.js";
 import { ensureCrsqlite } from "../sync/extension.js";
+import { formatEntryRef } from "../entry-ref.js";
 
 // T-011: one main note (hub) per module (E-657). All "is it linked?" logic
 // lives here. Rules:
@@ -76,9 +77,9 @@ export function setModuleHub(
   const member = db
     .prepare(`SELECT 1 FROM entry_modules WHERE entry_ulid = ? AND module = ?`)
     .get(owner.ulid, args.slug);
-  if (!member) throw new Error(`E-${String(args.id).padStart(5, "0")} is not in module '${args.slug}'`);
+  if (!member) throw new Error(`${formatEntryRef(args.id)} is not in module '${args.slug}'`);
   const live = resolveLive(db, owner.ulid);
-  if (!live || live.followed) throw new Error(`E-${String(args.id).padStart(5, "0")} is deprecated; pick a live note`);
+  if (!live || live.followed) throw new Error(`${formatEntryRef(args.id)} is deprecated; pick a live note`);
 
   db.prepare(`UPDATE modules SET hub = ? WHERE slug = ?`).run(owner.ulid, args.slug);
   return { slug: args.slug, hub: { id: live.id, ulid: live.ulid, title: live.title } };

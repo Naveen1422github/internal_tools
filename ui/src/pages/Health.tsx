@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { doctor, reassignModule, setupDoctor, upsertEntry, type SetupGroup, type SetupMark, type SetupReport } from '../api/client';
+import { formatEntryRef } from '../format';
 
 const SETUP_GROUPS: Array<[SetupGroup, string]> = [
   ['install', 'Install'], ['notebook', 'Notebook'], ['version', 'Version'], ['programs', 'Programs'],
@@ -153,7 +154,7 @@ export default function Health() {
                         <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
                           {check.items.map((item: any) => (
                             <tr key={item.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
-                              <td className="px-3 py-2 font-mono text-gray-400">E-{String(item.id).padStart(5, '0')}</td>
+                              <td className="px-3 py-2 font-mono text-gray-400">{formatEntryRef(item.id)}</td>
                               <td className="px-3 py-2 truncate max-w-xs font-medium">{item.title || item.name || item.slug}</td>
                               <td className="px-3 py-2 text-right">
                                 {check.name.toLowerCase().includes('summary') && (

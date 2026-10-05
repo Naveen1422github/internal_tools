@@ -1,6 +1,7 @@
 import type { DB } from "./db.js";
 import { newUlid, ulidFromLegacy } from "./ulid.js";
 import { resolveAuthor } from "./author.js";
+import { formatEntryRef } from "./entry-ref.js";
 
 /**
  * Everything 0006's table rebuild assumes, checked BEFORE any table is touched
@@ -18,7 +19,6 @@ export class PreflightError extends Error {
 }
 
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
-const eid = (id: number | null) => `E-${String(id ?? "?").padStart(5, "0")}`;
 
 export function preflight0006(db: DB): { assignedUlids: number; stampedAuthors: number } {
   const run = db.transaction(() => {
@@ -54,28 +54,28 @@ export function preflight0006(db: DB): { assignedUlids: number; stampedAuthors: 
     const problems: string[] = [];
     const seen = new Map<string, number>();
     for (const r of db.prepare(`SELECT id, ulid FROM entries ORDER BY id`).all() as Array<{ id: number; ulid: string }>) {
-      if (!ULID_RE.test(r.ulid)) problems.push(`${eid(r.id)}: invalid ulid "${r.ulid}"`);
+      if (!ULID_RE.test(r.ulid)) problems.push(`${formatEntryRef(r.id)}: invalid ulid "${r.ulid}"`);
       const prev = seen.get(r.ulid);
-      if (prev !== undefined) problems.push(`${eid(prev)} and ${eid(r.id)} share ulid ${r.ulid}`);
+      if (prev !== undefined) problems.push(`${formatEntryRef(prev)} and ${formatEntryRef(r.id)} share ulid ${r.ulid}`);
       else seen.set(r.ulid, r.id);
     }
     for (const r of db.prepare(`SELECT entry_id, ref_type, ref_value FROM refs WHERE entry_ulid IS NULL`).all() as any[]) {
-      problems.push(`refs row (${eid(r.entry_id)}, ${r.ref_type}, ${r.ref_value}) has no owning entry`);
+      problems.push(`refs row (${formatEntryRef(r.entry_id)}, ${r.ref_type}, ${r.ref_value}) has no owning entry`);
     }
     for (const r of db.prepare(`SELECT entry_id, module FROM entry_modules WHERE entry_ulid IS NULL`).all() as any[]) {
-      problems.push(`entry_modules row (${eid(r.entry_id)}, ${r.module}) has no owning entry`);
+      problems.push(`entry_modules row (${formatEntryRef(r.entry_id)}, ${r.module}) has no owning entry`);
     }
     // Owner key set but matching no entry (the entry was hard-deleted by a path
     // that skipped 0005's cascade triggers). Same failure as a NULL owner.
     for (const r of db.prepare(`SELECT entry_id, entry_ulid, ref_type, ref_value FROM refs r
         WHERE entry_ulid IS NOT NULL AND NOT EXISTS (SELECT 1 FROM entries e WHERE e.ulid = r.entry_ulid)
         ORDER BY entry_ulid, ref_type, ref_value`).all() as any[]) {
-      problems.push(`refs row (${eid(r.entry_id)}, ${r.ref_type}, ${r.ref_value}) points at missing entry ulid ${r.entry_ulid}`);
+      problems.push(`refs row (${formatEntryRef(r.entry_id)}, ${r.ref_type}, ${r.ref_value}) points at missing entry ulid ${r.entry_ulid}`);
     }
     for (const r of db.prepare(`SELECT entry_id, entry_ulid, module FROM entry_modules m
         WHERE entry_ulid IS NOT NULL AND NOT EXISTS (SELECT 1 FROM entries e WHERE e.ulid = m.entry_ulid)
         ORDER BY entry_ulid, module`).all() as any[]) {
-      problems.push(`entry_modules row (${eid(r.entry_id)}, ${r.module}) points at missing entry ulid ${r.entry_ulid}`);
+      problems.push(`entry_modules row (${formatEntryRef(r.entry_id)}, ${r.module}) points at missing entry ulid ${r.entry_ulid}`);
     }
     const nullTasks = (db.prepare(`SELECT COUNT(*) c FROM tasks WHERE id IS NULL`).get() as { c: number }).c;
     if (nullTasks > 0) problems.push(`${nullTasks} task row(s) with a NULL id`);

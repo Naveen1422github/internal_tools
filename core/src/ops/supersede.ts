@@ -3,6 +3,7 @@ import { hasUlidColumns } from "../db.js";
 import { hasUlidPrimaryKey } from "../schema.js";
 import { ownerOf, type InsertedEntry } from "../entry-write.js";
 import { ensureCrsqlite } from "../sync/extension.js";
+import { formatEntryRef } from "../entry-ref.js";
 
 // ------------------------------------------------------------
 // Types
@@ -15,10 +16,6 @@ export interface SupersedeArgs {
 export interface SupersedeResult {
   superseded: number[];
   by: number;
-}
-
-function toEntryId(id: number): string {
-  return `E-${String(id).padStart(5, "0")}`;
 }
 
 // ------------------------------------------------------------
@@ -40,12 +37,12 @@ export function supersede(db: DB, args: SupersedeArgs): SupersedeResult {
   // an E-number may be shared, and the lowest live ulid owns it (F3).
   const byOwner = ownerOf(db, by);
   if (!byOwner) {
-    throw new Error(`'by' entry ${toEntryId(by)} does not exist`);
+    throw new Error(`'by' entry ${formatEntryRef(by)} does not exist`);
   }
 
   // 'by' must not supersede itself.
   if (ids.includes(by)) {
-    throw new Error(`'by' (${toEntryId(by)}) cannot be one of the superseded 'ids'`);
+    throw new Error(`'by' (${formatEntryRef(by)}) cannot be one of the superseded 'ids'`);
   }
 
   // Every id must exist.
@@ -54,7 +51,7 @@ export function supersede(db: DB, args: SupersedeArgs): SupersedeResult {
   const missing = uniqueIds.filter((id) => owners.get(id) === null);
   if (missing.length > 0) {
     throw new Error(
-      `the following 'ids' do not exist: ${missing.map(toEntryId).join(", ")}`,
+      `the following 'ids' do not exist: ${missing.map((id) => formatEntryRef(id)).join(", ")}`,
     );
   }
 

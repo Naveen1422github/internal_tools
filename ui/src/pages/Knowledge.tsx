@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { search, modules, type Entry } from '../api/client';
 import { useUi } from '../store/ui';
+import { formatEntryRef } from '../format';
 
 export default function Knowledge() {
   const [results, setResults] = useState<Entry[]>([]);
@@ -99,7 +100,7 @@ export default function Knowledge() {
                 >
                   <div className="flex justify-between items-start mb-1">
                     <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{r.type}</span>
-                    <span className="text-[10px] font-mono text-gray-400 group-hover:text-blue-500 transition-colors">E-{String(r.id).padStart(5, '0')}</span>
+                    <span className="text-[10px] font-mono text-gray-400 group-hover:text-blue-500 transition-colors">{formatEntryRef(r.id)}</span>
                   </div>
                   <h3 className="font-semibold text-gray-900 dark:text-gray-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">{r.title}</h3>
                   <p className="text-sm text-gray-500 mt-1 line-clamp-2">{r.summary}</p>

@@ -17,9 +17,28 @@ export interface Entry {
   deprecated?: number;
   created_at?: string;
   modules?: string[];
-  refs?: Array<{ ref_type: string; ref_value: string }>;
+  refs?: EntryRef[];
   author?: string | null;
   needs_merge?: number;
+  ulid?: string;
+  /** 0005+: the note at superseded_by_ulid (J17). null = not superseded; absent = older file. */
+  superseded_target?: LinkTarget | null;
+}
+
+/** The note at the other end of a link, found by its ULID (J17; core's LinkTarget). */
+export interface LinkTarget {
+  ulid: string;
+  id: number | null;
+  title: string | null;
+  deleted: boolean;
+  present: boolean;   // false: the ULID names no note on this laptop
+}
+
+export interface EntryRef {
+  ref_type: string;
+  ref_value: string;
+  /** ref_type 'entry' on 0005+ files: the linked note. Absent/null = unresolved or older file. */
+  target?: LinkTarget | null;
 }
 
 export interface Stats {
@@ -91,6 +110,9 @@ export const search = (p: {
 
 export const getEntry = (id: number) =>
   getJson<Entry>(`/api/collab/entry${qs({ id: String(id) })}`);
+
+export const entryByUlid = (ulid: string) =>
+  getJson<Entry>(`/api/collab/entry${qs({ ulid })}`);
 
 export const upsertEntry = (body: Partial<Entry>) =>
   postJson<{ ok: boolean; id: number }>(`/api/collab/entry/upsert`, body);

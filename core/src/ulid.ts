@@ -27,6 +27,11 @@ function randomBits80(): bigint {
 let lastMs = -1;
 let lastRand = 0n;
 
+/** True when `value` has the shape of a ULID: 26 Crockford base32 characters. */
+export function isUlid(value: string): boolean {
+  return /^[0-9A-HJKMNP-TV-Z]{26}$/.test(value);
+}
+
 /**
  * Monotonic ULID. Within one millisecond (or if the clock steps backwards)
  * the random part is incremented instead of redrawn, so ids from this process

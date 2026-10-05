@@ -19,6 +19,7 @@ export * from './ops/savings.js';
 export * from './constants.js';
 export * from './validate.js';
 export * from './ulid.js';
+export * from './entry-ref.js';
 export * from './author.js';
 export * from './backfill.js';
 export * from './preflight-0006.js';

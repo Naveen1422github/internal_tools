@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { getDb, getModule } from "@collab-mcp/core";
+import { getDb, getModule, formatEntryRef } from "@collab-mcp/core";
 
 function readArgValue(args: string[], name: string): string | null {
   const eq = args.find((a) => a.startsWith(`${name}=`));
@@ -38,19 +38,19 @@ if (result.active_tasks.length > 0) {
 if (result.top_gotchas.length > 0) {
   lines.push("\nTop gotchas:");
   for (const g of result.top_gotchas) {
-    lines.push(`  [E-${String(g.id).padStart(5, "0")}] ${g.summary}`);
+    lines.push(`  [${formatEntryRef(g.id)}] ${g.summary}`);
   }
 }
 if (result.recent_decisions.length > 0) {
   lines.push("\nRecent decisions:");
   for (const d of result.recent_decisions) {
-    lines.push(`  [E-${String(d.id).padStart(5, "0")}] ${d.title}`);
+    lines.push(`  [${formatEntryRef(d.id)}] ${d.title}`);
   }
 }
 if (result.recent_handoffs.length > 0) {
   lines.push("\nRecent handoffs:");
   for (const h of result.recent_handoffs) {
-    lines.push(`  [E-${String(h.id).padStart(5, "0")}] ${h.agent ?? "?"} - ${h.title}`);
+    lines.push(`  [${formatEntryRef(h.id)}] ${h.agent ?? "?"} - ${h.title}`);
   }
 }
 

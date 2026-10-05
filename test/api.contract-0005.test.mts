@@ -28,7 +28,10 @@ const ftsIntact = (db) => db.prepare(`INSERT INTO entries_fts(entries_fts, rank)
 
     const entry = await get(`/api/collab/entry?id=${created.id}`);
     assert.deepEqual(entry.modules, ['m1']);
-    assert.deepEqual(entry.refs, [{ ref_type: 'entry', ref_value: `E-${a}` }]);
+    const aUlid = db.prepare(`SELECT ulid FROM entries WHERE id = ?`).get(a).ulid;
+    // J17: the link carries its target, followed by ULID (piece 2 stage A).
+    assert.deepEqual(entry.refs, [{ ref_type: 'entry', ref_value: `E-${a}`,
+      target: { ulid: aUlid, id: a, title: 'platypus anchor', deleted: false, present: true } }]);
 
     await post('/api/collab/entry/upsert', { id: created.id, type: 'decision', title: 'platypus edited', summary: 's', module: 'm2', refs: [] });
     const edited = await get(`/api/collab/entry?id=${created.id}`);

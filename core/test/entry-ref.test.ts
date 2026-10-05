@@ -1,0 +1,19 @@
+import { test } from 'node:test';
+import assert from 'node:assert';
+import { formatEntryRef } from '../src/entry-ref.js';
+import { parseEntryRef } from '../src/ulid.js';
+
+test('pads to 5 digits with the E series by default', () => {
+  assert.equal(formatEntryRef(12), 'E-00012');
+  assert.equal(formatEntryRef(123456), 'E-123456');
+});
+test('a missing number prints E-?, never E-0null', () => {
+  assert.equal(formatEntryRef(null), 'E-?');
+  assert.equal(formatEntryRef(undefined), 'E-?');
+});
+test('a series other than E is accepted (stage B)', () => {
+  assert.equal(formatEntryRef(7, 'ACME'), 'ACME-00007');
+});
+test('round trip with parseEntryRef for the E series', () => {
+  for (const n of [1, 42, 760, 99999, 100000]) assert.equal(parseEntryRef(formatEntryRef(n)), n);
+});

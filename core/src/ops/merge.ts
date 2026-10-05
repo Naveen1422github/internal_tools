@@ -4,6 +4,7 @@ import { estimateTokens } from "../db.js";
 import { ownerOf } from "../entry-write.js";
 import { headsOf, revisionsOf, snapshotForRevision, finishRevision } from "../revisions.js";
 import { ensureCrsqlite } from "../sync/extension.js";
+import { formatEntryRef } from "../entry-ref.js";
 
 // Settling a note whose edits collided (spec part 2, V4/V5). The caller says
 // which versions it showed the person (expectedHeads); if another edit arrived
@@ -11,14 +12,14 @@ import { ensureCrsqlite } from "../sync/extension.js";
 
 export class VersionsChangedError extends Error {
   constructor(id: number) {
-    super(`E-${String(id).padStart(5, "0")} changed while you were deciding; reload the versions`);
+    super(`${formatEntryRef(id)} changed while you were deciding; reload the versions`);
     this.name = "VersionsChangedError";
   }
 }
 
 export class NeedsMergeError extends Error {
   constructor(readonly id: number) {
-    super(`E-${String(id).padStart(5, "0")} needs a merge first: open /merge/${id} in the collab web UI`);
+    super(`${formatEntryRef(id)} needs a merge first: open /merge/${id} in the collab web UI`);
     this.name = "NeedsMergeError";
   }
 }
@@ -34,7 +35,7 @@ function flaggedUlid(db: DB, id: number): string {
   const owner = ownerOf(db, id);
   if (!owner || !owner.ulid) throw new Error(`no entry found with id ${id}`);
   const r = db.prepare(`SELECT needs_merge FROM entries WHERE ulid = ?`).get(owner.ulid) as { needs_merge: number } | undefined;
-  if (!r || r.needs_merge !== 1) throw new Error(`E-${id} is not waiting for a merge`);
+  if (!r || r.needs_merge !== 1) throw new Error(`${formatEntryRef(id)} is not waiting for a merge`);
   return owner.ulid as string;
 }
 

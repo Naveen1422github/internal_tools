@@ -3,6 +3,7 @@ import { parseEntryRef } from "../ulid.js";
 import { getHubStatus, IMPORTANT_TYPES } from "./hub.js";
 import { liveEntry } from "../schema.js";
 import { hasCrrTables, isCrsqliteLoaded } from "../sync/extension.js";
+import { formatEntryRef } from "../entry-ref.js";
 
 export interface DoctorCheck {
   name: string; // short id, e.g. "schema.tables"
@@ -118,10 +119,6 @@ const EXPECTED_TRIGGERS_0006 = new Set([
 
 function union(a: Set<string>, b: Set<string>): Set<string> {
   return new Set([...a, ...b]);
-}
-
-function toEntryId(id: number): string {
-  return `E-${String(id).padStart(5, "0")}`;
 }
 
 function diffSets(actual: Set<string>, expected: Set<string>): { missing: string[]; extra: string[] } {
@@ -252,7 +249,7 @@ export function doctor(db: DB): DoctorResult {
         : "no orphan task refs",
     items:
       orphanTaskRefs.length > 0
-        ? orphanTaskRefs.map((r) => `${toEntryId(r.entry_id)} -> T-${r.ref_value}`)
+        ? orphanTaskRefs.map((r) => `${formatEntryRef(r.entry_id)} -> T-${r.ref_value}`)
         : undefined,
   });
 
@@ -266,13 +263,23 @@ export function doctor(db: DB): DoctorResult {
   );
   // refs.entry_id is legacy/nullable from 0006 on; the owner is entry_ulid.
   const ownerId = has0005 ? `(SELECT e.id FROM entries e WHERE e.ulid = refs.entry_ulid)` : `entry_id`;
-  const orphanEntryRefs = (
-    db.prepare(`SELECT ${ownerId} AS entry_id, ref_value FROM refs WHERE ref_type = 'entry' ORDER BY 1 ASC, ref_value ASC`)
-      .all() as Array<{ entry_id: number | null; ref_value: string }>
-  ).filter((r) => {
-    const target = parseEntryRef(r.ref_value);
-    return target === null || !liveIds.has(target);
-  });
+  // 0005+ (J17): a link is followed by target_ulid, so it is an orphan only when
+  // that ULID names no row. target_ulid NULL is reported by
+  // data.unresolved_entry_refs (check 11), not counted twice here.
+  const orphanEntryRefs = has0005
+    ? (db.prepare(
+        `SELECT ${ownerId} AS entry_id, ref_value FROM refs
+          WHERE ref_type = 'entry' AND target_ulid IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM entries t WHERE t.ulid = refs.target_ulid)
+          ORDER BY 1 ASC, ref_value ASC`,
+      ).all() as Array<{ entry_id: number | null; ref_value: string }>)
+    : (
+        db.prepare(`SELECT ${ownerId} AS entry_id, ref_value FROM refs WHERE ref_type = 'entry' ORDER BY 1 ASC, ref_value ASC`)
+          .all() as Array<{ entry_id: number | null; ref_value: string }>
+      ).filter((r) => {
+        const target = parseEntryRef(r.ref_value);
+        return target === null || !liveIds.has(target);
+      });
   checks.push({
     name: "data.orphan_refs.entry",
     severity: orphanEntryRefs.length > 0 ? "warn" : "ok",
@@ -282,7 +289,7 @@ export function doctor(db: DB): DoctorResult {
         : "no orphan entry refs",
     items:
       orphanEntryRefs.length > 0
-        ? orphanEntryRefs.map((r) => `${toEntryId(r.entry_id ?? 0)} -> ${r.ref_value}`)
+        ? orphanEntryRefs.map((r) => `${formatEntryRef(r.entry_id ?? 0)} -> ${r.ref_value}`)
         : undefined,
   });
 
@@ -330,10 +337,19 @@ export function doctor(db: DB): DoctorResult {
     items: orphanTaskEntries.length > 0 ? orphanTaskEntries.map((r) => r.id) : undefined,
   });
 
-  // 8) data.dangling_superseded — superseded_by points to a non-existent entry
+  // 8) data.dangling_superseded — superseded_by points to a non-existent entry.
+  //    0005+ (J17): followed by superseded_by_ulid; before that, by the number.
   const danglingSuperseded = db
     .prepare(
+      has0005
+        ? `
+        SELECT id, superseded_by
+        FROM entries
+        WHERE superseded_by_ulid IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM entries t WHERE t.ulid = entries.superseded_by_ulid)
+        ORDER BY id ASC
       `
+        : `
         SELECT id, superseded_by
         FROM entries
         WHERE superseded_by IS NOT NULL
@@ -341,7 +357,7 @@ export function doctor(db: DB): DoctorResult {
         ORDER BY id ASC
       `,
     )
-    .all() as Array<{ id: number; superseded_by: number }>;
+    .all() as Array<{ id: number; superseded_by: number | null }>;
   checks.push({
     name: "data.dangling_superseded",
     severity: danglingSuperseded.length > 0 ? "warn" : "ok",
@@ -351,7 +367,7 @@ export function doctor(db: DB): DoctorResult {
         : "no dangling superseded_by",
     items:
       danglingSuperseded.length > 0
-        ? danglingSuperseded.map((r) => `${toEntryId(r.id)} -> ${toEntryId(r.superseded_by)}`)
+        ? danglingSuperseded.map((r) => `${formatEntryRef(r.id)} -> ${formatEntryRef(r.superseded_by)}`)
         : undefined,
   });
 
@@ -384,7 +400,7 @@ export function doctor(db: DB): DoctorResult {
       detail: noUlid.length > 0
         ? `found ${noUlid.length} entries without a ulid; restart the server (migrate() backfills them)`
         : "every entry has a ulid",
-      items: noUlid.length > 0 ? noUlid.map((r) => toEntryId(r.id)) : undefined,
+      items: noUlid.length > 0 ? noUlid.map((r) => formatEntryRef(r.id)) : undefined,
     });
   } else {
     checks.push({
@@ -408,7 +424,7 @@ export function doctor(db: DB): DoctorResult {
       detail: unresolved.length > 0
         ? `found ${unresolved.length} entry links that point at no existing entry`
         : "every entry link resolves",
-      items: unresolved.length > 0 ? unresolved.map((r) => `${toEntryId(r.entry_id)} -> ${JSON.stringify(r.ref_value)}`) : undefined,
+      items: unresolved.length > 0 ? unresolved.map((r) => `${formatEntryRef(r.entry_id)} -> ${JSON.stringify(r.ref_value)}`) : undefined,
     });
   } else {
     checks.push({
@@ -426,7 +442,7 @@ export function doctor(db: DB): DoctorResult {
       name: "data.duplicate_entry_ids",
       severity: dupIds.length > 0 ? "warn" : "ok",
       detail: dupIds.length > 0 ? `${dupIds.length} E-number(s) used by more than one entry` : "every E-number is unique",
-      items: dupIds.length > 0 ? dupIds.map((r) => `${toEntryId(r.id)} x${r.n}`) : undefined,
+      items: dupIds.length > 0 ? dupIds.map((r) => `${formatEntryRef(r.id)} x${r.n}`) : undefined,
     });
     const tomb = (db.prepare(`SELECT COUNT(*) AS c FROM entries WHERE deleted_at IS NOT NULL`).get() as { c: number }).c;
     checks.push({ name: "data.tombstones", severity: "ok", detail: `${tomb} tombstoned entr${tomb === 1 ? "y" : "ies"}` });
@@ -452,8 +468,8 @@ export function doctor(db: DB): DoctorResult {
         continue;
       }
       const c = s.coverage!;
-      if (c.unlinked_count > 0) unlinked.push(`${slug}: ${c.unlinked_count} not linked from ${toEntryId(c.hub.id)}`);
-      for (const x of c.expired) expired.push(`${slug}: ${toEntryId(x.from_id)} -> ${x.to_id !== null ? toEntryId(x.to_id) : x.to_ref}`);
+      if (c.unlinked_count > 0) unlinked.push(`${slug}: ${c.unlinked_count} not linked from ${formatEntryRef(c.hub.id)}`);
+      for (const x of c.expired) expired.push(`${slug}: ${formatEntryRef(x.from_id)} -> ${x.to_id !== null ? formatEntryRef(x.to_id) : x.to_ref}`);
     }
     checks.push({
       name: "hub.missing",
@@ -482,7 +498,7 @@ export function doctor(db: DB): DoctorResult {
       name: "sync.needs_merge",
       severity: nm.length > 0 ? "warn" : "ok",
       detail: nm.length > 0 ? `${nm.length} note(s) have edits the post office could not merge; pick the final text` : "no unmerged edits",
-      items: nm.length > 0 ? nm.map((r) => toEntryId(r.id)) : undefined,
+      items: nm.length > 0 ? nm.map((r) => formatEntryRef(r.id)) : undefined,
     });
   }
   if (hasCrrTables(db)) {
