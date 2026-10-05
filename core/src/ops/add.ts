@@ -5,7 +5,7 @@ import { insertEntryRow, insertEntryModules, insertRefs } from "../entry-write.j
 import { isSyncEnabled } from "../sync/state.js";
 import { resolveAllocator, allocateWithRetry, PostOfficeUnreachableError } from "../sync/allocator.js";
 import { newUlid } from "../ulid.js";
-import { findProject, notFound, type Project } from "../projects.js";
+import { currentProject, findProject, notFound, type Project } from "../projects.js";
 
 // ------------------------------------------------------------
 // Types
@@ -40,7 +40,11 @@ export interface AddEntryArgs {
   task_id?: string;
   refs?: RefInput[];
   assigned?: { ulid: string; id: number }; // internal: set only by addEntryAsync
-  /** The project to write into: its code or ULID (stage B1). Omitted = no project (series E). */
+  /**
+   * The project to write into: its code or ULID (stage B1). "none" = no project
+   * (series E). addEntryAsync defaults it to the folder's current project
+   * (.collab, spec P3); addEntry treats omitted as no project.
+   */
   project?: string;
 }
 
@@ -134,6 +138,7 @@ export function validateAddEntryArgs(args: AddEntryArgs): void {
 /** The project `args.project` names, or null; an unknown one throws ProjectNotFoundError listing the known codes. */
 function resolveProjectArg(db: DB, args: AddEntryArgs): Project | null {
   if (args.project === undefined || args.project === null || args.project === "") return null;
+  if (args.project.trim().toLowerCase() === "none") return null;
   const p = findProject(db, args.project);
   if (!p) throw notFound(db, args.project);
   return p;
@@ -226,6 +231,10 @@ export function addEntry(
 export async function addEntryAsync(db: DB, args: AddEntryArgs): Promise<AddEntryResult> {
   ensureCrsqlite(db);
   validateAddEntryArgs(args);
+  if (args.project === undefined) {
+    const cur = currentProject(db);
+    if (cur) args = { ...args, project: cur.ulid };
+  }
   // A solo-project note is numbered on this laptop: never an allocator call,
   // whatever sharing says (spec rule 4; team projects arrive with stage C).
   if (resolveProjectArg(db, args)) return addEntry(db, args);

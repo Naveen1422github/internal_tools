@@ -4,6 +4,7 @@
 // notes (SH-1, SH-2). Local only in B1: solo projects are numbered on this
 // laptop and never sent; team projects arrive with stage C.
 import type { DB } from "./db.js";
+import { collabStartDir, findCollabFile } from "./db.js";
 import { hasSeries } from "./schema.js";
 import { newUlid, SERIES_CODE_RE } from "./ulid.js";
 
@@ -35,7 +36,7 @@ const COLS = "ulid, name, code, mode, team, created_at";
 
 function needs0009(db: DB): void {
   if (!hasSeries(db)) {
-    throw new Error("[collab] projects needs migration 0009 (projects). Run `collab migrate` (or restart the MCP server) first.");
+    throw new Error("[collab] projects needs migration 0009 (projects). Restart the MCP server (or run `collab web` once): it applies migrations on start.");
   }
 }
 
@@ -62,6 +63,7 @@ export function createProject(db: DB, args: { name: string; code: string; mode?:
   const name = String(args.name ?? "").trim();
   if (!name) throw new Error("[collab] a project needs a name");
   const code = checkCode(args.code);
+  if (code === "NONE") throw new Error(`[collab] project code NONE is reserved ("project: none" means no project)`);
   const byName = nameClash(db, name);
   if (byName) {
     throw new ProjectClashError(`[collab] this notebook already has a project named "${byName.name}" (${byName.code}). ${FIXES}`);
@@ -109,4 +111,19 @@ export function notFound(db: DB, codeOrUlid: string, where?: string): ProjectNot
     `[collab] ${where ? `${where} names project` : "no project"} "${codeOrUlid}"${where ? ", which isn't in this notebook" : " in this notebook"}. ` +
       `Known: ${known.join(", ") || "none"}. See \`collab project list\`.`,
   );
+}
+
+/**
+ * The project the nearest .collab names (spec P3; walk from CLAUDE_PROJECT_DIR
+ * when set), or null when it names none (today's behaviour). Re-reads the
+ * file on every call: it is small, and the MCP server is long-lived. A ULID
+ * that isn't in this notebook is an error naming the file, never a silent
+ * fall back to the E series.
+ */
+export function currentProject(db: DB, opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): Project | null {
+  const found = findCollabFile(collabStartDir(opts));
+  if (!found || !found.project) return null;
+  const p = findProject(db, found.project);
+  if (!p) throw notFound(db, found.project, found.file);
+  return p;
 }

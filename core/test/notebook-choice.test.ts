@@ -102,6 +102,6 @@ test('findCollabFile walks up to the filesystem root and returns null when none'
   try {
     assert.equal(findCollabFile(w.nested), null);
     writeFileSync(join(w.root, '.collab'), 'notebook=emp1st');
-    assert.deepEqual(findCollabFile(w.nested), { file: join(w.root, '.collab'), name: 'emp1st' });
+    assert.deepEqual(findCollabFile(w.nested), { file: join(w.root, '.collab'), name: 'emp1st', project: null });
   } finally { w.done(); }
 });

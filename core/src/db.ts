@@ -54,22 +54,37 @@ export class UnknownNotebookError extends Error {
   }
 }
 
-/** Nearest .collab file at or above `startDir` (spec P7 rule 3: nearest wins). */
-export function findCollabFile(startDir: string): { file: string; name: string } | null {
+/**
+ * Nearest .collab file at or above `startDir` (spec P7 rule 3: nearest wins).
+ * `project` is the ULID on its `project = <ulid>` line (stage B1, spec P3), or null.
+ */
+export function findCollabFile(startDir: string): { file: string; name: string; project: string | null } | null {
   let dir = resolvePath(startDir);
   for (;;) {
     const file = join(dir, ".collab");
     if (existsSync(file)) {
+      let name: string | null = null;
+      let project: string | null = null;
       for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
-        const m = line.replace(/#.*/, "").match(/^\s*notebook\s*=\s*(\S+)\s*$/);
-        if (m) return { file, name: m[1] };
+        const clean = line.replace(/#.*/, "");
+        const m = clean.match(/^\s*notebook\s*=\s*(\S+)\s*$/);
+        if (m && name === null) name = m[1];
+        const p = clean.match(/^\s*project\s*=\s*(\S+)\s*$/);
+        if (p && project === null) project = p[1];
       }
-      throw new Error(`[collab] ${file} has no "notebook = <name>" line`);
+      if (name === null) throw new Error(`[collab] ${file} has no "notebook = <name>" line`);
+      return { file, name, project };
     }
     const up = dirname(dir);
     if (up === dir) return null;
     dir = up;
   }
+}
+
+/** Where the .collab walk starts: CLAUDE_PROJECT_DIR when set (spec J15a), else the working folder. */
+export function collabStartDir(opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): string {
+  const env = opts.env ?? process.env;
+  return env.CLAUDE_PROJECT_DIR || (opts.cwd ?? process.cwd());
 }
 
 /**
@@ -116,7 +131,7 @@ export function resolveDbPath(
   if (env.COLLAB_NOTEBOOK) {
     return { path: lookup(env.COLLAB_NOTEBOOK, "--notebook"), source: "notebook-flag", name: env.COLLAB_NOTEBOOK, ...none };
   }
-  const found = findCollabFile(cwd);
+  const found = findCollabFile(collabStartDir({ cwd, env }));
   if (env.COLLAB_DB_PATH) {
     const path = env.COLLAB_DB_PATH;
     let clash: DbPathResolution["clash"] = null;
