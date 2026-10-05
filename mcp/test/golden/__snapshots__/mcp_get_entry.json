@@ -1,4 +1,5 @@
 {
+  "ulid": "<ulid>",
   "id": "<id>",
   "type": "decision",
   "kind": "signal",
@@ -16,11 +17,13 @@
   "updated_at": "<ts>",
   "category": "Reference",
   "superseded_by": null,
-  "ulid": "<ulid>",
   "author": "<author>",
   "superseded_by_ulid": null,
+  "deleted_at": null,
+  "needs_merge": 0,
   "modules": [
     "demo"
   ],
-  "refs": []
+  "refs": [],
+  "superseded_target": null
 }
