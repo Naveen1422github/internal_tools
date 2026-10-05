@@ -167,7 +167,7 @@ export function doctor(db: DB): DoctorResult {
   // Copied: the 0007 line below adds to it, and the constants are shared.
   const expectedTables = new Set(has0006 ? EXPECTED_TABLES_0006
     : has0005 ? union(EXPECTED_TABLES, EXPECTED_TABLES_0005) : EXPECTED_TABLES);
-  const expectedIndexes = has0006 ? EXPECTED_INDEXES_0006
+  let expectedIndexes = has0006 ? EXPECTED_INDEXES_0006
     : has0005 ? union(EXPECTED_INDEXES, EXPECTED_INDEXES_0005) : EXPECTED_INDEXES;
   let expectedTriggers = has0006 ? EXPECTED_TRIGGERS_0006
     : has0005 ? union(EXPECTED_TRIGGERS, EXPECTED_TRIGGERS_0005) : EXPECTED_TRIGGERS;
@@ -176,6 +176,11 @@ export function doctor(db: DB): DoctorResult {
   if (applied("0007_sync_prep")) {
     expectedTables.add("sync_state");
     expectedTriggers = new Set([...expectedTriggers].filter((t) => t !== "trg_entries_revision"));
+  }
+  // 0009 adds the local projects table and the series/project indexes.
+  if (applied("0009_projects")) {
+    expectedTables.add("projects");
+    expectedIndexes = union(expectedIndexes, new Set(["idx_entries_series_id", "idx_entries_project", "idx_projects_name"]));
   }
   // A shared DB carries cr-sqlite's own bookkeeping (crsql_*, <t>__crsql_clock/
   // _pks/_itrig...). Those are the extension's, not ours: not "extra".

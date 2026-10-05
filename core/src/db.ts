@@ -5,6 +5,8 @@ import { backfillUlids } from "./backfill.js";
 import { preflight0006 } from "./preflight-0006.js";
 import { hasCrrTables, loadCrsqlite, isCrsqliteLoaded, ensureCrsqlite } from "./sync/extension.js";
 import { installSyncPing } from "./sync/ping.js";
+import { installGuardedTriggers } from "./sync/enable.js";
+import { isSyncEnabled } from "./sync/state.js";
 import { collabDataDir, readNotebookConfig, samePath, type NotebookConfig } from "./notebooks.js";
 import { installRoot } from "./install-root.js";
 
@@ -339,6 +341,12 @@ const BEFORE_MIGRATION: Record<string, (db: DB) => unknown> = {
   "0006_ulid_contract": preflight0006,
 };
 
+// JS that must run immediately AFTER a given migration's SQL.
+const AFTER_MIGRATION: Record<string, (db: DB) => unknown> = {
+  // The SQL file creates the unguarded ref trigger; a synced notebook needs the guarded one (E-643).
+  "0009_projects": (db) => { if (isSyncEnabled(db)) installGuardedTriggers(db); },
+};
+
 /** True when `table` is a cr-sqlite CRR in this file. */
 function isCrr(db: DB, table: string): boolean {
   return !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(`${table}__crsql_clock`);
@@ -351,6 +359,7 @@ function isCrr(db: DB, table: string): boolean {
  */
 const CRR_ALTERS: Record<string, string> = {
   "0008_revision_author": "entry_revisions",
+  "0009_projects": "entries",
 };
 
 function applyMigrations(db: DB, pending: Pending[]): string[] {
@@ -372,6 +381,7 @@ function applyMigrations(db: DB, pending: Pending[]): string[] {
       // Each migration file owns its BEGIN/COMMIT; we just exec.
       db.exec(sql);
     }
+    AFTER_MIGRATION[m.version]?.(db);
   }
   // Runs every startup, not only when 0005 applies: it repairs rows written by
   // paths that bypass core (scripts, the REST server). Cheap: WHERE ... IS NULL.
