@@ -36,6 +36,9 @@ export interface EntryRowInput {
   category?: string;
   rollup_of_task?: string | null;
   assigned?: { ulid: string; id: number }; // internal: pre-assigned by the post office
+  /** 0009+: a project's code; omitted = series E (the column default). */
+  series?: string;
+  project_ulid?: string | null;
 }
 
 export interface RefRowInput extends RefInput {
@@ -80,6 +83,17 @@ export function insertEntryRow(db: DB, row: EntryRowInput): InsertedEntry {
   ];
   const values: Record<string, unknown> = { ...row, rollup_of_task: row.rollup_of_task ?? null };
   if (row.category !== undefined) cols.push("category");
+
+  if (row.series !== undefined && row.series !== "E") {
+    // A solo-project note (stage B1): numbered on this laptop in its own
+    // series, never by the post office, whether or not sharing is on.
+    if (!hasSeries(db)) throw new Error("[collab] writing into a project needs migration 0009");
+    const ulid = newUlid();
+    const id = nextEntryNumber(db, row.series);
+    cols.push("ulid", "author", "id", "series", "project_ulid");
+    run(db, cols, { ...values, ulid, author: resolveAuthor(), id, series: row.series, project_ulid: row.project_ulid ?? null });
+    return { id, ulid };
+  }
 
   if (hasUlidPrimaryKey(db)) {
     if (row.assigned) {

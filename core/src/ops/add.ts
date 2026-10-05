@@ -5,6 +5,7 @@ import { insertEntryRow, insertEntryModules, insertRefs } from "../entry-write.j
 import { isSyncEnabled } from "../sync/state.js";
 import { resolveAllocator, allocateWithRetry, PostOfficeUnreachableError } from "../sync/allocator.js";
 import { newUlid } from "../ulid.js";
+import { findProject, notFound, type Project } from "../projects.js";
 
 // ------------------------------------------------------------
 // Types
@@ -39,6 +40,8 @@ export interface AddEntryArgs {
   task_id?: string;
   refs?: RefInput[];
   assigned?: { ulid: string; id: number }; // internal: set only by addEntryAsync
+  /** The project to write into: its code or ULID (stage B1). Omitted = no project (series E). */
+  project?: string;
 }
 
 // ------------------------------------------------------------
@@ -86,6 +89,9 @@ function decodeOnce(s: string): string {
 // ------------------------------------------------------------
 export type AddEntryResult = {
   id: number;
+  /** "E" for a note without a project, else the project's code (SH). */
+  series: string;
+  project: { code: string; name: string; mode: string } | null;
   taskTransition?: { id: string; from: TaskStatus; to: TaskStatus };
   normalizedDescription?: boolean;
 };
@@ -125,12 +131,21 @@ export function validateAddEntryArgs(args: AddEntryArgs): void {
   }
 }
 
+/** The project `args.project` names, or null; an unknown one throws ProjectNotFoundError listing the known codes. */
+function resolveProjectArg(db: DB, args: AddEntryArgs): Project | null {
+  if (args.project === undefined || args.project === null || args.project === "") return null;
+  const p = findProject(db, args.project);
+  if (!p) throw notFound(db, args.project);
+  return p;
+}
+
 export function addEntry(
   db: DB,
   args: AddEntryArgs,
 ): AddEntryResult {
   ensureCrsqlite(db);
   validateAddEntryArgs(args);
+  const project = resolveProjectArg(db, args);
 
   // Repair a double-encoded description before anything downstream sees it --
   // including estimateTokens, which would otherwise count the escape sequences.
@@ -171,6 +186,7 @@ export function addEntry(
       tokens_estimate: tokens,
       category,
       assigned: a.assigned,
+      ...(project ? { series: project.code, project_ulid: project.ulid } : {}),
     });
     insertEntryModules(db, owner, orderedModules, primaryModule);
     insertRefs(db, owner, a.refs ?? []);
@@ -192,6 +208,8 @@ export function addEntry(
 
   return {
     id,
+    series: project ? project.code : "E",
+    project: project ? { code: project.code, name: project.name, mode: project.mode } : null,
     ...(taskTransition ? { taskTransition } : {}),
     // Surfaced so the caller can report the repair rather than silently
     // rewriting what the author submitted.
@@ -208,6 +226,9 @@ export function addEntry(
 export async function addEntryAsync(db: DB, args: AddEntryArgs): Promise<AddEntryResult> {
   ensureCrsqlite(db);
   validateAddEntryArgs(args);
+  // A solo-project note is numbered on this laptop: never an allocator call,
+  // whatever sharing says (spec rule 4; team projects arrive with stage C).
+  if (resolveProjectArg(db, args)) return addEntry(db, args);
   if (!isSyncEnabled(db)) return addEntry(db, args);
   const allocator = resolveAllocator(db);
   if (!allocator) throw new PostOfficeUnreachableError("no post office connection is configured on this machine");
