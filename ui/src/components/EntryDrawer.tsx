@@ -1,15 +1,19 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useUi } from '../store/ui';
-import { getEntry, upsertEntry, supersede, deleteEntry, type Entry } from '../api/client';
+import { getEntry, entryByUlid, upsertEntry, supersede, deleteEntry, type Entry, type EntryRef, type LinkTarget } from '../api/client';
 import Drawer from './Drawer';
 import Markdown from './Markdown';
 import { useSyncOverview } from '../sync/useSyncOverview';
 import { shareLabel, saveNote, SHARED_LABEL, PRIVATE_LABEL } from '../sync/view';
-import { formatEntryRef } from '../format';
+import { formatEntryRef, parseEntryRef } from '../format';
+
+// Re-read the open note: by ULID when it has one (two notes can share a number).
+const reload = (e: Entry) => (e.ulid ? entryByUlid(e.ulid) : getEntry(e.id));
 
 export default function EntryDrawer() {
-  const { drawerEntryId, closeDrawer, openDrawer } = useUi();
+  const { drawerEntry, closeDrawer, openDrawer } = useUi();
+  const drawerKey = drawerEntry ? ('ulid' in drawerEntry ? `ulid:${drawerEntry.ulid}` : `id:${drawerEntry.id}`) : null;
   const [entry, setEntry] = useState<Entry | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -18,10 +22,10 @@ export default function EntryDrawer() {
   const sync = useSyncOverview();
 
   useEffect(() => {
-    if (drawerEntryId) {
+    if (drawerEntry) {
       setLoading(true);
       setError(null);
-      getEntry(drawerEntryId)
+      ('ulid' in drawerEntry ? entryByUlid(drawerEntry.ulid) : getEntry(drawerEntry.id))
         .then(res => {
           setEntry(res);
           setEditData(res);
@@ -32,7 +36,9 @@ export default function EntryDrawer() {
       setEntry(null);
       setIsEditing(false);
     }
-  }, [drawerEntryId]);
+    // drawerKey stands for drawerEntry: a new object with the same target must not reload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawerKey]);
 
   const handleSave = async () => {
     if (!entry) return;
@@ -40,7 +46,7 @@ export default function EntryDrawer() {
       const res = await upsertEntry({ ...editData, id: entry.id });
       if (res.ok) {
         setIsEditing(false);
-        const updated = await getEntry(entry.id);
+        const updated = await reload(entry);
         setEntry(updated);
       }
     } catch (err: any) {
@@ -59,7 +65,7 @@ export default function EntryDrawer() {
       try {
         const res = await supersede([entry.id], byId);
         if (res.ok) {
-          const updated = await getEntry(entry.id);
+          const updated = await reload(entry);
           setEntry(updated);
         }
       } catch (err: any) {
@@ -83,7 +89,7 @@ export default function EntryDrawer() {
   };
 
   return (
-    <Drawer open={!!drawerEntryId} onClose={closeDrawer}>
+    <Drawer open={!!drawerEntry} onClose={closeDrawer}>
       {loading && <div className="p-4 text-gray-500 animate-pulse">Loading entry...</div>}
       {error && <div className="p-4 text-red-500">Error: {error}</div>}
       {entry && (
@@ -125,9 +131,14 @@ export default function EntryDrawer() {
             </div>
           )}
 
-          {entry.superseded_by && (
+          {(entry.superseded_by || entry.superseded_target) && (
             <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded text-sm text-amber-800 dark:text-amber-200 flex items-center justify-between">
-              <span>Superseded by <button onClick={() => openDrawer(entry.superseded_by!)} className="font-mono font-bold underline">{formatEntryRef(entry.superseded_by)}</button></span>
+              <span>Superseded by {entry.superseded_target ? (
+                <TargetLink target={entry.superseded_target} fallback={entry.superseded_by ?? null}
+                  onOpen={openDrawer} className="font-mono font-bold underline" />
+              ) : (
+                <button onClick={() => openDrawer(entry.superseded_by!)} className="font-mono font-bold underline">{formatEntryRef(entry.superseded_by)}</button>
+              )}</span>
               <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 bg-amber-200 dark:bg-amber-800 rounded">Legacy</span>
             </div>
           )}
@@ -189,19 +200,13 @@ export default function EntryDrawer() {
               <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">References</h3>
               <ul className="space-y-1">
                 {entry.refs.map((ref, i) => {
-                  const isEntry = ref.ref_type === 'entry' && !isNaN(parseInt(ref.ref_value));
                   const isUrl = ref.ref_type === 'url' && (ref.ref_value.startsWith('http') || ref.ref_value.startsWith('/'));
                   
                   return (
                     <li key={i} className="text-sm flex gap-2">
                       <span className="text-gray-400 font-mono text-[10px] uppercase w-12 pt-0.5">{ref.ref_type}</span>
-                      {isEntry ? (
-                        <button 
-                          onClick={() => openDrawer(parseInt(ref.ref_value))}
-                          className="font-medium text-blue-600 dark:text-blue-400 hover:underline text-left"
-                        >
-                          {formatEntryRef(parseInt(ref.ref_value))}
-                        </button>
+                      {ref.ref_type === 'entry' ? (
+                        <EntryLink entryRef={ref} onOpen={openDrawer} />
                       ) : isUrl ? (
                         <a 
                           href={ref.ref_value} 
@@ -244,4 +249,36 @@ export default function EntryDrawer() {
       )}
     </Drawer>
   );
+}
+
+const LINK_CLASS = "font-medium text-blue-600 dark:text-blue-400 hover:underline text-left";
+
+/**
+ * A link to another note (J17). With a target (0005+) it is followed by ULID;
+ * without one (older file or unresolved) it is parsed like core does, so
+ * E-214, #214 and 214 all open by number.
+ */
+function EntryLink({ entryRef, onOpen }: { entryRef: EntryRef; onOpen: (t: number | { ulid: string }) => void }) {
+  const n = parseEntryRef(entryRef.ref_value);
+  if (entryRef.target) {
+    return <TargetLink target={entryRef.target} fallback={n} label={entryRef.ref_value} onOpen={onOpen} className={LINK_CLASS} />;
+  }
+  if (n === null) return <span className="font-medium text-gray-700 dark:text-gray-300 break-all">{entryRef.ref_value}</span>;
+  return <button onClick={() => onOpen(n)} className={LINK_CLASS}>{formatEntryRef(n)}</button>;
+}
+
+/**
+ * A resolved link: a button that opens the note by ULID ("(deleted)" on a
+ * tombstone, D5b), or plain text when the note isn't on this laptop.
+ */
+function TargetLink({ target, fallback, label, onOpen, className }: {
+  target: LinkTarget; fallback: number | null; label?: string;
+  onOpen: (t: number | { ulid: string }) => void; className: string;
+}) {
+  if (!target.present) {
+    const shown = fallback !== null ? formatEntryRef(fallback) : (label ?? formatEntryRef(null));
+    return <span className="text-gray-500">{`${shown} · not on this laptop`}</span>;
+  }
+  const text = `${formatEntryRef(target.id)}${target.title ? ` · ${target.title}` : ''}${target.deleted ? ' (deleted)' : ''}`;
+  return <button onClick={() => onOpen({ ulid: target.ulid })} className={className}>{text}</button>;
 }
