@@ -122,6 +122,18 @@ Found while writing this spec: an `E-` number means "this notebook's own" and wo
 | J18 | With J16, "add my old notes to the team" (E-761's later item) moves into piece 2: `collab share <module> --team <code>` on a module with own notes lists them, asks for confirmation, then renumbers them into the team with aliases and sends them. Starting a team from a notebook (`--upload-existing`) uses the same path. |
 | J19 | Upgrade of today's team: the notes already shared under `E-` (portfolio: E-00729, E-00730) are renumbered into today's team code with aliases, on the post office first, then on every laptop as the change arrives, so no member can ever hold two notes called `E-729`. |
 
+## After the spikes (2026-10-05)
+
+Spike verdict: `docs/superpowers/specs/2026-10-05-collab-join-spikes-verdict.md` (branch `collab-join-spikes`). S2 TRUE with gaps, S3 TRUE, J17 holds for storage but not for readers (93 number-taking sites).
+
+| # | Decision (user, collab E-766/E-767) |
+|---|---|
+| J20 | **Known limitation, accepted for now:** moving a note's primary module from one team's module to another team's leaves the old team a frozen copy, and the new team may receive a hollow note if teammates wrote cells (S2-5a/5b). No restriction in piece 2; revisit later (send the whole current row to the new team and retire it toward the old one). |
+| J21 | **Known limitation, accepted for now:** a team note's links carry the target's number + ULID, and its secondary module tags carry other modules' slugs to the team (S2-4). Unchanged in piece 2; revisit later (filter out-of-team tags; show links from `target_ulid` as "not shared with you"). |
+| J22 | Notes in shared modules are only ever tombstoned (`deleted_at`), never hard-deleted; every hard-delete path refuses them (S2-6b: hard deletes never travel under the module filter). Private notes unchanged. |
+| J23 | The post office address must survive the host laptop changing network (E-767). Done before piece 2: the courier re-reads the address on every use, and `collab sync set-address <url>` changes it after checking the pinned certificate. In stage D: LAN self-healing (the post office announces itself with its fingerprint; a laptop that loses it rediscovers it and accepts only the pinned fingerprint). A host laptop's own connection uses `https://127.0.0.1:<port>`. |
+| J24 | Build in four stages, each tested on Windows and merged before the next: **A** one `formatEntryRef` + every link reader by ULID (J17 conversion, no visible change); **B** migration 0009 `series`, local `E` allocation, aliases (J8, J12, J16-J19); **C** teams table, two keys, multi-connection courier (J6, J7, J10, J11, J22); **D** join/leave, web welcome, move-over, LAN self-healing (J1-J5, J13, J14, J23). |
+
 ## Risks and open items
 
 - Series-aware note numbers touch every place that takes an E-number (MCP tools, REST, UI routes, refs, hub links, golden tests). The plan must inventory call sites before changing `parseEntryRef`'s shape, and keep bare numbers working everywhere.
