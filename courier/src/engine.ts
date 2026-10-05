@@ -49,7 +49,17 @@ const changeKey = (w: WireChange) => `${w.site_id}|${w.db_version}|${w.seq}|${w.
 
 export class Courier {
   readonly db: Database.Database;
-  readonly target: PostOfficeTarget;
+  /** The address as of start; used only if the notes DB loses it (never expected). */
+  private readonly startTarget: PostOfficeTarget;
+  /**
+   * Read fresh from the notes DB on every use (collab E-767): a laptop-hosted
+   * post office changes address with its host's network, and a corrected
+   * address must take effect on the next retry or reconnect, not after a
+   * restart. Four tiny local reads per request.
+   */
+  get target(): PostOfficeTarget {
+    return (this.db.open && postOfficeTargetFromDb(this.db)) || this.startTarget;
+  }
   private readonly opt: Required<Omit<CourierOptions, "log" | "onStatus">> & Pick<CourierOptions, "log" | "onStatus">;
   private st: CourierStatus = { state: "starting", lastError: null, lastPushAt: null, lastPullAt: null, sentTotal: 0, receivedTotal: 0 };
   private stream: EventStream | null = null;
@@ -72,7 +82,7 @@ export class Courier {
       if (!isSyncEnabled(this.db)) throw new Error(`${opts.dbPath} does not share notes yet: run \`collab sync setup <join code>\` first`);
       const t = postOfficeTargetFromDb(this.db);
       if (!t) throw new Error(`${opts.dbPath} has no post office configured: run \`collab sync setup <join code>\` first`);
-      this.target = t;
+      this.startTarget = t;
     } catch (e) {
       this.closeDb();
       throw e;
