@@ -24,9 +24,11 @@ testAtEachLevel('E- and # links to existing entries are not orphans', (db) => {
     { ref_type: 'entry', ref_value: `E-${String(a).padStart(5, '0')}` }] });
   assert.equal(check(db, 'data.orphan_refs.entry').severity, 'ok');
   addEntry(db, { type: 'decision', title: 'c', summary: 's', refs: [{ ref_type: 'entry', ref_value: 'E-99999' }] });
-  const c = check(db, 'data.orphan_refs.entry');
+  // 0005+ (J17): a link that resolved to no ULID is reported once, as unresolved, not as an orphan.
+  assert.equal(check(db, 'data.orphan_refs.entry').severity, 'ok');
+  const c = check(db, 'data.unresolved_entry_refs');
   assert.equal(c.severity, 'warn');
-  assert.match(String(c.items![0]), /-> E-99999/);
+  assert.match(String(c.items![0]), /-> "E-99999"/);
   assertFtsIntact(db);
 });
 

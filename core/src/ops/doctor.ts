@@ -263,13 +263,23 @@ export function doctor(db: DB): DoctorResult {
   );
   // refs.entry_id is legacy/nullable from 0006 on; the owner is entry_ulid.
   const ownerId = has0005 ? `(SELECT e.id FROM entries e WHERE e.ulid = refs.entry_ulid)` : `entry_id`;
-  const orphanEntryRefs = (
-    db.prepare(`SELECT ${ownerId} AS entry_id, ref_value FROM refs WHERE ref_type = 'entry' ORDER BY 1 ASC, ref_value ASC`)
-      .all() as Array<{ entry_id: number | null; ref_value: string }>
-  ).filter((r) => {
-    const target = parseEntryRef(r.ref_value);
-    return target === null || !liveIds.has(target);
-  });
+  // 0005+ (J17): a link is followed by target_ulid, so it is an orphan only when
+  // that ULID names no row. target_ulid NULL is reported by
+  // data.unresolved_entry_refs (check 11), not counted twice here.
+  const orphanEntryRefs = has0005
+    ? (db.prepare(
+        `SELECT ${ownerId} AS entry_id, ref_value FROM refs
+          WHERE ref_type = 'entry' AND target_ulid IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM entries t WHERE t.ulid = refs.target_ulid)
+          ORDER BY 1 ASC, ref_value ASC`,
+      ).all() as Array<{ entry_id: number | null; ref_value: string }>)
+    : (
+        db.prepare(`SELECT ${ownerId} AS entry_id, ref_value FROM refs WHERE ref_type = 'entry' ORDER BY 1 ASC, ref_value ASC`)
+          .all() as Array<{ entry_id: number | null; ref_value: string }>
+      ).filter((r) => {
+        const target = parseEntryRef(r.ref_value);
+        return target === null || !liveIds.has(target);
+      });
   checks.push({
     name: "data.orphan_refs.entry",
     severity: orphanEntryRefs.length > 0 ? "warn" : "ok",
@@ -327,10 +337,19 @@ export function doctor(db: DB): DoctorResult {
     items: orphanTaskEntries.length > 0 ? orphanTaskEntries.map((r) => r.id) : undefined,
   });
 
-  // 8) data.dangling_superseded — superseded_by points to a non-existent entry
+  // 8) data.dangling_superseded — superseded_by points to a non-existent entry.
+  //    0005+ (J17): followed by superseded_by_ulid; before that, by the number.
   const danglingSuperseded = db
     .prepare(
+      has0005
+        ? `
+        SELECT id, superseded_by
+        FROM entries
+        WHERE superseded_by_ulid IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM entries t WHERE t.ulid = entries.superseded_by_ulid)
+        ORDER BY id ASC
       `
+        : `
         SELECT id, superseded_by
         FROM entries
         WHERE superseded_by IS NOT NULL
@@ -338,7 +357,7 @@ export function doctor(db: DB): DoctorResult {
         ORDER BY id ASC
       `,
     )
-    .all() as Array<{ id: number; superseded_by: number }>;
+    .all() as Array<{ id: number; superseded_by: number | null }>;
   checks.push({
     name: "data.dangling_superseded",
     severity: danglingSuperseded.length > 0 ? "warn" : "ok",
