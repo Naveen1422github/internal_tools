@@ -1,7 +1,7 @@
 import type { DB } from "../db.js";
-import { estimateTokens } from "../db.js";
+import { estimateTokens, hasUlidColumns } from "../db.js";
 import type { EntryType, Agent, RefInput } from "./add.js";
-import { insertEntryRow, insertRefs, ownerOf } from "../entry-write.js";
+import { insertEntryRow, insertRefs, ownerOf, type RefRowInput } from "../entry-write.js";
 import { liveEntry, hasUlidPrimaryKey } from "../schema.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { formatEntryRef } from "../entry-ref.js";
@@ -191,6 +191,23 @@ function formatRollupBody(group: RollupGroup): { summary: string; description: s
 // row the rollup's `entry` refs resolve to) and updated by ulid (ruling F3).
 // Before 0006, id is unique and the update stays by id.
 // ------------------------------------------------------------
+/**
+ * `entry` refs to the originals, each carrying its target's ULID (J17) so the
+ * link never depends on the number-parsing trigger. Same tie-break as getEntry
+ * (live first, then lowest ulid). ref_value stays the bare number, as before.
+ * Pre-0005 there is no ULID to carry.
+ */
+function linksTo(db: DB, entryIds: number[]): RefRowInput[] {
+  if (!hasUlidColumns(db)) return entryIds.map((id) => ({ ref_type: "entry" as const, ref_value: String(id) }));
+  const order = hasUlidPrimaryKey(db) ? "ORDER BY deleted_at IS NOT NULL, ulid" : "ORDER BY ulid"; // deleted_at: 0006+
+  const stmt = db.prepare(`SELECT ulid FROM entries WHERE id = ? ${order} LIMIT 1`);
+  return entryIds.map((id) => ({
+    ref_type: "entry" as const,
+    ref_value: String(id),
+    target_ulid: (stmt.get(id) as { ulid: string } | undefined)?.ulid ?? null,
+  }));
+}
+
 const DEPRECATE_CHUNK_SIZE = 900; // each row uses 1 param
 
 function deprecateOriginals(db: DB, entryIds: number[]): void {
@@ -272,8 +289,8 @@ export function rollup(db: DB, args: RollupArgs): RollupResult {
     });
     const newId = owner.id;
 
-    // 1. Link the rollup to its originals (trigger/backfill resolve target_ulid).
-    insertRefs(db, owner, group.entry_ids.map((id) => ({ ref_type: "entry" as const, ref_value: String(id) })));
+    // 1. Link the rollup to its originals, by ULID (J17).
+    insertRefs(db, owner, linksTo(db, group.entry_ids));
 
     // 2. Batch deprecate original entries
     deprecateOriginals(db, group.entry_ids);
@@ -409,8 +426,8 @@ export function archive(db: DB, args: ArchiveArgs): RollupResult {
     });
     const newId = owner.id;
 
-    // Link the breadcrumb to the originals it archived.
-    insertRefs(db, owner, group.entry_ids.map((id) => ({ ref_type: "entry" as const, ref_value: String(id) })));
+    // Link the breadcrumb to the originals it archived, by ULID (J17).
+    insertRefs(db, owner, linksTo(db, group.entry_ids));
 
     // Deprecate the originals (they stay searchable with include_deprecated=true).
     deprecateOriginals(db, group.entry_ids);
