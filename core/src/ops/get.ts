@@ -1,6 +1,7 @@
 import type { DB } from "../db.js";
 import { hasUlidColumns } from "../db.js";
-import { hasUlidPrimaryKey } from "../schema.js";
+import { hasSeries, hasUlidPrimaryKey } from "../schema.js";
+import type { NoteRef } from "../ulid.js";
 
 /** The note at the other end of a link, found by its ULID (J17). */
 export interface LinkTarget {
@@ -47,14 +48,22 @@ export interface EntryFull {
 type EntryRow = Omit<EntryFull, "refs" | "modules" | "superseded_target"> & { ulid: string; superseded_by_ulid?: string | null };
 
 export function getEntry(db: DB, id: number): EntryFull | null {
+  // A bare number means series E (stage B1); project notes need their series.
+  return getEntryByRef(db, { series: "E", id });
+}
+
+/** The note `SH-12` / `E-00760` (getEntry with a series). Before 0009 only series E exists. */
+export function getEntryByRef(db: DB, ref: NoteRef): EntryFull | null {
   // A tombstoned entry is still returned, with deleted_at set (decision D5b):
   // links like E-214 keep showing what they pointed at. If an E-number is
   // ever shared, prefer the live entry, then the lowest ulid. (deleted_at only
   // exists from 0006 on.)
+  const series = hasSeries(db);
+  if (!series && ref.series !== "E") return null;
   const order = hasUlidPrimaryKey(db) ? "ORDER BY deleted_at IS NOT NULL, ulid" : "";
-  const row = db
-    .prepare(`SELECT * FROM entries WHERE id = ? ${order} LIMIT 1`)
-    .get(id) as EntryRow | undefined;
+  const row = (series
+    ? db.prepare(`SELECT * FROM entries WHERE id = ? AND series = ? ${order} LIMIT 1`).get(ref.id, ref.series)
+    : db.prepare(`SELECT * FROM entries WHERE id = ? ${order} LIMIT 1`).get(ref.id)) as EntryRow | undefined;
   return row ? assemble(db, row) : null;
 }
 
