@@ -6,6 +6,7 @@ import Drawer from './Drawer';
 import Markdown from './Markdown';
 import { useSyncOverview } from '../sync/useSyncOverview';
 import { shareLabel, saveNote, SHARED_LABEL, PRIVATE_LABEL } from '../sync/view';
+import { formatEntryRef } from '../format';
 
 export default function EntryDrawer() {
   const { drawerEntryId, closeDrawer, openDrawer } = useUi();
@@ -114,7 +115,7 @@ export default function EntryDrawer() {
                   );
                 })()}
              </div>
-             <div className="text-xs font-mono text-gray-400">E-{String(entry.id).padStart(5, '0')}</div>
+             <div className="text-xs font-mono text-gray-400">{formatEntryRef(entry.id)}</div>
           </header>
 
           {entry.needs_merge === 1 && (
@@ -126,7 +127,7 @@ export default function EntryDrawer() {
 
           {entry.superseded_by && (
             <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded text-sm text-amber-800 dark:text-amber-200 flex items-center justify-between">
-              <span>Superseded by <button onClick={() => openDrawer(entry.superseded_by!)} className="font-mono font-bold underline">E-{String(entry.superseded_by).padStart(5, '0')}</button></span>
+              <span>Superseded by <button onClick={() => openDrawer(entry.superseded_by!)} className="font-mono font-bold underline">{formatEntryRef(entry.superseded_by)}</button></span>
               <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 bg-amber-200 dark:bg-amber-800 rounded">Legacy</span>
             </div>
           )}
@@ -199,7 +200,7 @@ export default function EntryDrawer() {
                           onClick={() => openDrawer(parseInt(ref.ref_value))}
                           className="font-medium text-blue-600 dark:text-blue-400 hover:underline text-left"
                         >
-                          E-{ref.ref_value.padStart(5, '0')}
+                          {formatEntryRef(parseInt(ref.ref_value))}
                         </button>
                       ) : isUrl ? (
                         <a 

@@ -1,6 +1,7 @@
 import type { DB } from "../db.js";
 import { liveEntry } from "../schema.js";
 import type { EntryType } from "./add.js";
+import { formatEntryRef } from "../entry-ref.js";
 
 export interface ExportArgs {
   format: "json" | "markdown";
@@ -57,10 +58,6 @@ function parseSince(since: string): string {
   return d.toISOString().slice(0, 19).replace("T", " ");
 }
 
-function toEntryId(id: number): string {
-  return `E-${String(id).padStart(5, "0")}`;
-}
-
 function nonEmptyFilters(args: ExportArgs): Record<string, unknown> {
   const filters: Record<string, unknown> = {};
   if (args.module) filters.module = args.module;
@@ -98,7 +95,7 @@ function renderMarkdown(
   lines.push("");
 
   for (const e of entries) {
-    lines.push(`## [${toEntryId(e.id)}] ${e.type} — ${e.title}`);
+    lines.push(`## [${formatEntryRef(e.id)}] ${e.type} — ${e.title}`);
 
     const metaBits: string[] = [];
     if (e.agent) metaBits.push(`agent: ${e.agent}`);
@@ -107,7 +104,7 @@ function renderMarkdown(
     else if (e.module) metaBits.push(`module: ${e.module}`);
     if (e.task_id) metaBits.push(`task: ${e.task_id}`);
     if (e.status) metaBits.push(`status: ${e.status}`);
-    if (e.superseded_by != null) metaBits.push(`superseded by: ${toEntryId(e.superseded_by)}`);
+    if (e.superseded_by != null) metaBits.push(`superseded by: ${formatEntryRef(e.superseded_by)}`);
     lines.push(
       `- created: ${e.created_at}${metaBits.length > 0 ? " | " + metaBits.join(" | ") : ""}`,
     );

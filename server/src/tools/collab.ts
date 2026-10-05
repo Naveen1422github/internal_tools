@@ -3,7 +3,7 @@ import {
   getDb, SLUG_REGEX, validateEntryInput, buildFtsMatch,
   addEntry, addEntryAsync, getEntry, deleteEntry, supersede, doctor,
   editEntry, EntryNotFoundError, reassignModule, upsertModule, deleteModule,
-  liveEntry, ftsJoin, readSyncOverview, NeedsMergeError,
+  liveEntry, ftsJoin, readSyncOverview, NeedsMergeError, formatEntryRef,
 } from '@collab-mcp/core';
 
 const db = getDb();
@@ -461,7 +461,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       lines.push(`**Filter:** module=${moduleFilter || '(any)'}, since=${since || '(any)'}`);
       lines.push(`**Count:** ${entries.length}`, '');
       for (const e of entries) {
-        lines.push(`## E-${String(e.id).padStart(5,'0')} — ${e.title}`);
+        lines.push(`## ${formatEntryRef(e.id)} — ${e.title}`);
         lines.push(`- type: ${e.type} | category: ${e.category || '-'} | agent: ${e.agent || '?'} | modules: ${(e.modules || []).join(', ') || e.module || '-'} | task: ${e.task_id || '-'} | ${e.created_at}`);
         lines.push('', e.summary || '', '');
         if (e.description) lines.push(e.description, '');

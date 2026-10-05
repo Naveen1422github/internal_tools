@@ -7,7 +7,7 @@
  *
  * Safe to re-run — idempotent seed (uses INSERT OR IGNORE on titles).
  */
-import { getDb, migrate, addEntry, closeDb, searchEntries } from "@collab-mcp/core";
+import { getDb, migrate, addEntry, closeDb, searchEntries, formatEntryRef } from "@collab-mcp/core";
 
 const db = getDb();
 migrate(db);
@@ -76,7 +76,7 @@ function show(label: string, result: ReturnType<typeof searchEntries>) {
   console.log(`\n=== ${label} ===`);
   console.log(`auto_expanded=${result.auto_expanded} total_tokens=${result.total_tokens} count=${result.results.length}`);
   for (const r of result.results) {
-    console.log(`  [E-${String(r.id).padStart(5, "0")}] ${r.type} · ${r.title}`);
+    console.log(`  [${formatEntryRef(r.id)}] ${r.type} · ${r.title}`);
     console.log(`    summary: ${r.summary}`);
     if (r.description) console.log(`    body: ${r.description.slice(0, 120)}…`);
   }

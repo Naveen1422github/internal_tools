@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import Database from "better-sqlite3";
-import { generateSelfSignedCert, formatJoinCode, describeMemberState, TEAM_STATUS_NOTE } from "@collab-mcp/core";
+import { generateSelfSignedCert, formatJoinCode, describeMemberState, TEAM_STATUS_NOTE, formatEntryRef } from "@collab-mcp/core";
 import {
   createStore, openStore, closeStore, addMember, revokeMember, teamStatus, setModuleShared, sharedModules,
   nextNumber, JOIN_TTL_HOURS, StoreError, type Store,
@@ -26,8 +26,6 @@ export const USAGE = `collab-post-office: the sync v1 post office
   share <module> | unshare <module> | modules
 
 Every command takes --data <dir> (default: ${defaultDataDir()}).`;
-
-const pad = (n: number) => `E-${String(n).padStart(5, "0")}`;
 
 function parseArgs(argv: string[]): { pos: string[]; opt: Record<string, string | true> } {
   const pos: string[] = [];
@@ -105,7 +103,7 @@ export async function runCli(argv: string[], io: Io): Promise<{ code: number; of
         io.out(`  key.pem      the certificate's private key: keep it private`);
         io.out(`  config.json  address ${url}`);
         io.out(`certificate fingerprint: ${cert.fingerprint}`);
-        io.out(`the next new note will be ${pad(seed + 1)}`);
+        io.out(`the next new note will be ${formatEntryRef(seed + 1)}`);
         io.out(`next: collab-post-office serve, then collab-post-office add-member "<machine name>" for each machine`);
         io.out(`to remove it: stop serve and delete ${dir}`);
         return { code: 0 };
@@ -151,7 +149,7 @@ export async function runCli(argv: string[], io: Io): Promise<{ code: number; of
       case "status": {
         const cfg = readConfig(dir);
         withStore(dir, (s) => {
-          io.out(`post office ${cfg.url}   deliveries ${lastSeq(s)}   next new note ${pad(nextNumber(s))}`);
+          io.out(`post office ${cfg.url}   deliveries ${lastSeq(s)}   next new note ${formatEntryRef(nextNumber(s))}`);
           const shared = sharedModules(s);
           io.out(`shared modules: ${shared.length ? shared.join(", ") : "(none yet: collab-post-office share <module>)"}`);
           const rows = teamStatus(s);

@@ -3,6 +3,7 @@ import { upsertEntry, type Entry } from '../api/client';
 import { useUi } from '../store/ui';
 import { useSyncOverview } from '../sync/useSyncOverview';
 import { saveNote } from '../sync/view';
+import { formatEntryRef } from '../format';
 
 const TYPES = ['handoff', 'review', 'proposal', 'counter', 'decision', 'gotcha', 'session-note', 'changelog'];
 
@@ -50,7 +51,7 @@ export default function DraftCard({ draft }: { draft: Partial<Entry>; validation
       <div className="rounded-lg border border-green-200 dark:border-green-900/40 bg-green-50 dark:bg-green-900/20 px-3 py-2 text-sm">
         Saved as{' '}
         <button onClick={() => openDrawer(savedId)} className="font-mono font-bold underline text-green-700 dark:text-green-300">
-          E-{String(savedId).padStart(5, '0')}
+          {formatEntryRef(savedId)}
         </button>
       </div>
     );

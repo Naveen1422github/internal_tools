@@ -6,7 +6,7 @@
  * Run:
  *   npx tsx src/scripts/seed.ts
  */
-import { getDb, migrate, closeDb, addEntry } from "@collab-mcp/core";
+import { getDb, migrate, closeDb, addEntry, formatEntryRef } from "@collab-mcp/core";
 
 const db = getDb(undefined, { create: true });
 migrate(db);
@@ -68,7 +68,7 @@ seeded.push(
 
 console.log(
   `[seed] inserted ${seeded.length} entries: ${seeded
-    .map((id) => `E-${String(id).padStart(5, "0")}`)
+    .map((id) => formatEntryRef(id))
     .join(", ")}`
 );
 closeDb();

@@ -6,6 +6,7 @@ import { ownerOf, insertRefs, deleteRef } from "../entry-write.js";
 import { snapshotForRevision, finishRevision } from "../revisions.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { assertHeads, NeedsMergeError } from "./merge.js";
+import { formatEntryRef } from "../entry-ref.js";
 
 // ------------------------------------------------------------
 // Types
@@ -106,7 +107,7 @@ export function resolveNeedsMerge(db: DB, id: number, expectedHeads: string[]): 
   if (!owner || !owner.ulid) throw new Error(`no entry found with id ${id}`);
   db.transaction(() => {
     const before = snapshotForRevision(db, owner.ulid as string);
-    if (!before || before.needs_merge !== 1) throw new Error(`E-${id} is not waiting for a merge`);
+    if (!before || before.needs_merge !== 1) throw new Error(`${formatEntryRef(id)} is not waiting for a merge`);
     assertHeads(db, id, owner.ulid as string, expectedHeads);
     finishRevision(db, before);
   })();

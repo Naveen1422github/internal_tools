@@ -4,6 +4,7 @@ import type { EntryType, Agent, RefInput } from "./add.js";
 import { insertEntryRow, insertRefs, ownerOf } from "../entry-write.js";
 import { liveEntry, hasUlidPrimaryKey } from "../schema.js";
 import { ensureCrsqlite } from "../sync/extension.js";
+import { formatEntryRef } from "../entry-ref.js";
 
 // ------------------------------------------------------------
 // Public types
@@ -171,7 +172,7 @@ function formatRollupBody(group: RollupGroup): { summary: string; description: s
   }
   const sections = Array.from(byType.entries()).map(([t, es]) => {
     const lines = es.map((e) => {
-      const id = `[E-${String(e.id).padStart(5, "0")}]`;
+      const id = `[${formatEntryRef(e.id)}]`;
       const date = e.created_at.slice(0, 10);
       const agent = e.agent ? `${e.agent}: ` : "";
       return `- ${id} ${date} | ${agent}${e.title} — ${e.summary}`;

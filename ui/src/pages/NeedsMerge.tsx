@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { needsMerge, type NeedsMergeRow } from '../api/client';
+import { formatEntryRef } from '../format';
 
 export default function NeedsMerge() {
   const [rows, setRows] = useState<NeedsMergeRow[] | null>(null);
@@ -17,7 +18,7 @@ export default function NeedsMerge() {
         <ul className="divide-y divide-gray-200 dark:divide-gray-800">
           {rows.map((r) => (
             <li key={r.id} className="py-2 flex justify-between">
-              <Link to={`/merge/${r.id}`} className="underline">E-{String(r.id).padStart(5, '0')} · {r.title}</Link>
+              <Link to={`/merge/${r.id}`} className="underline">{formatEntryRef(r.id)} · {r.title}</Link>
               <span className="text-xs text-gray-500">{r.module ?? ''}</span>
             </li>
           ))}

@@ -1,4 +1,4 @@
-import { getDb, migrate, addEntry, closeDb } from '@collab-mcp/core';
+import { getDb, migrate, addEntry, closeDb, formatEntryRef } from '@collab-mcp/core';
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -374,7 +374,7 @@ ${summaryText}`;
       type: 'changelog', title, summary, description, agent: 'Gemini', module: 'dependency-audit', category: 'Activity',
     });
       
-    console.log(`Logged changelog entry E-${entryId}`);
+    console.log(`Logged changelog entry ${formatEntryRef(entryId)}`);
   } catch (dbErr) {
     console.error('Failed to log changelog to DB:', dbErr);
   } finally {

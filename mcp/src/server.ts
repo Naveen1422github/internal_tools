@@ -50,6 +50,7 @@ import {
   readBuildInfo,
   lastResolution,
   type DB,
+  formatEntryRef,
 } from "@collab-mcp/core";
 
 // ------------------------------------------------------------
@@ -344,16 +345,16 @@ server.registerTool(
     });
     const tt = result.taskTransition;
     let text = tt
-      ? `Added E-${String(result.id).padStart(5, "0")} (${args.type}). `
+      ? `Added ${formatEntryRef(result.id)} (${args.type}). `
         + `Auto-advanced ${tt.id}: ${tt.from} -> ${tt.to}.`
-      : `Added E-${String(result.id).padStart(5, "0")} (${args.type}).`;
+      : `Added ${formatEntryRef(result.id)} (${args.type}).`;
     // E-657 guardrail: tell the writing agent where its module's main note is,
     // only for important types (the hub must not become a dump).
     if (args.module && ["decision", "proposal", "gotcha"].includes(args.type)) {
       const hs = getHubStatus(db, args.module, 0);
       if (hs.state === "ok") {
         const h = hs.coverage!.hub;
-        text += ` Main note for '${args.module}' is E-${String(h.id).padStart(5, "0")}; `
+        text += ` Main note for '${args.module}' is ${formatEntryRef(h.id)}; `
           + `if this belongs in it, link it with collab_update_refs (id ${h.id}, add entry '${result.id}').`;
       }
     }
@@ -405,7 +406,7 @@ server.registerTool(
       content: [
         {
           type: "text",
-          text: `Updated E-${String(result.id).padStart(5, "0")} (${result.updated_fields.join(", ")}).`,
+          text: `Updated ${formatEntryRef(result.id)} (${result.updated_fields.join(", ")}).`,
         },
       ],
       structuredContent: structured(result),
@@ -460,7 +461,7 @@ server.registerTool(
     const change = parts.length > 0 ? parts.join(" | ") : "no change (all no-ops)";
     return {
       content: [
-        { type: "text", text: `E-${String(result.id).padStart(5, "0")} refs: ${change}.` },
+        { type: "text", text: `${formatEntryRef(result.id)} refs: ${change}.` },
       ],
       structuredContent: structured(result),
     };
@@ -624,7 +625,7 @@ server.registerTool(
           result.recent_entries
             .map(
               (e) =>
-                `  [E-${String(e.id).padStart(5, "0")}] ${e.type} - ${e.title}`
+                `  [${formatEntryRef(e.id)}] ${e.type} - ${e.title}`
             )
             .join("\n")
         : "";
@@ -824,7 +825,6 @@ server.registerTool(
         lines.push(`  [${t.id}] ${t.status}${t.priority ? ` (${t.priority})` : ""} - ${t.title}`);
       }
     }
-    const E = (n: number) => `E-${String(n).padStart(5, "0")}`;
     const cut = (s: string) => (s.length > 80 ? s.slice(0, 79) + "…" : s);
     if (result.hub.state === "unset") {
       lines.push("\nMain note: not set (collab_module_set_hub picks one).");
@@ -832,14 +832,14 @@ server.registerTool(
       lines.push("\nMain note: retired with no replacement (collab_module_set_hub picks a new one).");
     } else {
       const c = result.hub.coverage!;
-      lines.push(`\nMain note: [${E(c.hub.id)}] ${cut(c.hub.title)}${c.hub.followed ? " (replacement of the original)" : ""}`);
+      lines.push(`\nMain note: [${formatEntryRef(c.hub.id)}] ${cut(c.hub.title)}${c.hub.followed ? " (replacement of the original)" : ""}`);
       if (c.unlinked_count === 0) {
         lines.push(`  reaches all ${c.linked_count} important notes.`);
       } else {
         lines.push(`  reaches ${c.linked_count} of ${c.linked_count + c.unlinked_count} important notes; ${c.unlinked_count} not linked yet${c.unlinked.length > 0 ? ":" : "."}`);
-        for (const u of c.unlinked) lines.push(`    [${E(u.id)}] ${u.type} - ${cut(u.title)}`);
+        for (const u of c.unlinked) lines.push(`    [${formatEntryRef(u.id)}] ${u.type} - ${cut(u.title)}`);
         const onCard = c.unlinked_on_card ?? [];
-        if (onCard.length > 0) lines.push(`    also not linked (in the lists below): ${onCard.map(E).join(", ")}`);
+        if (onCard.length > 0) lines.push(`    also not linked (in the lists below): ${onCard.map((id) => formatEntryRef(id)).join(", ")}`);
         const shown = c.unlinked.length + onCard.length;
         if (c.unlinked_count > shown) lines.push(`    (+${c.unlinked_count - shown} more; collab_doctor lists all)`);
       }
@@ -849,26 +849,26 @@ server.registerTool(
       if (result.indexes.length > 0) {
         lines.push("\nIndexes:");
         for (const ix of result.indexes) {
-          lines.push(`  [E-${String(ix.id).padStart(5, "0")}] ${ix.title}`);
+          lines.push(`  [${formatEntryRef(ix.id)}] ${ix.title}`);
         }
       }
     }
     if (result.top_gotchas.length > 0) {
       lines.push("\nTop gotchas:");
       for (const g of result.top_gotchas) {
-        lines.push(`  [E-${String(g.id).padStart(5, "0")}] ${g.summary}`);
+        lines.push(`  [${formatEntryRef(g.id)}] ${g.summary}`);
       }
     }
     if (result.recent_decisions.length > 0) {
       lines.push("\nRecent decisions:");
       for (const d of result.recent_decisions) {
-        lines.push(`  [E-${String(d.id).padStart(5, "0")}] ${d.title}`);
+        lines.push(`  [${formatEntryRef(d.id)}] ${d.title}`);
       }
     }
     if (result.recent_handoffs.length > 0) {
       lines.push("\nRecent handoffs:");
       for (const h of result.recent_handoffs) {
-        lines.push(`  [E-${String(h.id).padStart(5, "0")}] ${h.agent ?? "?"} - ${h.title}`);
+        lines.push(`  [${formatEntryRef(h.id)}] ${h.agent ?? "?"} - ${h.title}`);
       }
     }
     return {
@@ -904,7 +904,7 @@ server.registerTool(
   async (args) => {
     const result = setModuleHub(db, { slug: args.slug, id: args.id });
     const text = result.hub
-      ? `Main note for '${result.slug}' is now E-${String(result.hub.id).padStart(5, "0")} (${result.hub.title}).`
+      ? `Main note for '${result.slug}' is now ${formatEntryRef(result.hub.id)} (${result.hub.title}).`
       : `Main note for '${result.slug}' cleared.`;
     return { content: [{ type: "text", text }], structuredContent: structured(result) };
   }
@@ -1113,9 +1113,9 @@ server.registerTool(
   async (args) => {
     const result = supersede(db, { ids: args.ids, by: args.by });
     const supersededIds = result.superseded
-      .map((id) => `E-${String(id).padStart(5, "0")}`)
+      .map((id) => formatEntryRef(id))
       .join(", ");
-    const byId = `E-${String(result.by).padStart(5, "0")}`;
+    const byId = formatEntryRef(result.by);
     return {
       content: [{ type: "text", text: `Superseded ${supersededIds} → replaced by ${byId}.` }],
       structuredContent: structured(result),
@@ -1249,7 +1249,7 @@ function formatSearchResult(r: { results: any[]; auto_expanded: boolean; total_t
     ? `Found ${r.results.length} result(s) - auto-expanded (${r.total_tokens} tokens).`
     : `Found ${r.results.length} result(s) - summaries only. Call collab.get(id) for full bodies.`;
   const lines = r.results.map((e) => {
-    const head = `[E-${String(e.id).padStart(5, "0")}] ${e.type} - ${e.title}`;
+    const head = `[${formatEntryRef(e.id)}] ${e.type} - ${e.title}`;
     const body = r.auto_expanded && e.description
       ? `  ${e.summary}\n  ---\n  ${e.description.slice(0, 800)}${e.description.length > 800 ? "..." : ""}`
       : `  ${e.summary}`;
@@ -1277,7 +1277,7 @@ function formatEntry(e: {
   tokens_estimate: number; created_at: string;
   refs: Array<{ ref_type: string; ref_value: string }>;
 }): string {
-  const head = `[E-${String(e.id).padStart(5, "0")}] ${e.type} - ${e.title}`;
+  const head = `[${formatEntryRef(e.id)}] ${e.type} - ${e.title}`;
   const moduleBit =
     e.modules && e.modules.length > 0
       ? `modules=${e.modules.join(",")}`
@@ -1290,7 +1290,7 @@ function formatEntry(e: {
     e.task_id ? `task=${e.task_id}` : null,
     e.agent ? `agent=${e.agent}` : null,
     `status=${e.status}`,
-    e.superseded_by != null ? `superseded by E-${String(e.superseded_by).padStart(5, "0")}` : null,
+    e.superseded_by != null ? `superseded by ${formatEntryRef(e.superseded_by)}` : null,
     `tokens~${e.tokens_estimate}`,
     `created=${e.created_at}`,
   ].filter(Boolean);
