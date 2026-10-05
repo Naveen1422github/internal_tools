@@ -52,3 +52,4 @@ export * from './setup/engine.js';
 export * from './setup/format.js';
 export { defaultProbe } from './setup/check-sync.js';
 export { defaultClaudeConfigFiles } from './setup/check-claude.js';
+export * from './projects.js';
