@@ -11,6 +11,7 @@ export interface ListRecentArgs {
   limit?: number;                       // default 10, max 50
   kind?: "signal" | "log" | "any";      // default 'signal'
   include_deprecated?: boolean;         // default false
+  project_ulid?: string;                // only this project's notes (stage B1)
 }
 
 /**
@@ -30,5 +31,6 @@ export function listRecent(db: DB, args: ListRecentArgs): SearchResult {
     since: args.since ?? "7d",
     include_deprecated: args.include_deprecated ?? false,
     limit: args.limit ?? 10,
+    project_ulid: args.project_ulid,
   });
 }

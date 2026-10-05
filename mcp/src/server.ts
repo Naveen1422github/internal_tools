@@ -51,6 +51,11 @@ import {
   lastResolution,
   type DB,
   formatEntryRef,
+  formatNoteRef,
+  parseNoteRef,
+  getEntryByRef,
+  currentProject,
+  type NoteRef,
 } from "@collab-mcp/core";
 
 // ------------------------------------------------------------
@@ -120,6 +125,39 @@ const TASK_STATUS = z.enum(["pending", "assigned", "in-progress", "review", "don
 const PRIORITY = z.enum(["critical", "high", "medium", "low"]);
 
 // ------------------------------------------------------------
+// Note references and the current project (piece 2 stage B1)
+// ------------------------------------------------------------
+// A note number: an integer means the E series (E-00760); a string can name a
+// project note ("SH-12") or any E form ("E-00760", "#760", "760").
+const NOTE_REF = z.union([z.number().int().min(1), z.string()]);
+const REF_FORMS = "760 (= E-00760), #760, E-760, E-00760, or a project note like SH-12";
+
+/** A tool's note argument -> { series, id }; an unreadable string is a tool error naming the accepted forms. */
+function resolveRefArg(v: number | string): NoteRef {
+  if (typeof v === "number") return { series: "E", id: v };
+  const r = parseNoteRef(v);
+  if (!r) throw new Error(`"${v}" is not a note number. Accepted: ${REF_FORMS}.`);
+  return r;
+}
+
+/** Spec rule 8: every write and search answer says which project it worked in. */
+function statusLine(): string {
+  const p = currentProject(db);
+  return p ? `project: ${p.code} ${p.name} (${p.mode})` : "project: none (E series)";
+}
+
+const SCOPE = z
+  .enum(["project", "all"])
+  .optional()
+  .describe("'project' (default when this folder's .collab names a project): only that project's notes. 'all': every note.");
+
+/** The project filter for a read: the current project unless scope is 'all' (spec P4). No project = today's behaviour. */
+function projectScope(scope: "project" | "all" | undefined): string | undefined {
+  if (scope === "all") return undefined;
+  return currentProject(db)?.ulid;
+}
+
+// ------------------------------------------------------------
 // Tool: collab.search
 // ------------------------------------------------------------
 server.registerTool(
@@ -155,6 +193,7 @@ server.registerTool(
         .describe("ISO date (2026-04-10) or shorthand (7d, 2w, 1m)"),
       include_deprecated: z.boolean().optional().default(false),
       limit: z.number().int().min(1).max(50).optional().default(10),
+      scope: SCOPE,
     },
     annotations: {
       readOnlyHint: true,
@@ -164,6 +203,7 @@ server.registerTool(
     },
   },
   async (args) => {
+    const status = statusLine();
     const result = searchEntries(db, {
       query: args.query,
       module: args.module,
@@ -175,6 +215,7 @@ server.registerTool(
       since: args.since,
       include_deprecated: args.include_deprecated ?? false,
       limit: args.limit ?? 10,
+      project_ulid: projectScope(args.scope),
     });
     // Tasks live in their own table (not entries_fts), so a keyword search would
     // otherwise miss them. When there's a real query, surface matching tasks as a
@@ -190,7 +231,7 @@ server.registerTool(
       }
     }
     return {
-      content: [{ type: "text", text: formatSearchResult(result) + taskNote }],
+      content: [{ type: "text", text: `${status}\n${formatSearchResult(result)}${taskNote}` }],
       structuredContent: structured(out),
     };
   }
@@ -208,7 +249,7 @@ server.registerTool(
       "Use after collab.search or collab.list_recent has surfaced an id you want to read deliberately.",
     ].join("\n"),
     inputSchema: {
-      id: z.number().int().min(1).describe("Entry id (the integer inside E-NNNNN)"),
+      id: NOTE_REF.describe("Note number: an integer (the one inside E-NNNNN), or a reference like 'SH-12' / 'E-00760'"),
     },
     annotations: {
       readOnlyHint: true,
@@ -218,10 +259,11 @@ server.registerTool(
     },
   },
   async (args) => {
-    const entry = getEntry(db, args.id);
+    const ref = resolveRefArg(args.id);
+    const entry = getEntryByRef(db, ref);
     if (!entry) {
       return {
-        content: [{ type: "text", text: `No entry found with id ${args.id}.` }],
+        content: [{ type: "text", text: `No entry found with id ${ref.series === "E" ? ref.id : formatNoteRef(ref)}.` }],
         structuredContent: null as any,
       };
     }
@@ -258,6 +300,7 @@ server.registerTool(
       limit: z.number().int().min(1).max(50).optional().default(10),
       kind: z.enum(["signal", "log", "any"]).optional().default("signal"),
       include_deprecated: z.boolean().optional().default(false),
+      scope: SCOPE,
     },
     annotations: {
       readOnlyHint: true,
@@ -276,9 +319,10 @@ server.registerTool(
       limit: args.limit,
       kind: args.kind,
       include_deprecated: args.include_deprecated,
+      project_ulid: projectScope(args.scope),
     });
     return {
-      content: [{ type: "text", text: formatSearchResult(result) }],
+      content: [{ type: "text", text: `${statusLine()}\n${formatSearchResult(result)}` }],
       structuredContent: structured(result),
     };
   }
@@ -321,6 +365,10 @@ server.registerTool(
       refs: z
         .array(z.object({ ref_type: REF_TYPE, ref_value: z.string().min(1) }))
         .optional(),
+      project: z
+        .string()
+        .optional()
+        .describe("Project code (SH) or ULID to write into; 'none' = no project (E series). Omitted = this folder's .collab project."),
     },
     annotations: {
       readOnlyHint: false,
@@ -342,20 +390,27 @@ server.registerTool(
       category: args.category,
       task_id: args.task_id,
       refs: args.refs,
+      project: args.project,
     });
     const tt = result.taskTransition;
+    const added = formatEntryRef(result.id, result.series);
+    const status = result.project
+      ? `project: ${result.project.code} ${result.project.name} (${result.project.mode})`
+      : "project: none (E series)";
     let text = tt
-      ? `Added ${formatEntryRef(result.id)} (${args.type}). `
+      ? `${status}\nAdded ${added} (${args.type}). `
         + `Auto-advanced ${tt.id}: ${tt.from} -> ${tt.to}.`
-      : `Added ${formatEntryRef(result.id)} (${args.type}).`;
+      : `${status}\nAdded ${added} (${args.type}).`;
     // E-657 guardrail: tell the writing agent where its module's main note is,
     // only for important types (the hub must not become a dump).
     if (args.module && ["decision", "proposal", "gotcha"].includes(args.type)) {
       const hs = getHubStatus(db, args.module, 0);
       if (hs.state === "ok") {
         const h = hs.coverage!.hub;
-        text += ` Main note for '${args.module}' is ${formatEntryRef(h.id)}; `
-          + `if this belongs in it, link it with collab_update_refs (id ${h.id}, add entry '${result.id}').`;
+        const hubRef = h.series ? formatEntryRef(h.id, h.series) : String(h.id);
+        const newRef = result.series === "E" ? String(result.id) : added;
+        text += ` Main note for '${args.module}' is ${formatEntryRef(h.id, h.series)}; `
+          + `if this belongs in it, link it with collab_update_refs (id ${hubRef}, add entry '${newRef}').`;
       }
     }
     return {
@@ -383,7 +438,7 @@ server.registerTool(
       "Refs are NOT mutated here (future extension). To deprecate/roll up instead, use collab.rollup.",
     ].join("\n"),
     inputSchema: {
-      id: z.number().int().min(1).describe("Entry id (the integer inside E-NNNNN)"),
+      id: NOTE_REF.describe("Note number: an integer (the one inside E-NNNNN), or a reference like 'SH-12'"),
       title: z.string().min(1).optional(),
       summary: z.string().min(1).max(200).optional(),
       description: z.string().optional(),
@@ -396,8 +451,10 @@ server.registerTool(
     },
   },
   async (args) => {
+    const ref = resolveRefArg(args.id);
     const result = updateEntry(db, {
-      id: args.id,
+      id: ref.id,
+      series: ref.series,
       title: args.title,
       summary: args.summary,
       description: args.description,
@@ -406,7 +463,7 @@ server.registerTool(
       content: [
         {
           type: "text",
-          text: `Updated ${formatEntryRef(result.id)} (${result.updated_fields.join(", ")}).`,
+          text: `Updated ${formatEntryRef(result.id, ref.series)} (${result.updated_fields.join(", ")}).`,
         },
       ],
       structuredContent: structured(result),
@@ -429,10 +486,10 @@ server.registerTool(
       "Provide 'add' and/or 'remove' arrays of {ref_type, ref_value}. Idempotent: re-adding an",
       "existing ref or removing a missing one is a no-op. The response lists what ACTUALLY changed.",
       "Each ref is {ref_type: 'file'|'task'|'entry'|'url', ref_value: string}. For an entry link,",
-      "ref_type='entry' and ref_value is the target entry id as a string (e.g. '304').",
+      "ref_type='entry' and ref_value is the target note's number as a string (e.g. '304' for E-00304, or 'SH-12').",
     ].join("\n"),
     inputSchema: {
-      id: z.number().int().min(1).describe("Entry id whose refs to mutate (the integer inside E-NNNNN)."),
+      id: NOTE_REF.describe("Note whose refs to mutate: an integer (the one inside E-NNNNN), or a reference like 'SH-12'."),
       add: z
         .array(z.object({ ref_type: REF_TYPE, ref_value: z.string().min(1) }))
         .optional()
@@ -450,7 +507,8 @@ server.registerTool(
     },
   },
   async (args) => {
-    const result = updateEntryRefs(db, { id: args.id, add: args.add, remove: args.remove });
+    const ref = resolveRefArg(args.id);
+    const result = updateEntryRefs(db, { id: ref.id, series: ref.series, add: args.add, remove: args.remove });
     const parts: string[] = [];
     if (result.added.length > 0) {
       parts.push(`+${result.added.map((r) => `${r.ref_type}:${r.ref_value}`).join(", ")}`);
@@ -461,7 +519,7 @@ server.registerTool(
     const change = parts.length > 0 ? parts.join(" | ") : "no change (all no-ops)";
     return {
       content: [
-        { type: "text", text: `${formatEntryRef(result.id)} refs: ${change}.` },
+        { type: "text", text: `${formatEntryRef(result.id, ref.series)} refs: ${change}.` },
       ],
       structuredContent: structured(result),
     };
@@ -625,7 +683,7 @@ server.registerTool(
           result.recent_entries
             .map(
               (e) =>
-                `  [${formatEntryRef(e.id)}] ${e.type} - ${e.title}`
+                `  [${formatEntryRef(e.id, e.series)}] ${e.type} - ${e.title}`
             )
             .join("\n")
         : "";
@@ -794,6 +852,7 @@ server.registerTool(
     ].join("\n"),
     inputSchema: {
       slug: z.string().min(1),
+      scope: SCOPE,
     },
     annotations: {
       readOnlyHint: true,
@@ -803,7 +862,7 @@ server.registerTool(
     },
   },
   async (args) => {
-    const result = getModule(db, args.slug);
+    const result = getModule(db, args.slug, { project_ulid: projectScope(args.scope) });
     if (!result.module) {
       return {
         content: [
@@ -832,12 +891,12 @@ server.registerTool(
       lines.push("\nMain note: retired with no replacement (collab_module_set_hub picks a new one).");
     } else {
       const c = result.hub.coverage!;
-      lines.push(`\nMain note: [${formatEntryRef(c.hub.id)}] ${cut(c.hub.title)}${c.hub.followed ? " (replacement of the original)" : ""}`);
+      lines.push(`\nMain note: [${formatEntryRef(c.hub.id, c.hub.series)}] ${cut(c.hub.title)}${c.hub.followed ? " (replacement of the original)" : ""}`);
       if (c.unlinked_count === 0) {
         lines.push(`  reaches all ${c.linked_count} important notes.`);
       } else {
         lines.push(`  reaches ${c.linked_count} of ${c.linked_count + c.unlinked_count} important notes; ${c.unlinked_count} not linked yet${c.unlinked.length > 0 ? ":" : "."}`);
-        for (const u of c.unlinked) lines.push(`    [${formatEntryRef(u.id)}] ${u.type} - ${cut(u.title)}`);
+        for (const u of c.unlinked) lines.push(`    [${formatEntryRef(u.id, u.series)}] ${u.type} - ${cut(u.title)}`);
         const onCard = c.unlinked_on_card ?? [];
         if (onCard.length > 0) lines.push(`    also not linked (in the lists below): ${onCard.map((id) => formatEntryRef(id)).join(", ")}`);
         const shown = c.unlinked.length + onCard.length;
@@ -856,19 +915,19 @@ server.registerTool(
     if (result.top_gotchas.length > 0) {
       lines.push("\nTop gotchas:");
       for (const g of result.top_gotchas) {
-        lines.push(`  [${formatEntryRef(g.id)}] ${g.summary}`);
+        lines.push(`  [${formatEntryRef(g.id, g.series)}] ${g.summary}`);
       }
     }
     if (result.recent_decisions.length > 0) {
       lines.push("\nRecent decisions:");
       for (const d of result.recent_decisions) {
-        lines.push(`  [${formatEntryRef(d.id)}] ${d.title}`);
+        lines.push(`  [${formatEntryRef(d.id, d.series)}] ${d.title}`);
       }
     }
     if (result.recent_handoffs.length > 0) {
       lines.push("\nRecent handoffs:");
       for (const h of result.recent_handoffs) {
-        lines.push(`  [${formatEntryRef(h.id)}] ${h.agent ?? "?"} - ${h.title}`);
+        lines.push(`  [${formatEntryRef(h.id, h.series)}] ${h.agent ?? "?"} - ${h.title}`);
       }
     }
     return {
@@ -892,7 +951,7 @@ server.registerTool(
     ].join("\n"),
     inputSchema: {
       slug: z.string().min(1),
-      id: z.number().int().min(1).nullable().describe("Entry id (integer inside E-NNNNN), or null to clear."),
+      id: NOTE_REF.nullable().describe("Note number (integer inside E-NNNNN, or a reference like 'SH-12'), or null to clear."),
     },
     annotations: {
       readOnlyHint: false,
@@ -902,9 +961,10 @@ server.registerTool(
     },
   },
   async (args) => {
-    const result = setModuleHub(db, { slug: args.slug, id: args.id });
+    const ref = args.id === null ? null : resolveRefArg(args.id);
+    const result = setModuleHub(db, { slug: args.slug, id: ref ? ref.id : null, series: ref?.series });
     const text = result.hub
-      ? `Main note for '${result.slug}' is now ${formatEntryRef(result.hub.id)} (${result.hub.title}).`
+      ? `Main note for '${result.slug}' is now ${formatEntryRef(result.hub.id, result.hub.series)} (${result.hub.title}).`
       : `Main note for '${result.slug}' cleared.`;
     return { content: [{ type: "text", text }], structuredContent: structured(result) };
   }
@@ -1098,10 +1158,10 @@ server.registerTool(
     ].join("\n"),
     inputSchema: {
       ids: z
-        .array(z.number().int().min(1))
+        .array(NOTE_REF)
         .min(1)
-        .describe("Entry ids being replaced (the integers inside E-NNNNN)."),
-      by: z.number().int().min(1).describe("The entry id that replaces them."),
+        .describe("Notes being replaced: integers (the ones inside E-NNNNN) or references like 'SH-12'."),
+      by: NOTE_REF.describe("The note that replaces them (integer = E, or a reference like 'SH-12')."),
     },
     annotations: {
       readOnlyHint: false,
@@ -1111,11 +1171,11 @@ server.registerTool(
     },
   },
   async (args) => {
-    const result = supersede(db, { ids: args.ids, by: args.by });
-    const supersededIds = result.superseded
-      .map((id) => formatEntryRef(id))
-      .join(", ");
-    const byId = formatEntryRef(result.by);
+    const ids = args.ids.map(resolveRefArg);
+    const by = resolveRefArg(args.by);
+    const result = supersede(db, { ids, by });
+    const supersededIds = [...new Map(ids.map((r) => [formatNoteRef(r), r])).keys()].join(", ");
+    const byId = formatNoteRef(by);
     return {
       content: [{ type: "text", text: `Superseded ${supersededIds} → replaced by ${byId}.` }],
       structuredContent: structured(result),
@@ -1249,7 +1309,7 @@ function formatSearchResult(r: { results: any[]; auto_expanded: boolean; total_t
     ? `Found ${r.results.length} result(s) - auto-expanded (${r.total_tokens} tokens).`
     : `Found ${r.results.length} result(s) - summaries only. Call collab.get(id) for full bodies.`;
   const lines = r.results.map((e) => {
-    const head = `[${formatEntryRef(e.id)}] ${e.type} - ${e.title}`;
+    const head = `[${formatEntryRef(e.id, e.series)}] ${e.type} - ${e.title}`;
     const body = r.auto_expanded && e.description
       ? `  ${e.summary}\n  ---\n  ${e.description.slice(0, 800)}${e.description.length > 800 ? "..." : ""}`
       : `  ${e.summary}`;
@@ -1274,11 +1334,11 @@ function formatTaskMatches(
  * carries the note's current number. Only files without the ULID column
  * (superseded_target undefined) fall back to the stored integer.
  */
-function supersededBy(e: { superseded_by?: number | null; superseded_target?: { id: number | null; present: boolean } | null }): string | null {
+function supersededBy(e: { superseded_by?: number | null; superseded_target?: { id: number | null; present: boolean; series?: string } | null }): string | null {
   if (e.superseded_target === undefined) return e.superseded_by != null ? `superseded by ${formatEntryRef(e.superseded_by)}` : null;
   if (e.superseded_target === null) return null;
   return e.superseded_target.present
-    ? `superseded by ${formatEntryRef(e.superseded_target.id)}`
+    ? `superseded by ${formatEntryRef(e.superseded_target.id, e.superseded_target.series)}`
     : `superseded by ${formatEntryRef(null)} (not on this laptop)`;
 }
 
@@ -1287,11 +1347,12 @@ function formatEntry(e: {
   description: string | null; status: string; agent: string | null;
   module: string | null; modules?: string[]; category?: string;
   superseded_by?: number | null; task_id: string | null;
-  superseded_target?: { id: number | null; present: boolean } | null;
+  superseded_target?: { id: number | null; present: boolean; series?: string } | null;
+  series?: string;
   tokens_estimate: number; created_at: string;
   refs: Array<{ ref_type: string; ref_value: string }>;
 }): string {
-  const head = `[${formatEntryRef(e.id)}] ${e.type} - ${e.title}`;
+  const head = `[${formatEntryRef(e.id, e.series)}] ${e.type} - ${e.title}`;
   const moduleBit =
     e.modules && e.modules.length > 0
       ? `modules=${e.modules.join(",")}`

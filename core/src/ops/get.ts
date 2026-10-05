@@ -10,6 +10,7 @@ export interface LinkTarget {
   title: string | null;
   deleted: boolean;        // tombstoned (D5b): still opens, labelled deleted
   present: boolean;        // false = ULID set, no such row here (not shared with you / not synced yet)
+  series?: string;         // present only for a project note (SH); absent = E (stage B1)
 }
 
 export interface EntryRef {
@@ -77,13 +78,14 @@ export function getEntryByUlid(db: DB, ulid: string): EntryFull | null {
 function assemble(db: DB, row: EntryRow): EntryFull {
   const byUlid = hasUlidColumns(db); // 0005+: refs.target_ulid, entries.superseded_by_ulid
   const deletedCol = hasUlidPrimaryKey(db) ? "t.deleted_at IS NOT NULL" : "0"; // deleted_at: 0006+
+  const seriesCol = hasSeries(db) ? "t.series" : "'E'";
 
   // `modules` is not a column; it is assembled from entry_modules below.
   let refs: EntryRef[];
   if (byUlid) {
     const rows = db
       .prepare(
-        `SELECT r.ref_type, r.ref_value, r.target_ulid, t.ulid AS t_ulid, t.id AS t_id, t.title AS t_title, ${deletedCol} AS t_deleted
+        `SELECT r.ref_type, r.ref_value, r.target_ulid, t.ulid AS t_ulid, t.id AS t_id, t.title AS t_title, ${deletedCol} AS t_deleted, ${seriesCol} AS t_series
            FROM refs r LEFT JOIN entries t ON t.ulid = r.target_ulid
           WHERE r.entry_ulid = ? ORDER BY r.ref_type, r.ref_value`,
       )
@@ -111,15 +113,17 @@ function assemble(db: DB, row: EntryRow): EntryFull {
   if (byUlid) {
     const s = row.superseded_by_ulid ?? null;
     full.superseded_target = s === null ? null : toTarget(s,
-      db.prepare(`SELECT t.ulid AS t_ulid, t.id AS t_id, t.title AS t_title, ${deletedCol} AS t_deleted FROM entries t WHERE t.ulid = ?`)
+      db.prepare(`SELECT t.ulid AS t_ulid, t.id AS t_id, t.title AS t_title, ${deletedCol} AS t_deleted, ${seriesCol} AS t_series FROM entries t WHERE t.ulid = ?`)
         .get(s) as TargetCols | undefined);
   }
   return full;
 }
 
-interface TargetCols { t_ulid: string | null; t_id: number | null; t_title: string | null; t_deleted: number | null }
+interface TargetCols { t_ulid: string | null; t_id: number | null; t_title: string | null; t_deleted: number | null; t_series?: string | null }
 
 function toTarget(ulid: string, r: TargetCols | undefined): LinkTarget {
   if (!r || r.t_ulid === null) return { ulid, id: null, title: null, deleted: false, present: false };
-  return { ulid, id: r.t_id, title: r.t_title, deleted: r.t_deleted === 1, present: true };
+  const t: LinkTarget = { ulid, id: r.t_id, title: r.t_title, deleted: r.t_deleted === 1, present: true };
+  if (r.t_series && r.t_series !== "E") t.series = r.t_series;
+  return t;
 }
