@@ -1,15 +1,21 @@
 // file: ui/src/pages/Merge.tsx
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { mergeVersions, resolveMerge, explainMerge, VERSIONS_CHANGED, type MergeView, type MergeVersion } from '../api/client';
 import { fieldDiff, versionLabel } from '../sync/view';
-import { formatEntryRef } from '../format';
+import { formatNoteRef, parseNoteRef } from '../format';
 
 type Draft = { title: string; summary: string; description: string | null };
 
-/** /merge/:id (user chose its own page). Pick a version or combine by hand; refused if the versions changed meanwhile. */
+/**
+ * /merge/:ref (user chose its own page): /merge/3 or /merge/SH-3 (stage B1). Pick a version
+ * or combine by hand; refused if the versions changed meanwhile.
+ */
 export default function Merge() {
-  const id = Number(useParams().id);
+  const raw = useParams().ref ?? '';
+  const ref = useMemo(() => parseNoteRef(raw), [raw]);
+  // What the server is asked with: the number for an E note (as before), "SH-3" otherwise.
+  const id: number | string = ref === null ? NaN : ref.series === 'E' ? ref.id : formatNoteRef(ref);
   const navigate = useNavigate();
   const [view, setView] = useState<MergeView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -20,8 +26,9 @@ export default function Merge() {
 
   const load = useCallback(() => {
     setError(null);
+    if (ref === null) { setError(`"${raw}" is not a note number`); return; }
     mergeVersions(id).then(setView).catch((e) => setError(e.message));
-  }, [id]);
+  }, [id, ref, raw]);
   useEffect(load, [load]);
 
   const expected = () => view!.heads.map((h) => h.rev_id);
@@ -58,7 +65,7 @@ export default function Merge() {
           <b>Someone changed this note while you were deciding.</b> Nothing was saved. Here are the versions now.
         </div>
       )}
-      <h1 className="text-xl font-bold">{formatEntryRef(id)}</h1>
+      <h1 className="text-xl font-bold">{formatNoteRef(ref!)}</h1>
       <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${Math.min(view.heads.length, 3)}, minmax(0, 1fr))` }}>
         {view.heads.map((v, i) => (
           <div key={v.rev_id} className="border border-gray-300 dark:border-gray-700 rounded p-3 space-y-3 text-sm">

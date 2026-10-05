@@ -6,14 +6,19 @@ import Drawer from './Drawer';
 import Markdown from './Markdown';
 import { useSyncOverview } from '../sync/useSyncOverview';
 import { shareLabel, saveNote, SHARED_LABEL, PRIVATE_LABEL } from '../sync/view';
-import { formatEntryRef, parseEntryRef } from '../format';
+import { formatEntryRef, formatNoteRef, noteRefOf, parseNoteRef, type NoteRef } from '../format';
 
 // Re-read the open note: by ULID when it has one (two notes can share a number).
-const reload = (e: Entry) => (e.ulid ? entryByUlid(e.ulid) : getEntry(e.id));
+const reload = (e: Entry) => (e.ulid ? entryByUlid(e.ulid) : getEntry(noteRefOf(e)));
+type OpenTarget = number | string | { ulid: string };
+/** How to open a parsed reference: E by number (as before), a project note by "SH-12". */
+const openable = (r: NoteRef): number | string => (r.series === 'E' ? r.id : formatNoteRef(r));
 
 export default function EntryDrawer() {
   const { drawerEntry, closeDrawer, openDrawer } = useUi();
-  const drawerKey = drawerEntry ? ('ulid' in drawerEntry ? `ulid:${drawerEntry.ulid}` : `id:${drawerEntry.id}`) : null;
+  const drawerKey = drawerEntry
+    ? ('ulid' in drawerEntry ? `ulid:${drawerEntry.ulid}` : 'ref' in drawerEntry ? `ref:${drawerEntry.ref}` : `id:${drawerEntry.id}`)
+    : null;
   const [entry, setEntry] = useState<Entry | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +30,7 @@ export default function EntryDrawer() {
     if (drawerEntry) {
       setLoading(true);
       setError(null);
-      ('ulid' in drawerEntry ? entryByUlid(drawerEntry.ulid) : getEntry(drawerEntry.id))
+      ('ulid' in drawerEntry ? entryByUlid(drawerEntry.ulid) : getEntry('ref' in drawerEntry ? drawerEntry.ref : drawerEntry.id))
         .then(res => {
           setEntry(res);
           setEditData(res);
@@ -43,7 +48,7 @@ export default function EntryDrawer() {
   const handleSave = async () => {
     if (!entry) return;
     try {
-      const res = await upsertEntry({ ...editData, id: entry.id });
+      const res = await upsertEntry({ ...editData, id: noteRefOf(entry) });
       if (res.ok) {
         setIsEditing(false);
         const updated = await reload(entry);
@@ -56,14 +61,14 @@ export default function EntryDrawer() {
 
   const handleSupersede = async () => {
     if (!entry) return;
-    const by = prompt('Enter the ID of the entry that supersedes this one:');
+    const by = prompt('Enter the number of the note that supersedes this one (e.g. 214, E-00214 or SH-12):');
     if (!by) return;
-    const byId = parseInt(by);
-    if (isNaN(byId)) return alert('Invalid ID');
+    const byRef = parseNoteRef(by);
+    if (!byRef) return alert('Invalid note number: use 214, #214, E-00214, or a project note like SH-12');
 
-    if (confirm(`Supersede entry ${entry.id} by ${byId}?`)) {
+    if (confirm(`Supersede ${formatEntryRef(entry.id, entry.series)} by ${formatNoteRef(byRef)}?`)) {
       try {
-        const res = await supersede([entry.id], byId);
+        const res = await supersede([noteRefOf(entry)], openable(byRef));
         if (res.ok) {
           const updated = await reload(entry);
           setEntry(updated);
@@ -78,7 +83,7 @@ export default function EntryDrawer() {
     if (!entry) return;
     if (confirm('Are you sure? It is usually better to supersede an entry to keep history.')) {
       try {
-        const res = await deleteEntry(entry.id);
+        const res = await deleteEntry(noteRefOf(entry));
         if (res.ok) {
           closeDrawer();
         }
@@ -121,13 +126,13 @@ export default function EntryDrawer() {
                   );
                 })()}
              </div>
-             <div className="text-xs font-mono text-gray-400">{formatEntryRef(entry.id)}</div>
+             <div className="text-xs font-mono text-gray-400">{formatEntryRef(entry.id, entry.series)}</div>
           </header>
 
           {entry.needs_merge === 1 && (
             <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded text-sm text-amber-800 dark:text-amber-200 flex items-center justify-between">
               <span>⚠ This note needs a merge: two versions exist.</span>
-              <Link to={`/merge/${entry.id}`} onClick={() => closeDrawer()} className="font-bold underline">Pick the final text</Link>
+              <Link to={`/merge/${noteRefOf(entry)}`} onClick={() => closeDrawer()} className="font-bold underline">Pick the final text</Link>
             </div>
           )}
 
@@ -258,13 +263,13 @@ const LINK_CLASS = "font-medium text-blue-600 dark:text-blue-400 hover:underline
  * without one (older file or unresolved) it is parsed like core does, so
  * E-214, #214 and 214 all open by number.
  */
-function EntryLink({ entryRef, onOpen }: { entryRef: EntryRef; onOpen: (t: number | { ulid: string }) => void }) {
-  const n = parseEntryRef(entryRef.ref_value);
+function EntryLink({ entryRef, onOpen }: { entryRef: EntryRef; onOpen: (t: OpenTarget) => void }) {
+  const n = parseNoteRef(entryRef.ref_value);
   if (entryRef.target) {
     return <TargetLink target={entryRef.target} fallback={n} label={entryRef.ref_value} onOpen={onOpen} className={LINK_CLASS} />;
   }
   if (n === null) return <span className="font-medium text-gray-700 dark:text-gray-300 break-all">{entryRef.ref_value}</span>;
-  return <button onClick={() => onOpen(n)} className={LINK_CLASS}>{formatEntryRef(n)}</button>;
+  return <button onClick={() => onOpen(openable(n))} className={LINK_CLASS}>{formatNoteRef(n)}</button>;
 }
 
 /**
@@ -272,13 +277,14 @@ function EntryLink({ entryRef, onOpen }: { entryRef: EntryRef; onOpen: (t: numbe
  * tombstone, D5b), or plain text when the note isn't on this laptop.
  */
 function TargetLink({ target, fallback, label, onOpen, className }: {
-  target: LinkTarget; fallback: number | null; label?: string;
-  onOpen: (t: number | { ulid: string }) => void; className: string;
+  target: LinkTarget; fallback: NoteRef | number | null; label?: string;
+  onOpen: (t: OpenTarget) => void; className: string;
 }) {
   if (!target.present) {
-    const shown = fallback !== null ? formatEntryRef(fallback) : (label ?? formatEntryRef(null));
+    const shown = fallback === null ? (label ?? formatEntryRef(null))
+      : typeof fallback === 'number' ? formatEntryRef(fallback) : formatNoteRef(fallback);
     return <span className="text-gray-500">{`${shown} · not on this laptop`}</span>;
   }
-  const text = `${formatEntryRef(target.id)}${target.title ? ` · ${target.title}` : ''}${target.deleted ? ' (deleted)' : ''}`;
+  const text = `${formatEntryRef(target.id, target.series)}${target.title ? ` · ${target.title}` : ''}${target.deleted ? ' (deleted)' : ''}`;
   return <button onClick={() => onOpen({ ulid: target.ulid })} className={className}>{text}</button>;
 }

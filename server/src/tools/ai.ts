@@ -146,6 +146,7 @@ You can perform up to ${maxIters} search steps before answering. Keep searches f
 
         const compactResults = results.map((r: any) => ({
           id: r.id,
+          ...(r.series && r.series !== 'E' ? { series: r.series } : {}), // a project note (SH-12), stage B1
           type: r.type,
           category: r.category,
           title: r.title,

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { stats, type Stats } from '../api/client';
 import { useUi } from '../store/ui';
+import { noteRefOf } from '../format';
 
 export default function Dashboard() {
   const [data, setData] = useState<Stats | null>(null);
@@ -41,9 +42,9 @@ export default function Dashboard() {
               <ul className="divide-y divide-gray-200 dark:divide-gray-800">
                 {data.recent.map((entry) => (
                   <li 
-                    key={entry.id} 
+                    key={`${entry.series ?? 'E'}-${entry.id}`} 
                     className="p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer flex items-start gap-4 transition-colors"
-                    onClick={() => openDrawer(entry.id)}
+                    onClick={() => openDrawer(noteRefOf(entry))}
                   >
                     <div className="shrink-0 w-10 h-10 rounded bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-[10px] font-mono font-bold text-gray-500">
                       {entry.type.slice(0, 3).toUpperCase()}

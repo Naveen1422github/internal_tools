@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useUi } from '../store/ui';
 import { search, type Entry } from '../api/client';
-import { formatEntryRef } from '../format';
+import { formatEntryRef, noteRefOf } from '../format';
 
 export default function CommandPalette() {
   const { paletteOpen, setPaletteOpen } = useUi();
@@ -72,7 +72,7 @@ export default function CommandPalette() {
               key={r.id} 
               className="px-4 py-3 text-sm hover:bg-blue-50 dark:hover:bg-blue-900/20 cursor-pointer flex items-center justify-between group"
               onClick={() => {
-                openDrawer(r.id);
+                openDrawer(noteRefOf(r));
                 setPaletteOpen(false);
                 setQ('');
               }}
@@ -86,7 +86,7 @@ export default function CommandPalette() {
               </div>
               <div className="shrink-0 flex items-center gap-2">
                  {r.module && <span className="text-[9px] font-bold uppercase tracking-widest text-gray-400">{r.module}</span>}
-                 <span className="text-[10px] font-mono text-gray-400">{formatEntryRef(r.id)}</span>
+                 <span className="text-[10px] font-mono text-gray-400">{formatEntryRef(r.id, r.series)}</span>
               </div>
             </li>
           ))}

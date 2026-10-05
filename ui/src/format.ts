@@ -13,6 +13,14 @@ export function formatNoteRef(ref: NoteRef): string {
   return formatEntryRef(ref.id, ref.series);
 }
 
+/**
+ * How to ask the server for a note (stage B1): its number for an E note (as
+ * every call did before), "SH-12" for a project note.
+ */
+export function noteRefOf(e: { id: number; series?: string | null }): number | string {
+  return e.series && e.series !== "E" ? formatEntryRef(e.id, e.series) : e.id;
+}
+
 // Mirrors parseEntryRef in core/src/ulid.ts (same whitespace set, same
 // pattern): "214", "#214", "E-214", "E214", "E-00214" -> 214; anything else -> null.
 const REF_WHITESPACE = " \t\n\u000B\f\r ";

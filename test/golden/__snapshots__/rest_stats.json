@@ -25,6 +25,7 @@
   "recent": [
     {
       "id": "<id>",
+      "series": "E",
       "type": "decision",
       "category": "Reference",
       "title": "Alpha decision",
@@ -35,6 +36,7 @@
     },
     {
       "id": "<id>",
+      "series": "E",
       "type": "changelog",
       "category": "Activity",
       "title": "Beta change",
@@ -45,6 +47,7 @@
     },
     {
       "id": "<id>",
+      "series": "E",
       "type": "gotcha",
       "category": "Reference",
       "title": "Gamma gotcha",

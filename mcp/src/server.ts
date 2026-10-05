@@ -20,7 +20,6 @@ import {
   addEntryAsync,
   updateEntry,
   updateEntryRefs,
-  getEntry,
   listRecent,
   createTask,
   transitionTask,

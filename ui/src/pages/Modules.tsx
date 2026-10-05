@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { modules, moduleCard } from '../api/client';
 import { useUi } from '../store/ui';
+import { noteRefOf } from '../format';
 import { SHARED_LABEL, PRIVATE_LABEL } from '../sync/view';
 
 export default function Modules() {
@@ -116,7 +117,7 @@ export default function Modules() {
                    <h3 className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Knowledge Indexes</h3>
                    <div className="space-y-2">
                      {card.indexes?.length > 0 ? card.indexes.map((idx: any) => (
-                       <div key={idx.id} className="p-3 bg-blue-50/30 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-900/30 rounded group cursor-pointer hover:bg-blue-50 transition-colors" onClick={() => openDrawer(idx.id)}>
+                       <div key={idx.id} className="p-3 bg-blue-50/30 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-900/30 rounded group cursor-pointer hover:bg-blue-50 transition-colors" onClick={() => openDrawer(noteRefOf(idx))}>
                          <div className="text-sm font-medium text-blue-900 dark:text-blue-300 group-hover:underline">{idx.title}</div>
                          <div className="text-[10px] text-blue-700/60 dark:text-blue-400/60 mt-1 line-clamp-1">{idx.summary}</div>
                        </div>
@@ -128,7 +129,7 @@ export default function Modules() {
                    <h3 className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Recent Handoffs</h3>
                    <div className="space-y-2">
                      {card.recent_handoffs?.length > 0 ? card.recent_handoffs.map((h: any) => (
-                       <div key={h.id} className="p-3 bg-gray-50 dark:bg-gray-900 rounded border border-gray-100 dark:border-gray-800 group cursor-pointer hover:border-gray-300 transition-colors" onClick={() => openDrawer(h.id)}>
+                       <div key={h.id} className="p-3 bg-gray-50 dark:bg-gray-900 rounded border border-gray-100 dark:border-gray-800 group cursor-pointer hover:border-gray-300 transition-colors" onClick={() => openDrawer(noteRefOf(h))}>
                          <div className="flex justify-between items-start gap-2">
                            <div className="text-sm font-medium truncate">{h.title}</div>
                            <span className="shrink-0 text-[9px] font-mono text-gray-400 uppercase">{h.agent}</span>

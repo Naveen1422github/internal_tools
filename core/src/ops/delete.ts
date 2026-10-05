@@ -1,6 +1,7 @@
 import type { DB } from "../db.js";
 import { hasUlidPrimaryKey } from "../schema.js";
-import { ownerOf } from "../entry-write.js";
+import { ownerOfRef } from "../entry-write.js";
+import { formatEntryRef } from "../entry-ref.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 
 /**
@@ -13,12 +14,14 @@ import { ensureCrsqlite } from "../sync/extension.js";
  * Before 0006: the legacy hard delete by id (unique there); the cascade
  * triggers remove refs/module rows.
  */
-export function deleteEntry(db: DB, id: number): { id: number; tombstoned: boolean } {
+export function deleteEntry(db: DB, id: number, series = "E"): { id: number; tombstoned: boolean } {
   ensureCrsqlite(db);
   if (!Number.isInteger(id) || id < 1) throw new Error("id must be a positive integer");
+  const label = series === "E" ? String(id) : formatEntryRef(id, series);
+  if (series !== "E" && !hasUlidPrimaryKey(db)) throw new Error(`no entry found with id ${label}`);
   if (hasUlidPrimaryKey(db)) {
-    const owner = ownerOf(db, id);
-    if (!owner) throw new Error(`no entry found with id ${id}`);
+    const owner = ownerOfRef(db, { series, id });
+    if (!owner) throw new Error(`no entry found with id ${label}`);
     db.prepare(`UPDATE entries SET deleted_at = datetime('now') WHERE ulid = ? AND deleted_at IS NULL`).run(owner.ulid);
     return { id, tombstoned: true };
   }

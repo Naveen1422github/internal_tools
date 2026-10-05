@@ -1,7 +1,7 @@
 // file: core/src/ops/merge.ts
 import type { DB } from "../db.js";
 import { estimateTokens } from "../db.js";
-import { ownerOf } from "../entry-write.js";
+import { ownerOfRef } from "../entry-write.js";
 import { headsOf, revisionsOf, snapshotForRevision, finishRevision } from "../revisions.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { formatEntryRef } from "../entry-ref.js";
@@ -31,11 +31,11 @@ export function currentHeads(db: DB, ulid: string): string[] {
   return headsOf(revisionsOf(db, ulid)).map((h) => h.rev_id).sort();
 }
 
-function flaggedUlid(db: DB, id: number): string {
-  const owner = ownerOf(db, id);
-  if (!owner || !owner.ulid) throw new Error(`no entry found with id ${id}`);
+function flaggedUlid(db: DB, id: number, series = "E"): string {
+  const owner = ownerOfRef(db, { series, id });
+  if (!owner || !owner.ulid) throw new Error(`no entry found with id ${series === "E" ? id : formatEntryRef(id, series)}`);
   const r = db.prepare(`SELECT needs_merge FROM entries WHERE ulid = ?`).get(owner.ulid) as { needs_merge: number } | undefined;
-  if (!r || r.needs_merge !== 1) throw new Error(`${formatEntryRef(id)} is not waiting for a merge`);
+  if (!r || r.needs_merge !== 1) throw new Error(`${formatEntryRef(id, series)} is not waiting for a merge`);
   return owner.ulid as string;
 }
 
@@ -46,8 +46,9 @@ export function assertHeads(db: DB, id: number, ulid: string, expected: string[]
   if (now.length !== want.length || now.some((h, i) => h !== want[i])) throw new VersionsChangedError(id);
 }
 
-export function getMergeView(db: DB, id: number): MergeView {
-  const ulid = flaggedUlid(db, id);
+/** `series` (stage B1): omitted = E. */
+export function getMergeView(db: DB, id: number, series = "E"): MergeView {
+  const ulid = flaggedUlid(db, id, series);
   const cur = db.prepare(`SELECT title, summary, description FROM entries WHERE ulid = ?`).get(ulid) as MergeView["current"];
   const heads = headsOf(revisionsOf(db, ulid)).map((h) => ({
     rev_id: h.rev_id, title: h.title, summary: h.summary, description: h.description, author: h.author ?? null, created_at: h.created_at,
