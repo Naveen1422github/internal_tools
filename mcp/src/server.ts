@@ -1269,11 +1269,25 @@ function formatTaskMatches(
   return `Also ${tasks.length} matching task(s) (collab.task.get for detail):\n${lines.join("\n")}`;
 }
 
+/**
+ * "superseded by" follows superseded_by_ulid (J17): getEntry's superseded_target
+ * carries the note's current number. Only files without the ULID column
+ * (superseded_target undefined) fall back to the stored integer.
+ */
+function supersededBy(e: { superseded_by?: number | null; superseded_target?: { id: number | null; present: boolean } | null }): string | null {
+  if (e.superseded_target === undefined) return e.superseded_by != null ? `superseded by ${formatEntryRef(e.superseded_by)}` : null;
+  if (e.superseded_target === null) return null;
+  return e.superseded_target.present
+    ? `superseded by ${formatEntryRef(e.superseded_target.id)}`
+    : `superseded by ${formatEntryRef(null)} (not on this laptop)`;
+}
+
 function formatEntry(e: {
   id: number; type: string; title: string; summary: string;
   description: string | null; status: string; agent: string | null;
   module: string | null; modules?: string[]; category?: string;
   superseded_by?: number | null; task_id: string | null;
+  superseded_target?: { id: number | null; present: boolean } | null;
   tokens_estimate: number; created_at: string;
   refs: Array<{ ref_type: string; ref_value: string }>;
 }): string {
@@ -1290,7 +1304,7 @@ function formatEntry(e: {
     e.task_id ? `task=${e.task_id}` : null,
     e.agent ? `agent=${e.agent}` : null,
     `status=${e.status}`,
-    e.superseded_by != null ? `superseded by ${formatEntryRef(e.superseded_by)}` : null,
+    supersededBy(e),
     `tokens~${e.tokens_estimate}`,
     `created=${e.created_at}`,
   ].filter(Boolean);

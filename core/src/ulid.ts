@@ -32,6 +32,11 @@ let lastRand = 0n;
  * the random part is incremented instead of redrawn, so ids from this process
  * always sort in creation order.
  */
+/** True when `value` has the shape of a ULID: 26 Crockford base32 characters. */
+export function isUlid(value: string): boolean {
+  return /^[0-9A-HJKMNP-TV-Z]{26}$/.test(value);
+}
+
 export function newUlid(now: number = Date.now()): string {
   if (now <= lastMs) {
     lastRand += 1n;

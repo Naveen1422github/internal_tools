@@ -4,6 +4,7 @@ import {
   addEntry, addEntryAsync, getEntry, deleteEntry, supersede, doctor,
   editEntry, EntryNotFoundError, reassignModule, upsertModule, deleteModule,
   liveEntry, ftsJoin, readSyncOverview, NeedsMergeError, formatEntryRef,
+  getEntryByUlid, isUlid,
 } from '@collab-mcp/core';
 
 const db = getDb();
@@ -169,10 +170,14 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
 
   'GET /api/collab/entry': async (req, res, send) => {
     const url = new URL(req.url!, `http://${req.headers.host}`);
-    const id = Number(url.searchParams.get('id'));
+    const ulid = url.searchParams.get('ulid');
+    const idParam = url.searchParams.get('id');
+    if (ulid === null && idParam === null) return send(400, { error: 'id or ulid is required' });
+    if (ulid !== null && !isUlid(ulid)) return send(400, { error: 'ulid is not a ULID' });
     try {
       // Core read: a tombstoned entry is still returned, with deleted_at set (D5b).
-      const entry = getEntry(db, id);
+      // A link is followed by its target's ULID (J17); id stays for typed numbers.
+      const entry = ulid !== null ? getEntryByUlid(db, ulid) : getEntry(db, Number(idParam));
       if (!entry) return send(404, { error: 'Not found' });
       send(200, entry);
     } catch (err: any) {
@@ -437,7 +442,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     const since = url.searchParams.get('since'); // ISO date or sqlite-friendly
     if (!['json', 'markdown'].includes(format)) return send(400, { error: 'format must be json or markdown' });
     try {
-      let q = 'SELECT id, ulid, type, kind, category, title, summary, description, status, agent, module, task_id, superseded_by, created_at FROM entries WHERE deprecated=0'
+      let q = 'SELECT id, ulid, type, kind, category, title, summary, description, status, agent, module, task_id, superseded_by, superseded_by_ulid, created_at FROM entries WHERE deprecated=0'
         + ` AND ${liveEntry(db, 'entries')}`;
       const params: any[] = [];
       if (moduleFilter) { q += ' AND ulid IN (SELECT entry_ulid FROM entry_modules WHERE module=?)'; params.push(moduleFilter); }
