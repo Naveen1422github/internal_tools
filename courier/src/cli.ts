@@ -6,7 +6,8 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import {
-  resolveDbPath, loadCrsqlite, getSyncValue, postOfficeTargetFromDb, unsentSharedCount, requestJson, type PostOfficeTarget,
+  resolveDbPath, loadCrsqlite, getSyncValue, setSyncValue, SYNC_KEYS, connectPinned, PinMismatchError,
+  postOfficeTargetFromDb, unsentSharedCount, requestJson, type PostOfficeTarget,
   describeMemberState, TEAM_STATUS_NOTE,
   startupProblem, startHeartbeat, runtimeDirFor, readBuildInfo, nameForPath,
 } from "@collab-mcp/core";
@@ -43,6 +44,7 @@ export const USAGE = `collab sync: share chosen modules of your collab notes wit
   collab sync start [--foreground]      start the courier in the background
   collab sync stop
   collab sync status [--team]
+  collab sync set-address <https://host:port>   the post office moved (e.g. its laptop changed network)
   collab sync modules | share <module> | unshare <module>
   collab sync autostart on|off [--dry-run]
   collab sync uninstall [--yes]         remove everything setup added
@@ -145,6 +147,39 @@ export async function runCli(argv: string[], io: Io, deps: CliDeps = {}): Promis
 
   try {
     switch (cmd) {
+      // Collab E-767: point this laptop at its post office's new address. Safe
+      // because the certificate pinned at join is checked first: an address
+      // where anything else answers is refused and nothing changes. A running
+      // courier picks the new address up on its next retry (it re-reads it).
+      case "set-address": {
+        const url = (pos[2] ?? "").trim().replace(/\/+$/, "");
+        if (!/^https:\/\/[^\s/]+$/.test(url)) {
+          io.err(`set-address needs the post office's address as https://host:port, e.g. collab sync set-address https://192.168.1.40:7443`);
+          return { code: 2 };
+        }
+        const cfg = needConfig();
+        const db = openReadable(cfg.dbPath);
+        try {
+          const fingerprint = getSyncValue(db, SYNC_KEYS.fingerprint);
+          if (!fingerprint) throw new Error("this notes DB has no post office certificate on record; run collab sync setup <join code>");
+          try {
+            (await connectPinned({ url, fingerprint }, 5000)).destroy();
+          } catch (e) {
+            if (e instanceof PinMismatchError) {
+              io.err(`refused: ${url} answers with a different certificate, so it is not your post office. Nothing changed.`);
+            } else {
+              io.err(`refused: could not reach a post office at ${url} (${(e as Error).message}). Nothing changed.`);
+            }
+            return { code: 1 };
+          }
+          setSyncValue(db, SYNC_KEYS.url, url);
+        } finally { closeReadable(db); }
+        writeCourierConfig(dir, { ...cfg, postOffice: url });
+        io.out(`post office address set to ${url} (certificate checked: it is your post office).`);
+        io.out(`a running courier switches on its next retry; saving notes works right away.`);
+        return { code: 0 };
+      }
+
       case "setup": {
         const code = pos[2];
         if (!code) throw new Error("setup needs the join code from the post office owner: collab sync setup <join code>");
