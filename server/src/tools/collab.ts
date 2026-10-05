@@ -146,7 +146,15 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     if (!db) return send(500, { error: 'Database not available' });
 
     try {
-      let query = `
+      // From 0009 a dispatch follows its note by ULID: entry_series says which
+      // series its entry_id belongs to (SH-3 vs E-00003).
+      let query = hasSeries(db)
+        ? `
+        SELECT d.*, (SELECT e.series FROM entries e WHERE e.ulid = d.entry_ulid) AS entry_series
+        FROM dispatches d
+        WHERE 1=1
+      `
+        : `
         SELECT * FROM dispatches
         WHERE 1=1
       `;

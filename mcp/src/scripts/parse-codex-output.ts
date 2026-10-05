@@ -35,7 +35,7 @@
  *                            other than the one the install lives in.
  */
 import { readFileSync } from "node:fs";
-import { getDb, getDbPath, migrate, closeDb } from "@collab-mcp/core";
+import { getDb, getDbPath, migrate, closeDb, formatEntryRef, ownerOfRef, hasSeries } from "@collab-mcp/core";
 import { addEntryAsync } from "@collab-mcp/core";
 import {
   parseIntoDraft,
@@ -265,7 +265,7 @@ const saved = await addEntryAsync(db, {
 
 process.stderr.write(
   `=== Saved to ${getDbPath()} ===\n` +
-    `  id:         ${saved.id}\n` +
+    `  id:         ${saved.series === "E" ? saved.id : formatEntryRef(saved.id, saved.series)}\n` +
     `  type:       ${result.draft_entry.type}\n` +
     `  title:      ${result.draft_entry.title}\n` +
     `  module:     ${result.draft_entry.module ?? "(none)"}\n` +
@@ -287,19 +287,23 @@ if (haveDispatchSignal && (args.agent ?? "Codex") !== "Claude" && (args.agent ??
   const promptChars = args.prompt_chars ?? 0;
   const promptTokensEst = Math.ceil(promptChars / 4);
   const dispatchAgent = args.agent ?? "Codex";
+  // The dispatch follows its note by ULID (stage B1): entry_id is only a label,
+  // and SH-3 and E-3 share the number 3.
+  const withUlid = hasSeries(db);
   const stmt = db.prepare(`
     INSERT INTO dispatches (
-      entry_id, agent, prompt_chars, prompt_tokens_est,
+      entry_id, ${withUlid ? "entry_ulid, " : ""}agent, prompt_chars, prompt_tokens_est,
       input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, total_tokens,
       wall_clock_ms, exit_code, module, task_id, source
     ) VALUES (
-      @entry_id, @agent, @prompt_chars, @prompt_tokens_est,
+      @entry_id, ${withUlid ? "@entry_ulid, " : ""}@agent, @prompt_chars, @prompt_tokens_est,
       @input_tokens, @cached_input_tokens, @output_tokens, @reasoning_tokens, @total_tokens,
       @wall_clock_ms, @exit_code, @module, @task_id, @source
     )
   `);
   const info = stmt.run({
     entry_id: saved.id,
+    ...(withUlid ? { entry_ulid: ownerOfRef(db, { series: saved.series, id: saved.id })?.ulid ?? null } : {}),
     agent: dispatchAgent,
     prompt_chars: promptChars,
     prompt_tokens_est: promptTokensEst,
@@ -328,7 +332,7 @@ if (haveDispatchSignal && (args.agent ?? "Codex") !== "Claude" && (args.agent ??
 
 console.log(
   JSON.stringify(
-    { id: saved.id, dispatch_id: dispatchId, confidence: result.confidence },
+    { id: saved.id, ...(saved.series !== "E" ? { series: saved.series } : {}), dispatch_id: dispatchId, confidence: result.confidence },
     null,
     2,
   ),

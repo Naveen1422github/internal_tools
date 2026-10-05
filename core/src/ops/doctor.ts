@@ -1,7 +1,9 @@
 import type { DB } from "../db.js";
+import { collabStartDir, findCollabFile } from "../db.js";
 import { parseEntryRef } from "../ulid.js";
 import { getHubStatus, IMPORTANT_TYPES } from "./hub.js";
-import { liveEntry } from "../schema.js";
+import { hasSeries, liveEntry } from "../schema.js";
+import { currentProject } from "../projects.js";
 import { hasCrrTables, isCrsqliteLoaded } from "../sync/extension.js";
 import { formatEntryRef } from "../entry-ref.js";
 
@@ -147,7 +149,7 @@ function schemaCheck(
   return { name, severity, detail, items };
 }
 
-export function doctor(db: DB): DoctorResult {
+export function doctor(db: DB, opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): DoctorResult {
   const checks: DoctorCheck[] = [];
 
   // Migration-aware: a DB that hasn't applied staged 0005/0006 yet must never
@@ -439,19 +441,26 @@ export function doctor(db: DB): DoctorResult {
     });
   }
 
+  const has0009 = hasSeries(db);
   if (has0006) {
+    // From 0009 a number is unique per series: E-1 and SH-1 are different notes.
     const dupIds = db
-      .prepare(`SELECT id, COUNT(*) AS n FROM entries WHERE id IS NOT NULL GROUP BY id HAVING n > 1 ORDER BY id`)
-      .all() as Array<{ id: number; n: number }>;
+      .prepare(has0009
+        ? `SELECT series, id, COUNT(*) AS n FROM entries WHERE id IS NOT NULL GROUP BY series, id HAVING n > 1 ORDER BY series = 'E' DESC, series, id`
+        : `SELECT 'E' AS series, id, COUNT(*) AS n FROM entries WHERE id IS NOT NULL GROUP BY id HAVING n > 1 ORDER BY id`)
+      .all() as Array<{ series: string; id: number; n: number }>;
     checks.push({
       name: "data.duplicate_entry_ids",
       severity: dupIds.length > 0 ? "warn" : "ok",
       detail: dupIds.length > 0 ? `${dupIds.length} E-number(s) used by more than one entry` : "every E-number is unique",
-      items: dupIds.length > 0 ? dupIds.map((r) => `${formatEntryRef(r.id)} x${r.n}`) : undefined,
+      items: dupIds.length > 0 ? dupIds.map((r) => `${formatEntryRef(r.id, r.series)} x${r.n}`) : undefined,
     });
     const tomb = (db.prepare(`SELECT COUNT(*) AS c FROM entries WHERE deleted_at IS NOT NULL`).get() as { c: number }).c;
     checks.push({ name: "data.tombstones", severity: "ok", detail: `${tomb} tombstoned entr${tomb === 1 ? "y" : "ies"}` });
   }
+
+  // Stage B1 (spec rule 8): every project state explained. 0009+ only.
+  if (has0009) checks.push(...projectChecks(db, opts));
 
   // T-011 / E-657: main note (hub) coverage. warn-only: drift, not corruption.
   // Only registered modules (modules table) are checked; modules that exist
@@ -563,3 +572,49 @@ export function doctor(db: DB): DoctorResult {
   };
 }
 
+
+/** projects.current / projects.orphan_notes / projects.series_mismatch (stage B1). */
+function projectChecks(db: DB, opts: { cwd?: string; env?: NodeJS.ProcessEnv }): DoctorCheck[] {
+  const out: DoctorCheck[] = [];
+  try {
+    const found = findCollabFile(collabStartDir(opts));
+    const p = currentProject(db, opts);
+    out.push({
+      name: "projects.current",
+      severity: "ok",
+      detail: p
+        ? `${p.code} ${p.name} (${p.mode}), from ${found!.file}: new notes are ${p.code}-n`
+        : "none: notes go to the E series (no .collab names a project)",
+    });
+  } catch (e) {
+    out.push({ name: "projects.current", severity: "error", detail: (e as Error).message.replace(/^\[collab\] /, "") });
+  }
+
+  const orphans = db.prepare(
+    `SELECT e.series, e.id FROM entries e
+      WHERE e.project_ulid IS NOT NULL AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.ulid = e.project_ulid)
+      ORDER BY e.series, e.id`,
+  ).all() as Array<{ series: string; id: number | null }>;
+  out.push({
+    name: "projects.orphan_notes",
+    severity: orphans.length > 0 ? "error" : "ok",
+    detail: orphans.length > 0
+      ? `${orphans.length} note(s) name a project that isn't in this notebook`
+      : "every project note's project is here",
+    items: orphans.length > 0 ? orphans.map((r) => formatEntryRef(r.id, r.series)) : undefined,
+  });
+
+  const mismatched = db.prepare(
+    `SELECT e.series, e.id, p.code FROM entries e JOIN projects p ON p.ulid = e.project_ulid
+      WHERE e.series <> p.code ORDER BY e.series, e.id`,
+  ).all() as Array<{ series: string; id: number | null; code: string }>;
+  out.push({
+    name: "projects.series_mismatch",
+    severity: mismatched.length > 0 ? "error" : "ok",
+    detail: mismatched.length > 0
+      ? `${mismatched.length} note(s) numbered in another series than their project's code`
+      : "every project note carries its project's code",
+    items: mismatched.length > 0 ? mismatched.map((r) => `${formatEntryRef(r.id, r.series)} (project ${r.code})`) : undefined,
+  });
+  return out;
+}
