@@ -121,7 +121,7 @@ BEGIN
 END`;
 
 /** The guarded triggers for this notebook's schema (from 0009 the ref and supersede triggers read `series`). */
-function guardedTriggers(db: DB): Array<[name: string, sql: string]> {
+export function guardedTriggers(db: DB): Array<[name: string, sql: string]> {
   if (!hasSeries(db)) return GUARDED_TRIGGERS_SQL;
   const v0009: Record<string, string> = {
     trg_refs_fill_target_ulid: REFS_TRIGGER_0009,

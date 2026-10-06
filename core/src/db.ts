@@ -280,6 +280,46 @@ export interface MigrateOptions {
   migrationsDir?: string;
   /** Tests only: defaults to <migrationsDir>/staged. */
   stagedDir?: string;
+  /** Tests only: versions this build knows. Defaults to KNOWN_MIGRATIONS for the real folder, no check for a test folder. */
+  knownVersions?: ReadonlySet<string>;
+}
+
+/**
+ * Every migration this build was written against (released and staged). The
+ * SQL files are read from disk at run time but their JS steps (CRR_ALTERS,
+ * AFTER_MIGRATION) are compiled in, so a file this list lacks came from a
+ * newer checkout and would run without them (E-793). A new migration must be
+ * added here; core/test/known-migrations.test.ts fails until it is.
+ */
+export const KNOWN_MIGRATIONS: ReadonlySet<string> = new Set([
+  "0001_init",
+  "0002_dispatches",
+  "0002_fix_modules_slug_check",
+  "0003_dispatches_updated_at",
+  "0004_categories_modules_supersede",
+  "0005_ulid_expand",
+  "0006_ulid_contract",
+  "0007_sync_prep",
+  "0008_revision_author",
+  "0009_projects",
+]);
+
+/**
+ * Refused before anything is touched: a migration file newer than this build
+ * (the disk is ahead: a merge without a rebuild), or a notebook already
+ * migrated by a newer build (the notebook is ahead: an old build opening it).
+ */
+export class UnknownMigrationError extends Error {
+  constructor(public readonly versions: string[], public readonly where: "folder" | "notebook") {
+    super(
+      where === "folder"
+        ? `[collab-mcp] migration ${versions.join(", ")} is newer than this build. ` +
+          `Stop every collab program, rebuild (npm run build in internal-tools/), then start again.`
+        : `[collab-mcp] this notebook was upgraded by a newer build (${versions.join(", ")}). ` +
+          `This build is older: rebuild (npm run build in internal-tools/) before opening it.`,
+    );
+    this.name = "UnknownMigrationError";
+  }
 }
 
 interface Pending {
@@ -328,6 +368,13 @@ function pendingMigrations(db: DB, upTo: string | undefined, opts: MigrateOption
   for (const s of staged) {
     const dup = core.find((c) => c.version === s.version);
     if (dup) throw new DuplicateMigrationError(s.version, dup.file, s.file);
+  }
+  const known = opts.knownVersions ?? (opts.migrationsDir ? null : KNOWN_MIGRATIONS);
+  if (known) {
+    const newerFiles = [...core, ...staged].map((m) => m.version).filter((v) => !known.has(v)).sort();
+    if (newerFiles.length) throw new UnknownMigrationError(newerFiles, "folder");
+    const newerApplied = [...applied].filter((v) => !known.has(v)).sort();
+    if (newerApplied.length) throw new UnknownMigrationError(newerApplied, "notebook");
   }
   return [...core, ...staged]
     .sort((a, b) => (a.version < b.version ? -1 : a.version > b.version ? 1 : 0))

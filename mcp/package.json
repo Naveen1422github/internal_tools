@@ -14,6 +14,7 @@
     "module-card": "tsx src/scripts/module-card.ts",
     "seed": "tsx src/scripts/seed.ts",
     "test:search": "tsx src/scripts/manual-search.ts",
+    "test": "node scripts/check-dist.mjs && tsx --test test/**/*.test.ts",
     "test:golden": "tsx --test test/golden/tools.golden.test.ts",
     "inspect-db": "tsx src/scripts/inspect-db.ts",
     "log-collab": "tsx src/scripts/log-collab.ts",
