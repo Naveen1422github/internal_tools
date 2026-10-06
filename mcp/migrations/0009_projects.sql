@@ -65,4 +65,17 @@ BEGIN
   WHERE entry_ulid = NEW.entry_ulid AND ref_type = NEW.ref_type AND ref_value = NEW.ref_value;
 END;
 
+-- superseded_by is a bare number, so it means series E: without the series
+-- filter a missing E-n would fill in a project note's ulid (SH-n).
+DROP TRIGGER IF EXISTS trg_entries_fill_superseded_ulid;
+CREATE TRIGGER trg_entries_fill_superseded_ulid
+AFTER UPDATE OF superseded_by ON entries
+WHEN NEW.superseded_by IS NOT OLD.superseded_by
+ AND NEW.superseded_by_ulid IS OLD.superseded_by_ulid
+BEGIN
+  UPDATE entries
+     SET superseded_by_ulid = (SELECT e.ulid FROM entries e WHERE e.id = NEW.superseded_by AND e.series = 'E' ORDER BY e.ulid LIMIT 1)
+   WHERE ulid = NEW.ulid;
+END;
+
 INSERT INTO schema_migrations (version) VALUES ('0009_projects');

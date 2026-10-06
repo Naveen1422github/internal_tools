@@ -108,10 +108,26 @@ BEGIN
 END`],
 ];
 
-/** The guarded triggers for this notebook's schema (the ref trigger reads `series` from 0009). */
+// trg_entries_fill_superseded_ulid from 0009: superseded_by is a bare number, so series E.
+const SUPERSEDED_TRIGGER_0009 = `CREATE TRIGGER trg_entries_fill_superseded_ulid
+AFTER UPDATE OF superseded_by ON entries
+WHEN crsql_internal_sync_bit() = 0
+ AND NEW.superseded_by IS NOT OLD.superseded_by
+ AND NEW.superseded_by_ulid IS OLD.superseded_by_ulid
+BEGIN
+  UPDATE entries
+     SET superseded_by_ulid = (SELECT e.ulid FROM entries e WHERE e.id = NEW.superseded_by AND e.series = 'E' ORDER BY e.ulid LIMIT 1)
+   WHERE ulid = NEW.ulid;
+END`;
+
+/** The guarded triggers for this notebook's schema (from 0009 the ref and supersede triggers read `series`). */
 function guardedTriggers(db: DB): Array<[name: string, sql: string]> {
   if (!hasSeries(db)) return GUARDED_TRIGGERS_SQL;
-  return GUARDED_TRIGGERS_SQL.map(([n, sql]) => [n, n === "trg_refs_fill_target_ulid" ? REFS_TRIGGER_0009 : sql]);
+  const v0009: Record<string, string> = {
+    trg_refs_fill_target_ulid: REFS_TRIGGER_0009,
+    trg_entries_fill_superseded_ulid: SUPERSEDED_TRIGGER_0009,
+  };
+  return GUARDED_TRIGGERS_SQL.map(([n, sql]) => [n, v0009[n] ?? sql]);
 }
 
 /**
