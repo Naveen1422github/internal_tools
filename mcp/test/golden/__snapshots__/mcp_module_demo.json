@@ -4,5 +4,10 @@
   "indexes": [],
   "recent_decisions": [],
   "top_gotchas": [],
-  "recent_handoffs": []
+  "needs_merge": [],
+  "recent_handoffs": [],
+  "hub": {
+    "state": "unset",
+    "coverage": null
+  }
 }

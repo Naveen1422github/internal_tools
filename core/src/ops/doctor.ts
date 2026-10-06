@@ -5,6 +5,7 @@ import { getHubStatus, IMPORTANT_TYPES } from "./hub.js";
 import { hasSeries, liveEntry } from "../schema.js";
 import { currentProject } from "../projects.js";
 import { hasCrrTables, isCrsqliteLoaded } from "../sync/extension.js";
+import { guardedTriggers, SYNCED_TABLES } from "../sync/enable.js";
 import { formatEntryRef } from "../entry-ref.js";
 
 export interface DoctorCheck {
@@ -521,6 +522,40 @@ export function doctor(db: DB, opts: { cwd?: string; env?: NodeJS.ProcessEnv } =
       name: "sync.extension",
       severity: loaded ? "ok" : "error",
       detail: loaded ? "cr-sqlite loaded" : "this DB shares notes but cr-sqlite is not loaded on this connection: writes will fail",
+    });
+
+    // E-793: names alone passed while a migration had swapped in unguarded bodies.
+    const triggerSql = (name: string) =>
+      (db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?`).get(name) as { sql: string } | undefined)?.sql;
+    const unguarded = guardedTriggers(db)
+      .map(([name]) => name)
+      .filter((name) => !triggerSql(name)?.includes("crsql_internal_sync_bit() = 0"));
+    checks.push({
+      name: "sync.trigger_guards",
+      severity: unguarded.length > 0 ? "error" : "ok",
+      detail: unguarded.length > 0
+        ? `${unguarded.length} bookkeeping trigger(s) missing or not guarded: received notes would be rewritten (E-643)`
+        : "bookkeeping triggers guarded",
+      items: unguarded.length > 0 ? unguarded : undefined,
+    });
+
+    // E-793: a column added without crsql_begin/commit_alter is never sent.
+    const untracked: string[] = [];
+    for (const table of SYNCED_TABLES) {
+      const utrig = triggerSql(`${table}__crsql_utrig`);
+      if (!utrig) continue; // no update trigger = not a CRR here (schema.tables reports what is missing)
+      const pk = new Set((db.prepare(`SELECT name FROM pragma_table_info(?) WHERE pk > 0`).all(table) as Array<{ name: string }>).map((r) => r.name));
+      for (const { name } of db.prepare(`SELECT name FROM pragma_table_info(?)`).all(table) as Array<{ name: string }>) {
+        if (!pk.has(name) && !utrig.includes(`NEW."${name}"`)) untracked.push(`${table}.${name}`);
+      }
+    }
+    checks.push({
+      name: "sync.tracked_columns",
+      severity: untracked.length > 0 ? "error" : "ok",
+      detail: untracked.length > 0
+        ? `${untracked.length} column(s) cr-sqlite does not track: edits to them are never sent`
+        : "cr-sqlite tracks every shared column",
+      items: untracked.length > 0 ? untracked : undefined,
     });
   }
 

@@ -4,17 +4,17 @@
     {
       "name": "schema.tables",
       "severity": "ok",
-      "detail": "14 expected tables present"
+      "detail": "18 expected tables present"
     },
     {
       "name": "schema.indexes",
       "severity": "ok",
-      "detail": "26 expected indexes present"
+      "detail": "25 expected indexes present"
     },
     {
       "name": "schema.triggers",
       "severity": "ok",
-      "detail": "14 expected triggers present"
+      "detail": "13 expected triggers present"
     },
     {
       "name": "data.orphan_refs.task",
@@ -60,6 +60,51 @@
       "name": "data.unresolved_entry_refs",
       "severity": "ok",
       "detail": "every entry link resolves"
+    },
+    {
+      "name": "data.duplicate_entry_ids",
+      "severity": "ok",
+      "detail": "every E-number is unique"
+    },
+    {
+      "name": "data.tombstones",
+      "severity": "ok",
+      "detail": "0 tombstoned entries"
+    },
+    {
+      "name": "projects.current",
+      "severity": "ok",
+      "detail": "none: notes go to the E series (no .collab names a project)"
+    },
+    {
+      "name": "projects.orphan_notes",
+      "severity": "ok",
+      "detail": "every project note's project is here"
+    },
+    {
+      "name": "projects.series_mismatch",
+      "severity": "ok",
+      "detail": "every project note carries its project's code"
+    },
+    {
+      "name": "hub.missing",
+      "severity": "ok",
+      "detail": "every module with important notes has a main note"
+    },
+    {
+      "name": "hub.unlinked",
+      "severity": "ok",
+      "detail": "main notes reach every important note"
+    },
+    {
+      "name": "hub.expired_links",
+      "severity": "ok",
+      "detail": "no expired main-note links"
+    },
+    {
+      "name": "sync.needs_merge",
+      "severity": "ok",
+      "detail": "no unmerged edits"
     },
     {
       "name": "fts.integrity",
