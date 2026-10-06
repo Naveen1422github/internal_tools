@@ -38,19 +38,19 @@ if (result.active_tasks.length > 0) {
 if (result.top_gotchas.length > 0) {
   lines.push("\nTop gotchas:");
   for (const g of result.top_gotchas) {
-    lines.push(`  [${formatEntryRef(g.id)}] ${g.summary}`);
+    lines.push(`  [${formatEntryRef(g.id, g.series)}] ${g.summary}`);
   }
 }
 if (result.recent_decisions.length > 0) {
   lines.push("\nRecent decisions:");
   for (const d of result.recent_decisions) {
-    lines.push(`  [${formatEntryRef(d.id)}] ${d.title}`);
+    lines.push(`  [${formatEntryRef(d.id, d.series)}] ${d.title}`);
   }
 }
 if (result.recent_handoffs.length > 0) {
   lines.push("\nRecent handoffs:");
   for (const h of result.recent_handoffs) {
-    lines.push(`  [${formatEntryRef(h.id)}] ${h.agent ?? "?"} - ${h.title}`);
+    lines.push(`  [${formatEntryRef(h.id, h.series)}] ${h.agent ?? "?"} - ${h.title}`);
   }
 }
 

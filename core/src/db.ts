@@ -5,6 +5,8 @@ import { backfillUlids } from "./backfill.js";
 import { preflight0006 } from "./preflight-0006.js";
 import { hasCrrTables, loadCrsqlite, isCrsqliteLoaded, ensureCrsqlite } from "./sync/extension.js";
 import { installSyncPing } from "./sync/ping.js";
+import { installGuardedTriggers } from "./sync/enable.js";
+import { isSyncEnabled } from "./sync/state.js";
 import { collabDataDir, readNotebookConfig, samePath, type NotebookConfig } from "./notebooks.js";
 import { installRoot } from "./install-root.js";
 
@@ -52,22 +54,37 @@ export class UnknownNotebookError extends Error {
   }
 }
 
-/** Nearest .collab file at or above `startDir` (spec P7 rule 3: nearest wins). */
-export function findCollabFile(startDir: string): { file: string; name: string } | null {
+/**
+ * Nearest .collab file at or above `startDir` (spec P7 rule 3: nearest wins).
+ * `project` is the ULID on its `project = <ulid>` line (stage B1, spec P3), or null.
+ */
+export function findCollabFile(startDir: string): { file: string; name: string; project: string | null } | null {
   let dir = resolvePath(startDir);
   for (;;) {
     const file = join(dir, ".collab");
     if (existsSync(file)) {
+      let name: string | null = null;
+      let project: string | null = null;
       for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
-        const m = line.replace(/#.*/, "").match(/^\s*notebook\s*=\s*(\S+)\s*$/);
-        if (m) return { file, name: m[1] };
+        const clean = line.replace(/#.*/, "");
+        const m = clean.match(/^\s*notebook\s*=\s*(\S+)\s*$/);
+        if (m && name === null) name = m[1];
+        const p = clean.match(/^\s*project\s*=\s*(\S+)\s*$/);
+        if (p && project === null) project = p[1];
       }
-      throw new Error(`[collab] ${file} has no "notebook = <name>" line`);
+      if (name === null) throw new Error(`[collab] ${file} has no "notebook = <name>" line`);
+      return { file, name, project };
     }
     const up = dirname(dir);
     if (up === dir) return null;
     dir = up;
   }
+}
+
+/** Where the .collab walk starts: CLAUDE_PROJECT_DIR when set (spec J15a), else the working folder. */
+export function collabStartDir(opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): string {
+  const env = opts.env ?? process.env;
+  return env.CLAUDE_PROJECT_DIR || (opts.cwd ?? process.cwd());
 }
 
 /**
@@ -114,7 +131,7 @@ export function resolveDbPath(
   if (env.COLLAB_NOTEBOOK) {
     return { path: lookup(env.COLLAB_NOTEBOOK, "--notebook"), source: "notebook-flag", name: env.COLLAB_NOTEBOOK, ...none };
   }
-  const found = findCollabFile(cwd);
+  const found = findCollabFile(collabStartDir({ cwd, env }));
   if (env.COLLAB_DB_PATH) {
     const path = env.COLLAB_DB_PATH;
     let clash: DbPathResolution["clash"] = null;
@@ -339,6 +356,12 @@ const BEFORE_MIGRATION: Record<string, (db: DB) => unknown> = {
   "0006_ulid_contract": preflight0006,
 };
 
+// JS that must run immediately AFTER a given migration's SQL.
+const AFTER_MIGRATION: Record<string, (db: DB) => unknown> = {
+  // The SQL file creates the unguarded ref trigger; a synced notebook needs the guarded one (E-643).
+  "0009_projects": (db) => { if (isSyncEnabled(db)) installGuardedTriggers(db); },
+};
+
 /** True when `table` is a cr-sqlite CRR in this file. */
 function isCrr(db: DB, table: string): boolean {
   return !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(`${table}__crsql_clock`);
@@ -351,6 +374,7 @@ function isCrr(db: DB, table: string): boolean {
  */
 const CRR_ALTERS: Record<string, string> = {
   "0008_revision_author": "entry_revisions",
+  "0009_projects": "entries",
 };
 
 function applyMigrations(db: DB, pending: Pending[]): string[] {
@@ -372,6 +396,7 @@ function applyMigrations(db: DB, pending: Pending[]): string[] {
       // Each migration file owns its BEGIN/COMMIT; we just exec.
       db.exec(sql);
     }
+    AFTER_MIGRATION[m.version]?.(db);
   }
   // Runs every startup, not only when 0005 applies: it repairs rows written by
   // paths that bypass core (scripts, the REST server). Cheap: WHERE ... IS NULL.

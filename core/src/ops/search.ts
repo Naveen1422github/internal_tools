@@ -1,5 +1,5 @@
 import type { DB } from "../db.js";
-import { liveEntry, ftsJoin, hasUlidPrimaryKey } from "../schema.js";
+import { liveEntry, ftsJoin, hasSeries, hasUlidPrimaryKey } from "../schema.js";
 
 // ------------------------------------------------------------
 // Types
@@ -15,6 +15,8 @@ export interface SearchArgs {
   since?: string;                 // "7d" | "2w" | "1m" | ISO date
   include_deprecated: boolean;
   limit: number;
+  /** Only this project's notes (stage B1, spec P4). Omitted = every note, as today. */
+  project_ulid?: string;
 }
 
 export interface EntrySummary {
@@ -25,6 +27,8 @@ export interface EntrySummary {
   score: number | null;
   tokens_estimate: number;
   created_at: string;
+  series: string;                 // "E", or the project's code (0009+; always "E" before)
+  project_ulid: string | null;    // null = no project
   description?: string;           // only populated when auto-expanded
 }
 
@@ -116,6 +120,12 @@ export function searchEntries(db: DB, args: SearchArgs): SearchResult {
   if (args.category) { where.push("e.category = ?"); params.push(args.category); }
   if (args.status)   { where.push("e.status = ?");   params.push(args.status); }
   if (sinceIso)      { where.push("e.created_at >= ?"); params.push(sinceIso); }
+  const series = hasSeries(db);
+  if (args.project_ulid !== undefined) {
+    // Before 0009 no note has a project, so a project scope matches nothing.
+    if (series) { where.push("e.project_ulid = ?"); params.push(args.project_ulid); }
+    else where.push("0 = 1");
+  }
 
   // FTS path only when there's a query that yields usable tokens (all-punctuation
   // input -> null -> fall through to the recency listing instead of a broken MATCH).
@@ -130,7 +140,8 @@ export function searchEntries(db: DB, args: SearchArgs): SearchResult {
 
   // Internal key used only for auto-expand below; stripped before returning.
   const keyCol = ulidPk ? "e.ulid" : "e.id";
-  const cols = `e.id, e.type, e.title, e.summary, e.tokens_estimate, e.created_at, ${keyCol} AS _key`;
+  const seriesCols = series ? "e.series, e.project_ulid" : "'E' AS series, NULL AS project_ulid";
+  const cols = `e.id, e.type, e.title, e.summary, e.tokens_estimate, e.created_at, ${seriesCols}, ${keyCol} AS _key`;
 
   let sql: string;
   let finalParams: unknown[];
@@ -228,6 +239,7 @@ export function searchEntries(db: DB, args: SearchArgs): SearchResult {
       since: sinceIso,
       include_deprecated: args.include_deprecated,
       limit: args.limit,
+      project_ulid: args.project_ulid,
     },
   };
 }

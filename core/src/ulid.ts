@@ -89,3 +89,27 @@ export function parseEntryRef(value: string): number | null {
   const n = Number(m[1]);
   return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
+
+/** A note number with its series: `E-00760` is { series: "E", id: 760 }, `SH-12` is { series: "SH", id: 12 }. */
+export interface NoteRef { series: string; id: number }
+
+/** A project's series code: 2-8 of A-Z/0-9, starting with a letter (never `E`, checked where codes are created). */
+export const SERIES_CODE_RE = /^[A-Z][A-Z0-9]{1,7}$/;
+
+/**
+ * Note reference -> { series, id }, or null (piece 2 stage B1). "760", "#760",
+ * "E760", "E-760", "E-00760" mean series E (every existing reference keeps its
+ * meaning); "SH-12", "sh-0012" mean project SH. A project code before the first
+ * '-' is checked FIRST, like the SQL trigger trg_refs_fill_target_ulid (0009),
+ * so "E2-5" is project E2, note 5. Same whitespace set as parseEntryRef; MUST
+ * stay in lockstep with the trigger (a parity test guards this).
+ */
+export function parseNoteRef(value: string): NoteRef | null {
+  const s = value.replace(TRIM_REF_RE, "").toUpperCase();
+  const code = /^([A-Z][A-Z0-9]{1,7})-(\d+)$/.exec(s);
+  const legacy = code ? null : /^(?:#|E-?)?(\d+)$/.exec(s);
+  if (!code && !legacy) return null;
+  const series = code ? code[1] : "E";
+  const id = Number(code ? code[2] : legacy![1]);
+  return Number.isSafeInteger(id) && id > 0 ? { series, id } : null;
+}

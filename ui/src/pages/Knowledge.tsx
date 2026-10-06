@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { search, modules, type Entry } from '../api/client';
 import { useUi } from '../store/ui';
-import { formatEntryRef } from '../format';
+import { formatEntryRef, noteRefOf } from '../format';
 
 export default function Knowledge() {
   const [results, setResults] = useState<Entry[]>([]);
@@ -94,13 +94,13 @@ export default function Knowledge() {
             <div className="grid grid-cols-1 gap-3 pb-8">
               {results.map(r => (
                 <div 
-                  key={r.id} 
+                  key={`${r.series ?? 'E'}-${r.id}`} 
                   className={`p-4 border rounded-lg cursor-pointer transition-all hover:border-blue-300 dark:hover:border-blue-700 hover:shadow-md bg-white dark:bg-gray-950 group ${r.superseded_by ? 'opacity-60 grayscale-[0.3]' : ''}`}
-                  onClick={() => openDrawer(r.id)}
+                  onClick={() => openDrawer(noteRefOf(r))}
                 >
                   <div className="flex justify-between items-start mb-1">
                     <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{r.type}</span>
-                    <span className="text-[10px] font-mono text-gray-400 group-hover:text-blue-500 transition-colors">{formatEntryRef(r.id)}</span>
+                    <span className="text-[10px] font-mono text-gray-400 group-hover:text-blue-500 transition-colors">{formatEntryRef(r.id, r.series)}</span>
                   </div>
                   <h3 className="font-semibold text-gray-900 dark:text-gray-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">{r.title}</h3>
                   <p className="text-sm text-gray-500 mt-1 line-clamp-2">{r.summary}</p>

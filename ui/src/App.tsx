@@ -18,7 +18,7 @@ export default function App() {
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/health" element={<Health />} />
         <Route path="/needs-merge" element={<NeedsMerge />} />
-        <Route path="/merge/:id" element={<Merge />} />
+        <Route path="/merge/:ref" element={<Merge />} />
       </Routes>
     </AppShell>
   );

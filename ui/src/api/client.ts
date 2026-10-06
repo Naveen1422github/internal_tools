@@ -3,6 +3,8 @@
 
 export interface Entry {
   id: number;
+  /** "E", or a project's code (stage B1). Absent on older servers = E. */
+  series?: string;
   type: string;
   kind?: string;
   category?: 'Index' | 'Reference' | 'Activity';
@@ -32,6 +34,7 @@ export interface LinkTarget {
   title: string | null;
   deleted: boolean;
   present: boolean;   // false: the ULID names no note on this laptop
+  series?: string;    // present only for a project note (SH); absent = E
 }
 
 export interface EntryRef {
@@ -108,19 +111,20 @@ export const search = (p: {
   kind?: string; category?: string; since?: string;
 } = {}) => getJson<{ results: Entry[] }>(`/api/collab/search${qs(p)}`);
 
-export const getEntry = (id: number) =>
+// A note number: an integer is an E note; "SH-12" names a project note (stage B1).
+export const getEntry = (id: number | string) =>
   getJson<Entry>(`/api/collab/entry${qs({ id: String(id) })}`);
 
 export const entryByUlid = (ulid: string) =>
   getJson<Entry>(`/api/collab/entry${qs({ ulid })}`);
 
-export const upsertEntry = (body: Partial<Entry>) =>
-  postJson<{ ok: boolean; id: number }>(`/api/collab/entry/upsert`, body);
+export const upsertEntry = (body: Omit<Partial<Entry>, 'id'> & { id?: number | string }) =>
+  postJson<{ ok: boolean; id: number; series?: string }>(`/api/collab/entry/upsert`, body);
 
-export const deleteEntry = (id: number) =>
+export const deleteEntry = (id: number | string) =>
   postJson<{ ok: boolean }>(`/api/collab/entry/delete`, { id });
 
-export const supersede = (ids: number[], by: number) =>
+export const supersede = (ids: Array<number | string>, by: number | string) =>
   postJson<{ ok: boolean; superseded: number[]; by: number }>(
     `/api/collab/entry/supersede`, { ids, by });
 
@@ -184,13 +188,13 @@ export type SyncOverview =
     };
 export interface MergeVersion { rev_id: string; title: string; summary: string; description: string | null; author: string | null; created_at: string }
 export interface MergeView { id: number; current: { title: string; summary: string; description: string | null }; heads: MergeVersion[] }
-export interface NeedsMergeRow { id: number; title: string; module: string | null; type: string; updated_at: string }
+export interface NeedsMergeRow { id: number; series?: string; title: string; module: string | null; type: string; updated_at: string }
 export type MergeChoice = 'keep-current' | { title: string; summary: string; description: string | null };
 export const VERSIONS_CHANGED = 'versions-changed';
 
 export const syncStatus = () => getJson<SyncOverview>('/api/sync/status');
 export const needsMerge = () => getJson<{ results: NeedsMergeRow[] }>('/api/sync/needs-merge');
-export const mergeVersions = (id: number) => getJson<MergeView>(`/api/sync/versions${qs({ id: String(id) })}`);
-export const resolveMerge = (id: number, expectedHeads: string[], choice: MergeChoice) =>
+export const mergeVersions = (id: number | string) => getJson<MergeView>(`/api/sync/versions${qs({ id: String(id) })}`);
+export const resolveMerge = (id: number | string, expectedHeads: string[], choice: MergeChoice) =>
   postJson<{ ok: true; id: number }>('/api/sync/resolve', { id, expectedHeads, choice });
-export const explainMerge = (id: number) => postJson<{ text: string }>('/api/sync/explain', { id });
+export const explainMerge = (id: number | string) => postJson<{ text: string }>('/api/sync/explain', { id });

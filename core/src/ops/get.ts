@@ -1,6 +1,7 @@
 import type { DB } from "../db.js";
 import { hasUlidColumns } from "../db.js";
-import { hasUlidPrimaryKey } from "../schema.js";
+import { hasSeries, hasUlidPrimaryKey } from "../schema.js";
+import type { NoteRef } from "../ulid.js";
 
 /** The note at the other end of a link, found by its ULID (J17). */
 export interface LinkTarget {
@@ -9,6 +10,7 @@ export interface LinkTarget {
   title: string | null;
   deleted: boolean;        // tombstoned (D5b): still opens, labelled deleted
   present: boolean;        // false = ULID set, no such row here (not shared with you / not synced yet)
+  series?: string;         // present only for a project note (SH); absent = E (stage B1)
 }
 
 export interface EntryRef {
@@ -47,14 +49,22 @@ export interface EntryFull {
 type EntryRow = Omit<EntryFull, "refs" | "modules" | "superseded_target"> & { ulid: string; superseded_by_ulid?: string | null };
 
 export function getEntry(db: DB, id: number): EntryFull | null {
+  // A bare number means series E (stage B1); project notes need their series.
+  return getEntryByRef(db, { series: "E", id });
+}
+
+/** The note `SH-12` / `E-00760` (getEntry with a series). Before 0009 only series E exists. */
+export function getEntryByRef(db: DB, ref: NoteRef): EntryFull | null {
   // A tombstoned entry is still returned, with deleted_at set (decision D5b):
   // links like E-214 keep showing what they pointed at. If an E-number is
   // ever shared, prefer the live entry, then the lowest ulid. (deleted_at only
   // exists from 0006 on.)
+  const series = hasSeries(db);
+  if (!series && ref.series !== "E") return null;
   const order = hasUlidPrimaryKey(db) ? "ORDER BY deleted_at IS NOT NULL, ulid" : "";
-  const row = db
-    .prepare(`SELECT * FROM entries WHERE id = ? ${order} LIMIT 1`)
-    .get(id) as EntryRow | undefined;
+  const row = (series
+    ? db.prepare(`SELECT * FROM entries WHERE id = ? AND series = ? ${order} LIMIT 1`).get(ref.id, ref.series)
+    : db.prepare(`SELECT * FROM entries WHERE id = ? ${order} LIMIT 1`).get(ref.id)) as EntryRow | undefined;
   return row ? assemble(db, row) : null;
 }
 
@@ -68,13 +78,14 @@ export function getEntryByUlid(db: DB, ulid: string): EntryFull | null {
 function assemble(db: DB, row: EntryRow): EntryFull {
   const byUlid = hasUlidColumns(db); // 0005+: refs.target_ulid, entries.superseded_by_ulid
   const deletedCol = hasUlidPrimaryKey(db) ? "t.deleted_at IS NOT NULL" : "0"; // deleted_at: 0006+
+  const seriesCol = hasSeries(db) ? "t.series" : "'E'";
 
   // `modules` is not a column; it is assembled from entry_modules below.
   let refs: EntryRef[];
   if (byUlid) {
     const rows = db
       .prepare(
-        `SELECT r.ref_type, r.ref_value, r.target_ulid, t.ulid AS t_ulid, t.id AS t_id, t.title AS t_title, ${deletedCol} AS t_deleted
+        `SELECT r.ref_type, r.ref_value, r.target_ulid, t.ulid AS t_ulid, t.id AS t_id, t.title AS t_title, ${deletedCol} AS t_deleted, ${seriesCol} AS t_series
            FROM refs r LEFT JOIN entries t ON t.ulid = r.target_ulid
           WHERE r.entry_ulid = ? ORDER BY r.ref_type, r.ref_value`,
       )
@@ -102,15 +113,17 @@ function assemble(db: DB, row: EntryRow): EntryFull {
   if (byUlid) {
     const s = row.superseded_by_ulid ?? null;
     full.superseded_target = s === null ? null : toTarget(s,
-      db.prepare(`SELECT t.ulid AS t_ulid, t.id AS t_id, t.title AS t_title, ${deletedCol} AS t_deleted FROM entries t WHERE t.ulid = ?`)
+      db.prepare(`SELECT t.ulid AS t_ulid, t.id AS t_id, t.title AS t_title, ${deletedCol} AS t_deleted, ${seriesCol} AS t_series FROM entries t WHERE t.ulid = ?`)
         .get(s) as TargetCols | undefined);
   }
   return full;
 }
 
-interface TargetCols { t_ulid: string | null; t_id: number | null; t_title: string | null; t_deleted: number | null }
+interface TargetCols { t_ulid: string | null; t_id: number | null; t_title: string | null; t_deleted: number | null; t_series?: string | null }
 
 function toTarget(ulid: string, r: TargetCols | undefined): LinkTarget {
   if (!r || r.t_ulid === null) return { ulid, id: null, title: null, deleted: false, present: false };
-  return { ulid, id: r.t_id, title: r.t_title, deleted: r.t_deleted === 1, present: true };
+  const t: LinkTarget = { ulid, id: r.t_id, title: r.t_title, deleted: r.t_deleted === 1, present: true };
+  if (r.t_series && r.t_series !== "E") t.series = r.t_series;
+  return t;
 }

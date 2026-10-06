@@ -1,19 +1,31 @@
 import http from 'node:http';
 import {
   getDb, SLUG_REGEX, validateEntryInput, buildFtsMatch,
-  addEntry, addEntryAsync, getEntry, deleteEntry, supersede, doctor,
+  addEntry, addEntryAsync, deleteEntry, supersede, doctor,
   editEntry, EntryNotFoundError, reassignModule, upsertModule, deleteModule,
   liveEntry, ftsJoin, readSyncOverview, NeedsMergeError, formatEntryRef,
-  getEntryByUlid, isUlid,
+  getEntryByUlid, isUlid, getEntryByRef, parseNoteRef, hasSeries, type NoteRef,
 } from '@collab-mcp/core';
 
 const db = getDb();
+
+// Stage B1: a note number in a query or body. An integer (or a bare "760")
+// means the E series; strings like "SH-12" name a project note.
+export const REF_FORMS = '760 (= E-00760), #760, E-760, E-00760, or a project note like SH-12';
+export function parseRefParam(v: unknown): NoteRef | null {
+  if (typeof v === 'number') return Number.isInteger(v) && v > 0 ? { series: 'E', id: v } : null;
+  if (typeof v === 'string') return parseNoteRef(v);
+  return null;
+}
+const refKey = (r: NoteRef) => `${r.series}:${r.id}`;
+/** The series column, or 'E' on a notebook from before migration 0009. */
+const seriesCol = (alias = '') => (hasSeries(db) ? `${alias}series` : `'E' AS series`);
 
 export function runSearch(db: any, { q = '', type, module, agent, kind = 'signal', category, since }: any = {}) {
   if (!db) throw new Error('Database not available');
 
   let query = `
-    SELECT e.id, e.type, e.kind, e.category, e.title, e.summary, e.module, e.agent, e.created_at,
+    SELECT e.id, ${hasSeries(db) ? 'e.series' : `'E' AS series`}, e.type, e.kind, e.category, e.title, e.summary, e.module, e.agent, e.created_at,
            snippet(entries_fts, -1, '[[HL]]', '[[/HL]]', '...', 10) as snippet
     FROM entries_fts
     ${ftsJoin(db, 'e')}
@@ -119,7 +131,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
         GROUP BY em.module ORDER BY count DESC, em.module ASC LIMIT 10
       `).all();
       const recent = db.prepare(`
-        SELECT id, type, category, title, summary, agent, module, created_at
+        SELECT id, ${seriesCol()}, type, category, title, summary, agent, module, created_at
         FROM entries WHERE deprecated=0 AND ${live} ORDER BY created_at DESC LIMIT 10
       `).all();
       send(200, { total, by_category, by_type, by_status, top_modules, recent });
@@ -134,7 +146,15 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     if (!db) return send(500, { error: 'Database not available' });
 
     try {
-      let query = `
+      // From 0009 a dispatch follows its note by ULID: entry_series says which
+      // series its entry_id belongs to (SH-3 vs E-00003).
+      let query = hasSeries(db)
+        ? `
+        SELECT d.*, (SELECT e.series FROM entries e WHERE e.ulid = d.entry_ulid) AS entry_series
+        FROM dispatches d
+        WHERE 1=1
+      `
+        : `
         SELECT * FROM dispatches
         WHERE 1=1
       `;
@@ -177,7 +197,13 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     try {
       // Core read: a tombstoned entry is still returned, with deleted_at set (D5b).
       // A link is followed by its target's ULID (J17); id stays for typed numbers.
-      const entry = ulid !== null ? getEntryByUlid(db, ulid) : getEntry(db, Number(idParam));
+      let entry;
+      if (ulid !== null) entry = getEntryByUlid(db, ulid);
+      else {
+        const ref = parseRefParam(idParam);
+        if (!ref) return send(400, { error: `id must be a note number: ${REF_FORMS}` });
+        entry = getEntryByRef(db, ref);
+      }
       if (!entry) return send(404, { error: 'Not found' });
       send(200, entry);
     } catch (err: any) {
@@ -209,18 +235,20 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
 
       if (!id) {
         // Create: core owns id/ulid/author/links at every schema level.
-        const { id: newId } = await addEntryAsync(db, {
+        const { id: newId, series } = await addEntryAsync(db, {
           type, title, summary, description, agent: agent || undefined,
           module: primaryModule ?? undefined, modules: orderedModules, category: resolvedCategory as any,
           task_id: task_id || undefined, refs: normRefs,
         });
-        return send(200, { ok: true, id: newId });
+        return send(200, { ok: true, id: newId, series });
       }
 
       // Edit: core resolves the E-number to its owner and writes by the level's
       // real key, with a revision (moved from here, collab E-720).
+      const ref = parseRefParam(id);
+      if (!ref) return send(400, { error: `id must be a note number: ${REF_FORMS}` });
       const r = editEntry(db, {
-        id: Number(id), type, title, summary, description, agent,
+        id: ref.id, series: ref.series, type, title, summary, description, agent,
         modules: orderedModules, category: resolvedCategory, task_id, refs: normRefs,
       });
       send(200, { ok: true, id: r.id });
@@ -233,7 +261,10 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
 
   'POST /api/collab/entry/delete': async (req, res, send, body) => {
     try {
-      const r = deleteEntry(db, Number(body?.id)); // tombstone at 0006, hard delete before (D5a)
+      // tombstone at 0006, hard delete before (D5a). A bare number = E (stage B1).
+      const ref = typeof body?.id === 'string' ? parseRefParam(body.id) : null;
+      if (typeof body?.id === 'string' && !ref) return send(400, { error: `id must be a note number: ${REF_FORMS}` });
+      const r = ref ? deleteEntry(db, ref.id, ref.series) : deleteEntry(db, Number(body?.id));
       send(200, { ok: true, ...r });
     } catch (err: any) {
       const status = /no entry found/.test(err.message) ? 404
@@ -248,15 +279,20 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     if (!Array.isArray(ids) || ids.length === 0) {
       return send(400, { error: "supersede requires a non-empty 'ids' array" });
     }
-    if (typeof by !== 'number') {
+    const byRef = parseRefParam(by);
+    if (!byRef) {
       return send(400, { error: "'by' must be a numeric entry id" });
     }
-    if (ids.includes(by)) {
+    const idRefs = ids.map(parseRefParam);
+    if (idRefs.some((r) => r === null)) {
+      return send(400, { error: `every id must be a note number: ${REF_FORMS}` });
+    }
+    if (idRefs.some((r) => refKey(r!) === refKey(byRef))) {
       return send(400, { error: "'by' cannot be one of the superseded 'ids'" });
     }
     try {
-      const uniqueIds = [...new Set(ids)] as number[];
-      const r = supersede(db, { ids: uniqueIds, by });
+      const uniqueIds = [...new Map(idRefs.map((r) => [refKey(r!), r!])).values()];
+      const r = supersede(db, { ids: uniqueIds, by: byRef });
       send(200, { ok: true, superseded: r.superseded, by: r.by });
     } catch (err: any) {
       // Core: "'by' entry E-… does not exist" / "the following 'ids' do not exist: …".
@@ -274,7 +310,10 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       return send(400, { error: "'module' (target slug) is required" });
     }
     try {
-      const { updated } = reassignModule(db, ids, module);
+      // Numbers stay numbers (E); strings like "SH-12" name a project note (stage B1).
+      const refs = ids.map((v: unknown) => (typeof v === 'string' ? parseRefParam(v) : v)) as Array<number | NoteRef>;
+      if (refs.some((r: unknown) => r === null)) return send(400, { error: `every id must be a note number: ${REF_FORMS}` });
+      const { updated } = reassignModule(db, refs, module);
       send(200, { ok: true, updated, module });
     } catch (err: any) {
       send(/does not exist/.test(err.message) ? 400 : 500, { error: err.message });
@@ -442,7 +481,8 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     const since = url.searchParams.get('since'); // ISO date or sqlite-friendly
     if (!['json', 'markdown'].includes(format)) return send(400, { error: 'format must be json or markdown' });
     try {
-      let q = 'SELECT id, ulid, type, kind, category, title, summary, description, status, agent, module, task_id, superseded_by, superseded_by_ulid, created_at FROM entries WHERE deprecated=0'
+      let q = `SELECT id, ${seriesCol()}, ulid, type,`
+        + ' kind, category, title, summary, description, status, agent, module, task_id, superseded_by, superseded_by_ulid, created_at FROM entries WHERE deprecated=0'
         + ` AND ${liveEntry(db, 'entries')}`;
       const params: any[] = [];
       if (moduleFilter) { q += ' AND ulid IN (SELECT entry_ulid FROM entry_modules WHERE module=?)'; params.push(moduleFilter); }
@@ -466,7 +506,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       lines.push(`**Filter:** module=${moduleFilter || '(any)'}, since=${since || '(any)'}`);
       lines.push(`**Count:** ${entries.length}`, '');
       for (const e of entries) {
-        lines.push(`## ${formatEntryRef(e.id)} — ${e.title}`);
+        lines.push(`## ${formatEntryRef(e.id, e.series)} — ${e.title}`);
         lines.push(`- type: ${e.type} | category: ${e.category || '-'} | agent: ${e.agent || '?'} | modules: ${(e.modules || []).join(', ') || e.module || '-'} | task: ${e.task_id || '-'} | ${e.created_at}`);
         lines.push('', e.summary || '', '');
         if (e.description) lines.push(e.description, '');

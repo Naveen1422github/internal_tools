@@ -15,7 +15,7 @@ try {
     initModule(db, { slug: moduleName, name: moduleName });
     console.log(`Created placeholder module: ${moduleName}`);
   }
-  const { id } = await addEntryAsync(db, {
+  const { id, series } = await addEntryAsync(db, {
     type: type as EntryType,
     title,
     summary,
@@ -25,7 +25,7 @@ try {
     module: moduleName || undefined,
     category: (category as Category) || undefined,
   });
-  console.log(`Inserted entry ${formatEntryRef(id)}`);
+  console.log(`Inserted entry ${formatEntryRef(id, series)}`);
 } catch (e) {
   console.error("Error logging to DB:", e);
   process.exitCode = 1;

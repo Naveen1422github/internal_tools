@@ -4,6 +4,7 @@ import type { DB } from "../db.js";
 import { getSyncValue, isSyncEnabled } from "./state.js";
 import { readOwnChanges, entryUlidOf } from "./changes.js";
 import { ensureCrsqlite } from "./extension.js";
+import { hasSeries } from "../schema.js";
 import { courierDir as defaultCourierDir, courierFiles } from "./courier-paths.js";
 import { SYNC_KEYS } from "./http-allocator.js";
 
@@ -36,7 +37,11 @@ function sharedSet(db: DB): Set<string> {
   try { return new Set(JSON.parse(getSyncValue(db, SHARED_KEY) ?? "[]") as string[]); } catch { return new Set(); }
 }
 
-/** This laptop's own changes since the sent-bookmark whose note's PRIMARY module is shared. */
+/**
+ * This laptop's own changes since the sent-bookmark whose note's PRIMARY module
+ * is shared. A note in a project is never sent by this path (stage B1), so it
+ * never waits either (same filter as the courier's push).
+ */
 export function unsentSharedCount(db: DB): number {
   if (!isSyncEnabled(db)) return 0;
   ensureCrsqlite(db);
@@ -44,6 +49,7 @@ export function unsentSharedCount(db: DB): number {
   if (shared.size === 0) return 0;
   const since = Number(getSyncValue(db, SENT_KEY) ?? 0);
   const moduleOf = new Map<string, string | null>();
+  const projectCol = hasSeries(db) ? "project_ulid" : "NULL";
   let n = 0;
   for (const w of readOwnChanges(db, since)) {
     const pk = Buffer.from(w.pk, "base64");
@@ -55,8 +61,9 @@ export function unsentSharedCount(db: DB): number {
       const ulid = entryUlidOf(db, w.table, pk);
       if (!ulid) continue;
       if (!moduleOf.has(ulid)) {
-        const e = db.prepare(`SELECT module FROM entries WHERE ulid = ?`).get(ulid) as { module: string | null } | undefined;
-        moduleOf.set(ulid, e?.module ?? null);
+        const e = db.prepare(`SELECT module, ${projectCol} AS project FROM entries WHERE ulid = ?`)
+          .get(ulid) as { module: string | null; project: string | null } | undefined;
+        moduleOf.set(ulid, e?.project ? null : e?.module ?? null); // a project note: no module to send under
       }
       module = moduleOf.get(ulid) ?? null;
     }

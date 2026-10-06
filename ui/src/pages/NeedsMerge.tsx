@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { needsMerge, type NeedsMergeRow } from '../api/client';
-import { formatEntryRef } from '../format';
+import { formatEntryRef, noteRefOf } from '../format';
 
 export default function NeedsMerge() {
   const [rows, setRows] = useState<NeedsMergeRow[] | null>(null);
@@ -17,8 +17,8 @@ export default function NeedsMerge() {
       {rows.length === 0 ? <p>Nothing to merge.</p> : (
         <ul className="divide-y divide-gray-200 dark:divide-gray-800">
           {rows.map((r) => (
-            <li key={r.id} className="py-2 flex justify-between">
-              <Link to={`/merge/${r.id}`} className="underline">{formatEntryRef(r.id)} · {r.title}</Link>
+            <li key={`${r.series ?? 'E'}-${r.id}`} className="py-2 flex justify-between">
+              <Link to={`/merge/${noteRefOf(r)}`} className="underline">{formatEntryRef(r.id, r.series)} · {r.title}</Link>
               <span className="text-xs text-gray-500">{r.module ?? ''}</span>
             </li>
           ))}

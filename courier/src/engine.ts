@@ -3,10 +3,13 @@ import Database from "better-sqlite3";
 import { createSocket, type Socket } from "node:dgram";
 import {
   loadCrsqlite, isCrsqliteLoaded, isSyncEnabled, getSyncValue, setSyncValue, postOfficeTargetFromDb,
-  readOwnChanges, decodeChange, applyChanges, reindexFts, entryUlidOf, requestJson, openEventStream,
+  readOwnChanges, decodeChange, applyChanges, reindexFts, entryUlidOf, requestJson, openEventStream, hasSeries,
   AccessRevokedError, SchemaMismatchError, COURIER_PORT_KEY, type PostOfficeTarget, type WireChange, type EventStream,
 } from "@collab-mcp/core";
 import { COURIER_KEYS as K } from "./keys.js";
+
+/** Where a note lives: its primary module, and its project (NULL = none, an E note). */
+type Place = { module: string | null; project: string | null };
 
 // The courier (spec Components 2, D4). One per machine, client-agnostic: it
 // opens the notes DB itself. Push on write (each save pings us over local UDP,
@@ -208,20 +211,25 @@ export class Courier {
     try { return new Set(JSON.parse(getSyncValue(this.db, K.backfilled) ?? "[]") as string[]); } catch { return new Set(); }
   }
 
-  /** The note a change belongs to and that note's PRIMARY module (D10); for a modules row, its slug. */
-  private placeOf(w: WireChange, memo: Map<string, string | null>): { ulid: string | null; module: string | null } {
+  /**
+   * The note a change belongs to, that note's PRIMARY module (D10) and its
+   * project (0009+); for a modules row, its slug. A note in a project is never
+   * sent by this module-based path (stage B1: solo projects stay on the laptop).
+   */
+  private placeOf(w: WireChange, memo: Map<string, Place>, series: boolean): { ulid: string | null } & Place {
     const pk = Buffer.from(w.pk, "base64");
     if (w.table === "modules") {
       const r = this.db.prepare(`SELECT cell FROM crsql_unpack_columns(?)`).get(pk) as { cell: unknown } | undefined;
-      return { ulid: null, module: r ? String(r.cell) : null };
+      return { ulid: null, module: r ? String(r.cell) : null, project: null };
     }
     const ulid = entryUlidOf(this.db, w.table, pk);
-    if (!ulid) return { ulid: null, module: null };
+    if (!ulid) return { ulid: null, module: null, project: null };
     if (!memo.has(ulid)) {
-      const e = this.db.prepare(`SELECT module FROM entries WHERE ulid = ?`).get(ulid) as { module: string | null } | undefined;
-      memo.set(ulid, e?.module ?? null);
+      const e = this.db.prepare(`SELECT module, ${series ? "project_ulid" : "NULL"} AS project FROM entries WHERE ulid = ?`)
+        .get(ulid) as { module: string | null; project: string | null } | undefined;
+      memo.set(ulid, { module: e?.module ?? null, project: e?.project ?? null });
     }
-    return { ulid, module: memo.get(ulid) ?? null };
+    return { ulid, ...memo.get(ulid)! };
   }
 
   private async refreshModules(): Promise<void> {
@@ -241,15 +249,16 @@ export class Courier {
     const shared = this.sharedModules();
     const done = this.backfilledModules();
     const backfill = new Set([...shared].filter((m) => !done.has(m)));
-    const memo = new Map<string, string | null>();
+    const memo = new Map<string, Place>();
+    const series = hasSeries(this.db);
     const out = new Map<string, WireChange>();
     const moved = new Set<string>();
     const createdNow = new Set<string>();
     let top = since;
     for (const w of readOwnChanges(this.db, since)) {
       top = Math.max(top, w.db_version);
-      const { ulid, module } = this.placeOf(w, memo);
-      if (!module || !shared.has(module)) continue;
+      const { ulid, module, project } = this.placeOf(w, memo, series);
+      if (project || !module || !shared.has(module)) continue;
       out.set(changeKey(w), w);
       if (w.table === "entries" && ulid) {
         if (w.cid === "created_at") createdNow.add(ulid);
@@ -260,7 +269,8 @@ export class Courier {
     if (backfill.size > 0 || moved.size > 0) {
       for (const w of readOwnChanges(this.db, 0)) {
         if (w.db_version > top) continue; // newer than this push: the next push takes it
-        const { ulid, module } = this.placeOf(w, memo);
+        const { ulid, module, project } = this.placeOf(w, memo, series);
+        if (project) continue;
         if ((module && backfill.has(module)) || (ulid && moved.has(ulid))) out.set(changeKey(w), w);
       }
     }

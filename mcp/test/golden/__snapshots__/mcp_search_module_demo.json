@@ -7,6 +7,8 @@
       "summary": "a",
       "tokens_estimate": "<tok>",
       "created_at": "<ts>",
+      "series": "E",
+      "project_ulid": null,
       "score": null,
       "description": "d"
     },
@@ -17,6 +19,8 @@
       "summary": "b",
       "tokens_estimate": "<tok>",
       "created_at": "<ts>",
+      "series": "E",
+      "project_ulid": null,
       "score": null,
       "description": "d"
     }

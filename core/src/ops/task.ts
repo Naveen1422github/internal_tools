@@ -1,5 +1,5 @@
 import type { DB } from "../db.js";
-import { liveEntry } from "../schema.js";
+import { hasSeries, liveEntry } from "../schema.js";
 import type { Agent } from "./add.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 
@@ -47,6 +47,7 @@ export interface TaskEntrySummary {
   title: string;
   summary: string;
   created_at: string;
+  series?: string; // present only for a project note (SH); absent = E (stage B1)
 }
 
 export interface TaskWithEntries {
@@ -229,17 +230,18 @@ export function getTask(db: DB, id: string): TaskWithEntries {
     | undefined;
   if (!task) return { task: null, recent_entries: [] };
 
-  const entries = db
+  const entries = (db
     .prepare(
       `
-    SELECT id, type, title, summary, created_at
+    SELECT id, type, title, summary, created_at, ${hasSeries(db) ? "series" : "'E' AS series"}
     FROM entries
     WHERE task_id = ? AND deprecated = 0 AND ${liveEntry(db, "entries")}
     ORDER BY created_at DESC
     LIMIT 10
   `
     )
-    .all(id) as TaskEntrySummary[];
+    .all(id) as TaskEntrySummary[])
+    .map(({ series, ...e }) => (series && series !== "E" ? { ...e, series } : e));
 
   return { task, recent_entries: entries };
 }

@@ -2,7 +2,7 @@ import type { DB } from "../db.js";
 import { estimateTokens } from "../db.js";
 import type { RefInput } from "./add.js";
 import { hasUlidPrimaryKey } from "../schema.js";
-import { ownerOf, insertRefs, deleteRef } from "../entry-write.js";
+import { ownerOf, ownerOfRef, insertRefs, deleteRef } from "../entry-write.js";
 import { snapshotForRevision, finishRevision } from "../revisions.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { assertHeads, NeedsMergeError } from "./merge.js";
@@ -13,6 +13,8 @@ import { formatEntryRef } from "../entry-ref.js";
 // ------------------------------------------------------------
 export interface UpdateEntryArgs {
   id: number;
+  /** The note's series (stage B1): omitted = E, so `id` alone keeps meaning E-<id>. */
+  series?: string;
   title?: string;
   summary?: string;       // <= 200 chars; enforced here (DB also CHECKs)
   description?: string;
@@ -73,9 +75,12 @@ export function updateEntry(db: DB, args: UpdateEntryArgs): UpdateEntryResult {
   // At 0006 id is not unique (E-648): resolve the owner (lowest live ulid;
   // tombstones never own) and write by ulid (F3). Before 0006 id is the PK.
   let where = "id = @id";
+  const series = args.series ?? "E";
+  const label = series === "E" ? String(args.id) : formatEntryRef(args.id, series);
+  if (series !== "E" && !hasUlidPrimaryKey(db)) throw new Error(`no entry found with id ${label}`);
   if (hasUlidPrimaryKey(db)) {
-    const owner = ownerOf(db, args.id);
-    if (!owner) throw new Error(`no entry found with id ${args.id}`);
+    const owner = ownerOfRef(db, { series, id: args.id });
+    if (!owner) throw new Error(`no entry found with id ${label}`);
     params.ulid = owner.ulid as string;
     where = "ulid = @ulid";
   }
@@ -87,7 +92,7 @@ export function updateEntry(db: DB, args: UpdateEntryArgs): UpdateEntryResult {
     // V9: an ordinary edit would settle the conflict without seeing the other version.
     if (before?.needs_merge === 1) throw new NeedsMergeError(args.id);
     const info = db.prepare(`UPDATE entries SET ${sets.join(", ")} WHERE ${where}`).run(params);
-    if (info.changes === 0) throw new Error(`no entry found with id ${args.id}`);
+    if (info.changes === 0) throw new Error(`no entry found with id ${label}`);
     finishRevision(db, before);
   });
   tx();
@@ -129,6 +134,8 @@ export function resolveNeedsMerge(db: DB, id: number, expectedHeads: string[]): 
 // ------------------------------------------------------------
 export interface UpdateEntryRefsArgs {
   id: number;
+  /** The note's series (stage B1): omitted = E. */
+  series?: string;
   add?: RefInput[];
   remove?: RefInput[];
 }
@@ -151,8 +158,9 @@ export function updateEntryRefs(db: DB, args: UpdateEntryRefsArgs): UpdateEntryR
   }
 
   // Owner by E-number (F3): lowest live ulid at 0006; tombstones refused.
-  const owner = ownerOf(db, args.id);
-  if (!owner) throw new Error(`no entry found with id ${args.id}`);
+  const series = args.series ?? "E";
+  const owner = ownerOfRef(db, { series, id: args.id });
+  if (!owner) throw new Error(`no entry found with id ${series === "E" ? args.id : formatEntryRef(args.id, series)}`);
 
   const added: RefInput[] = [];
   const removed: RefInput[] = [];

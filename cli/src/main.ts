@@ -3,6 +3,7 @@ import { installRoot, readBuildInfo } from "@collab-mcp/core";
 import type { CliResult, Deps, Io } from "./io.js";
 import { runNotebook } from "./notebook.js";
 import { runDoctor } from "./doctor.js";
+import { runProject } from "./project.js";
 
 export type { CliResult, Deps, Io } from "./io.js";
 
@@ -20,6 +21,10 @@ const USAGE = `usage: collab [--notebook <name>] <command>
   collab notebook default <name>          the notebook used when nothing else picks one
   collab notebook which                   the notebook this folder uses, and why
   collab notebook reindex                 rebuild the search index of that notebook
+  collab project create <name> --code <C> a solo project: its notes are numbered C-1, C-2, ...
+  collab project rename <code> <new name> rename a project (its code never changes)
+  collab project list                     the projects in this notebook (* = this folder's)
+  collab project use <code>               make it this folder's project (writes .collab)
   collab doctor [--json] [--fix]          check the whole setup and print the fix for each problem
   collab --version`;
 
@@ -68,6 +73,8 @@ export async function main(argv: string[], io: Io, deps: Deps = {}): Promise<Cli
     }
     case "notebook":
       return runNotebook(rest, io);
+    case "project":
+      return runProject(rest, io);
     case "doctor":
       return runDoctor(rest, io, importModule);
     default:

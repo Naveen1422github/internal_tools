@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import Database from 'better-sqlite3';
 import { freshDb, ship, dbVersion } from './helpers/sync.js';
-import { migrate, latestMigration } from '../src/db.js';
+import { migrate, migrateTo, latestMigration } from '../src/db.js';
 import { enableSync } from '../src/sync/enable.js';
 import { addEntry, addEntryAsync } from '../src/ops/add.js';
 import { setAllocator } from '../src/sync/allocator.js';
@@ -19,7 +19,7 @@ test('0008 on a SHARED notebook: column added through cr-sqlite, edits replicate
   const a = freshDb({ shared: true });
   const b = freshDb({ shared: true });
   try {
-    for (const t of [a, b]) migrate(t.db);
+    for (const t of [a, b]) migrateTo(t.db, '0008');
     assert.equal(latestMigration(a.db), '0008_revision_author');
     assert.ok(hasRevisionAuthor(a.db));
     process.env.COLLAB_AUTHOR = 'naveen';

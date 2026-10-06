@@ -1,16 +1,17 @@
 import type { DB } from "../db.js";
 import { hasUlidColumns } from "../db.js";
 import { hasUlidPrimaryKey } from "../schema.js";
-import { ownerOf, type InsertedEntry } from "../entry-write.js";
+import { ownerOfRef, type InsertedEntry } from "../entry-write.js";
 import { ensureCrsqlite } from "../sync/extension.js";
-import { formatEntryRef } from "../entry-ref.js";
+import { formatNoteRef } from "../entry-ref.js";
+import type { NoteRef } from "../ulid.js";
 
 // ------------------------------------------------------------
 // Types
 // ------------------------------------------------------------
 export interface SupersedeArgs {
-  ids: number[]; // entries being replaced
-  by: number;    // the entry that replaces them
+  ids: Array<number | NoteRef>; // entries being replaced (a bare number = E, stage B1)
+  by: number | NoteRef;         // the entry that replaces them
 }
 
 export interface SupersedeResult {
@@ -18,40 +19,47 @@ export interface SupersedeResult {
   by: number;
 }
 
+const asRef = (v: number | NoteRef): NoteRef => (typeof v === "number" ? { series: "E", id: v } : v);
+const keyOf = (r: NoteRef) => `${r.series}:${r.id}`;
+
 // ------------------------------------------------------------
 // supersede — mark old entries as replaced by a newer one.
 //
 // Sets superseded_by = by AND deprecated = 1 on each id, so the originals drop
 // out of default retrieval (include_deprecated=false hides them) but stay as
-// history. The existing FTS update trigger keeps the index in sync.
+// history. The existing FTS update trigger keeps the index in sync. The
+// replacement is written by its ULID (superseded_by_ulid); the integer
+// superseded_by stays a label.
 // ------------------------------------------------------------
 export function supersede(db: DB, args: SupersedeArgs): SupersedeResult {
   ensureCrsqlite(db);
-  const { ids, by } = args;
+  const { ids } = args;
 
   if (!ids || ids.length === 0) {
     throw new Error("supersede requires a non-empty 'ids' array");
   }
+  const by = asRef(args.by);
 
-  // 'by' must exist (and not be tombstoned). Resolved via ownerOf: at 0006
+  // 'by' must exist (and not be tombstoned). Resolved via ownerOfRef: at 0006
   // an E-number may be shared, and the lowest live ulid owns it (F3).
-  const byOwner = ownerOf(db, by);
+  const byOwner = ownerOfRef(db, by);
   if (!byOwner) {
-    throw new Error(`'by' entry ${formatEntryRef(by)} does not exist`);
+    throw new Error(`'by' entry ${formatNoteRef(by)} does not exist`);
   }
 
   // 'by' must not supersede itself.
-  if (ids.includes(by)) {
-    throw new Error(`'by' (${formatEntryRef(by)}) cannot be one of the superseded 'ids'`);
+  const refs = ids.map(asRef);
+  if (refs.some((r) => keyOf(r) === keyOf(by))) {
+    throw new Error(`'by' (${formatNoteRef(by)}) cannot be one of the superseded 'ids'`);
   }
 
   // Every id must exist.
-  const uniqueIds = [...new Set(ids)];
-  const owners = new Map<number, InsertedEntry | null>(uniqueIds.map((id) => [id, ownerOf(db, id)]));
-  const missing = uniqueIds.filter((id) => owners.get(id) === null);
+  const unique = [...new Map(refs.map((r) => [keyOf(r), r])).values()];
+  const owners = new Map<string, InsertedEntry | null>(unique.map((r) => [keyOf(r), ownerOfRef(db, r)]));
+  const missing = unique.filter((r) => owners.get(keyOf(r)) === null);
   if (missing.length > 0) {
     throw new Error(
-      `the following 'ids' do not exist: ${missing.map((id) => formatEntryRef(id)).join(", ")}`,
+      `the following 'ids' do not exist: ${missing.map((r) => formatNoteRef(r)).join(", ")}`,
     );
   }
 
@@ -63,17 +71,17 @@ export function supersede(db: DB, args: SupersedeArgs): SupersedeResult {
     `UPDATE entries SET superseded_by = @by${withTwin ? ", superseded_by_ulid = @byUlid" : ""}, deprecated = 1
       WHERE ${byUlid ? "ulid = @ulid" : "id = @id"}`,
   );
-  const tx = db.transaction((targetIds: number[]) => {
-    for (const id of targetIds) {
-      const target = owners.get(id)!;
+  const tx = db.transaction((targets: NoteRef[]) => {
+    for (const r of targets) {
+      const target = owners.get(keyOf(r))!;
       update.run({
-        by,
+        by: by.id,
         ...(withTwin ? { byUlid: byOwner.ulid } : {}),
-        ...(byUlid ? { ulid: target.ulid } : { id }),
+        ...(byUlid ? { ulid: target.ulid } : { id: r.id }),
       });
     }
   });
-  tx(uniqueIds);
+  tx(unique);
 
-  return { superseded: uniqueIds, by };
+  return { superseded: unique.map((r) => r.id), by: by.id };
 }

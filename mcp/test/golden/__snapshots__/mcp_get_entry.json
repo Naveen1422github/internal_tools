@@ -21,6 +21,8 @@
   "superseded_by_ulid": null,
   "deleted_at": null,
   "needs_merge": 0,
+  "series": "E",
+  "project_ulid": null,
   "modules": [
     "demo"
   ],

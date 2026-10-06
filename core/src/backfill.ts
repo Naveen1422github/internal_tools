@@ -1,7 +1,7 @@
 import type { DB } from "./db.js";
-import { ulidFromLegacy, parseEntryRef } from "./ulid.js";
+import { ulidFromLegacy, parseEntryRef, parseNoteRef } from "./ulid.js";
 import { resolveAuthor } from "./author.js";
-import { hasUlidPrimaryKey } from "./schema.js";
+import { hasSeries, hasUlidPrimaryKey } from "./schema.js";
 
 export interface BackfillReport {
   entries: number;
@@ -50,18 +50,23 @@ export function backfillUlids(db: DB): BackfillReport {
       ? db.prepare(`UPDATE entries SET author = ? WHERE author IS NULL`).run(author).changes
       : 0;
 
+    // From 0009 a bare number means series E: a project note (SH-n) is never
+    // the answer to "number n".
+    const series = hasSeries(db);
+    const isE = series ? "AND e.series = 'E'" : "";
+
     const refs = db.prepare(`
-      UPDATE refs SET entry_ulid = (SELECT ulid FROM entries WHERE id = refs.entry_id)
+      UPDATE refs SET entry_ulid = (SELECT e.ulid FROM entries e WHERE e.id = refs.entry_id ${isE} ORDER BY e.ulid LIMIT 1)
        WHERE entry_ulid IS NULL
     `).run().changes;
 
     const entryModules = db.prepare(`
-      UPDATE entry_modules SET entry_ulid = (SELECT ulid FROM entries WHERE id = entry_modules.entry_id)
+      UPDATE entry_modules SET entry_ulid = (SELECT e.ulid FROM entries e WHERE e.id = entry_modules.entry_id ${isE} ORDER BY e.ulid LIMIT 1)
        WHERE entry_ulid IS NULL
     `).run().changes;
 
     const superseded = db.prepare(`
-      UPDATE entries SET superseded_by_ulid = (SELECT e.ulid FROM entries e WHERE e.id = entries.superseded_by)
+      UPDATE entries SET superseded_by_ulid = (SELECT e.ulid FROM entries e WHERE e.id = entries.superseded_by ${isE} ORDER BY e.ulid LIMIT 1)
        WHERE superseded_by IS NOT NULL AND superseded_by_ulid IS NULL
     `).run().changes;
 
@@ -75,14 +80,24 @@ export function backfillUlids(db: DB): BackfillReport {
           ORDER BY entry_ulid, ref_value`,
       )
       .all() as Array<{ entry_id: number | null; entry_ulid: string | null; ref_value: string }>;
-    const ulidOf = db.prepare(`SELECT ulid FROM entries WHERE id = ? ORDER BY ulid LIMIT 1`);
+    // From 0009 the reference keeps its series ("15" = E-15, "SH-15" = SH-15),
+    // parsed by parseNoteRef, which matches the 0009 trigger.
+    const ulidOf = series
+      ? db.prepare(`SELECT ulid FROM entries WHERE series = ? AND id = ? ORDER BY ulid LIMIT 1`)
+      : db.prepare(`SELECT ulid FROM entries WHERE id = ? ORDER BY ulid LIMIT 1`);
     const setTarget = db.prepare(
       `UPDATE refs SET target_ulid = ? WHERE entry_ulid = ? AND ref_type = 'entry' AND ref_value = ?`,
     );
     const unresolvedEntryRefs: BackfillReport["unresolvedEntryRefs"] = [];
     for (const r of pending) {
-      const id = parseEntryRef(r.ref_value);
-      const hit = id === null ? undefined : (ulidOf.get(id) as { ulid: string | null } | undefined);
+      let hit: { ulid: string | null } | undefined;
+      if (series) {
+        const ref = parseNoteRef(r.ref_value);
+        hit = ref === null ? undefined : (ulidOf.get(ref.series, ref.id) as { ulid: string | null } | undefined);
+      } else {
+        const id = parseEntryRef(r.ref_value);
+        hit = id === null ? undefined : (ulidOf.get(id) as { ulid: string | null } | undefined);
+      }
       if (hit?.ulid && r.entry_ulid) setTarget.run(hit.ulid, r.entry_ulid, r.ref_value);
       else unresolvedEntryRefs.push(r);
     }

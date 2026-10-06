@@ -1,7 +1,7 @@
 import type { DB } from "./db.js";
 import { hasUlidColumns } from "./db.js";
-import { hasUlidPrimaryKey, liveEntry } from "./schema.js";
-import { newUlid } from "./ulid.js";
+import { hasSeries, hasUlidPrimaryKey, liveEntry } from "./schema.js";
+import { newUlid, type NoteRef } from "./ulid.js";
 import { resolveAuthor } from "./author.js";
 import type { RefInput } from "./ops/add.js";
 import { isSyncEnabled } from "./sync/state.js";
@@ -36,6 +36,9 @@ export interface EntryRowInput {
   category?: string;
   rollup_of_task?: string | null;
   assigned?: { ulid: string; id: number }; // internal: pre-assigned by the post office
+  /** 0009+: a project's code; omitted = series E (the column default). */
+  series?: string;
+  project_ulid?: string | null;
 }
 
 export interface RefRowInput extends RefInput {
@@ -43,23 +46,26 @@ export interface RefRowInput extends RefInput {
 }
 
 /**
- * Next local E-number (D2). Self-heals a missing counter row and never falls
- * behind max(id), so a restored or hand-edited DB can't hand out a duplicate.
+ * Next local number in `series` (D2; per project from 0009, spec P5). Self-heals
+ * a missing counter row and never falls behind max(id) of that series, so a
+ * restored or hand-edited DB can't hand out a duplicate, and a hard-deleted
+ * number is never handed out again (the counter only grows).
+ * Counter rows: `entry_number` for E (unchanged), `series:<CODE>` otherwise.
  * Only valid at 0006 (local_counters is created by that migration).
- * Replaced by the central allocator later (E-648).
  */
-export function nextEntryNumber(db: DB): number {
-  db.prepare(
-    `INSERT OR IGNORE INTO local_counters (name, value) SELECT 'entry_number', COALESCE(MAX(id), 0) FROM entries`,
-  ).run();
+export function nextEntryNumber(db: DB, series = "E"): number {
+  const name = series === "E" ? "entry_number" : `series:${series}`;
+  const filter = hasSeries(db) ? "WHERE series = @series" : "";
+  const maxId = `(SELECT COALESCE(MAX(id), 0) FROM entries ${filter})`;
+  db.prepare(`INSERT OR IGNORE INTO local_counters (name, value) SELECT @name, ${maxId}`).run({ name, ...(filter ? { series } : {}) });
   const row = db
     .prepare(
       `UPDATE local_counters
-          SET value = MAX(value, (SELECT COALESCE(MAX(id), 0) FROM entries)) + 1
-        WHERE name = 'entry_number'
+          SET value = MAX(value, ${maxId}) + 1
+        WHERE name = @name
       RETURNING value`,
     )
-    .get() as { value: number };
+    .get({ name, ...(filter ? { series } : {}) }) as { value: number };
   return row.value;
 }
 
@@ -77,6 +83,17 @@ export function insertEntryRow(db: DB, row: EntryRowInput): InsertedEntry {
   ];
   const values: Record<string, unknown> = { ...row, rollup_of_task: row.rollup_of_task ?? null };
   if (row.category !== undefined) cols.push("category");
+
+  if (row.series !== undefined && row.series !== "E") {
+    // A solo-project note (stage B1): numbered on this laptop in its own
+    // series, never by the post office, whether or not sharing is on.
+    if (!hasSeries(db)) throw new Error("[collab] writing into a project needs migration 0009");
+    const ulid = newUlid();
+    const id = nextEntryNumber(db, row.series);
+    cols.push("ulid", "author", "id", "series", "project_ulid");
+    run(db, cols, { ...values, ulid, author: resolveAuthor(), id, series: row.series, project_ulid: row.project_ulid ?? null });
+    return { id, ulid };
+  }
 
   if (hasUlidPrimaryKey(db)) {
     if (row.assigned) {
@@ -135,15 +152,26 @@ export function insertEntryModules(db: DB, owner: InsertedEntry, modules: string
  * Resolve an E-number to the entry a write-by-number acts on. At 0006 id is
  * not unique (E-648): the LOWEST live ulid wins, and tombstoned entries are
  * never owners. Every write looked up by E-number goes through here (F3).
+ * From 0009 a bare number means series E only: a project note is reached
+ * only with its series (ownerOfRef).
  */
 export function ownerOf(db: DB, id: number): InsertedEntry | null {
+  return ownerOfRef(db, { series: "E", id });
+}
+
+/** ownerOf for a reference with a series (`SH-12`). Before 0009 only series E exists. */
+export function ownerOfRef(db: DB, ref: NoteRef): InsertedEntry | null {
+  const series = hasSeries(db);
+  if (!series && ref.series !== "E") return null;
   if (!hasUlidColumns(db)) {
-    const r = db.prepare(`SELECT id FROM entries WHERE id = ?`).get(id) as { id: number } | undefined;
+    const r = db.prepare(`SELECT id FROM entries WHERE id = ?`).get(ref.id) as { id: number } | undefined;
     return r ? { id: r.id, ulid: null } : null;
   }
-  const r = db
-    .prepare(`SELECT id, ulid FROM entries WHERE id = ? AND ${liveEntry(db, "entries")} ORDER BY ulid LIMIT 1`)
-    .get(id) as { id: number; ulid: string } | undefined;
+  const r = (series
+    ? db.prepare(`SELECT id, ulid FROM entries WHERE id = ? AND series = ? AND ${liveEntry(db, "entries")} ORDER BY ulid LIMIT 1`)
+        .get(ref.id, ref.series)
+    : db.prepare(`SELECT id, ulid FROM entries WHERE id = ? AND ${liveEntry(db, "entries")} ORDER BY ulid LIMIT 1`)
+        .get(ref.id)) as { id: number; ulid: string } | undefined;
   return r ? { id: r.id, ulid: r.ulid } : null;
 }
 
