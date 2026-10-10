@@ -1,11 +1,10 @@
 import type { DB } from "./db.js";
 import { hasUlidColumns } from "./db.js";
 import { hasSeries, hasUlidPrimaryKey, liveEntry } from "./schema.js";
-import { newUlid, type NoteRef } from "./ulid.js";
+import { newUlid, isUlid, type NoteRef } from "./ulid.js";
 import { resolveAuthor } from "./author.js";
 import type { RefInput } from "./ops/add.js";
 import { isSyncEnabled } from "./sync/state.js";
-import { SyncAllocationRequiredError } from "./sync/allocator.js";
 
 // The ONE place that knows how an entry and its links are written at each
 // schema level (pre-0005 / 0005 / 0006). Every writer goes through here.
@@ -18,7 +17,8 @@ import { SyncAllocationRequiredError } from "./sync/allocator.js";
 // a path that bypassed the trigger.
 
 export interface InsertedEntry {
-  id: number;
+  /** null = pending: saved, waiting for its number from the post office (stage C). */
+  id: number | null;
   ulid: string | null; // null only on a pre-0005 DB
 }
 
@@ -36,6 +36,10 @@ export interface EntryRowInput {
   category?: string;
   rollup_of_task?: string | null;
   assigned?: { ulid: string; id: number }; // internal: pre-assigned by the post office
+  /** Team-project note without a number in hand: saved with id NULL (stage C, rule 4). */
+  pending?: boolean;
+  /** The ulid a pending note was already asked for under: the courier retries with it (E-713). */
+  pendingUlid?: string;
   /** 0009+: a project's code; omitted = series E (the column default). */
   series?: string;
   project_ulid?: string | null;
@@ -85,11 +89,12 @@ export function insertEntryRow(db: DB, row: EntryRowInput): InsertedEntry {
   if (row.category !== undefined) cols.push("category");
 
   if (row.series !== undefined && row.series !== "E") {
-    // A solo-project note (stage B1): numbered on this laptop in its own
-    // series, never by the post office, whether or not sharing is on.
     if (!hasSeries(db)) throw new Error("[collab] writing into a project needs migration 0009");
-    const ulid = newUlid();
-    const id = nextEntryNumber(db, row.series);
+    // Team project: the number comes from the post office (assigned) or later
+    // from the courier (pending, id NULL). Never a local number (rule 4).
+    // Solo project: numbered here, never sent (B1).
+    const ulid = row.assigned?.ulid ?? row.pendingUlid ?? newUlid();
+    const id = row.assigned ? row.assigned.id : row.pending ? null : nextEntryNumber(db, row.series);
     cols.push("ulid", "author", "id", "series", "project_ulid");
     run(db, cols, { ...values, ulid, author: resolveAuthor(), id, series: row.series, project_ulid: row.project_ulid ?? null });
     return { id, ulid };
@@ -101,9 +106,11 @@ export function insertEntryRow(db: DB, row: EntryRowInput): InsertedEntry {
       run(db, cols, { ...values, ulid: row.assigned.ulid, author: resolveAuthor(), id: row.assigned.id });
       return { id: row.assigned.id, ulid: row.assigned.ulid };
     }
-    if (isSyncEnabled(db)) throw new SyncAllocationRequiredError();
-    const ulid = newUlid();
-    const id = nextEntryNumber(db);
+    const ulid = row.pendingUlid ?? newUlid();
+    // Shared notebook: E numbers come only from the post office. Without one
+    // in hand the note is saved pending and the courier numbers it (E-820;
+    // this replaces E-708's refusal to save).
+    const id = isSyncEnabled(db) ? null : nextEntryNumber(db);
     cols.push("ulid", "author", "id");
     run(db, cols, { ...values, ulid, author: resolveAuthor(), id });
     return { id, ulid };
@@ -119,6 +126,19 @@ export function insertEntryRow(db: DB, row: EntryRowInput): InsertedEntry {
   return { id: Number(r.lastInsertRowid), ulid: null };
 }
 
+/**
+ * The target of an entry ref whose value is a ULID (stage C, spec P6: a pending
+ * note has no number yet, so it is linked by ULID). The fill trigger only
+ * parses number forms and only fires when target_ulid is NULL, so this needs
+ * no trigger change. null when no note has that ULID.
+ */
+function ulidTarget(db: DB, r: RefRowInput): string | null {
+  if (r.ref_type !== "entry" || typeof r.ref_value !== "string") return null;
+  const v = r.ref_value.trim().toUpperCase();
+  if (!isUlid(v)) return null;
+  return db.prepare(`SELECT 1 FROM entries WHERE ulid = ?`).get(v) ? v : null;
+}
+
 /** Inserts refs; returns how many rows were actually new (INSERT OR IGNORE). */
 export function insertRefs(db: DB, owner: InsertedEntry, refs: RefRowInput[]): number {
   if (refs.length === 0) return 0;
@@ -127,7 +147,7 @@ export function insertRefs(db: DB, owner: InsertedEntry, refs: RefRowInput[]): n
     const stmt = db.prepare(
       `INSERT OR IGNORE INTO refs (entry_ulid, entry_id, ref_type, ref_value, target_ulid) VALUES (?, ?, ?, ?, ?)`,
     );
-    for (const r of refs) changed += stmt.run(owner.ulid, owner.id, r.ref_type, r.ref_value, r.target_ulid ?? null).changes;
+    for (const r of refs) changed += stmt.run(owner.ulid, owner.id, r.ref_type, r.ref_value, r.target_ulid ?? ulidTarget(db, r)).changes;
   } else {
     const stmt = db.prepare(`INSERT OR IGNORE INTO refs (entry_id, ref_type, ref_value) VALUES (?, ?, ?)`);
     for (const r of refs) changed += stmt.run(owner.id, r.ref_type, r.ref_value).changes;
@@ -173,6 +193,28 @@ export function ownerOfRef(db: DB, ref: NoteRef): InsertedEntry | null {
     : db.prepare(`SELECT id, ulid FROM entries WHERE id = ? AND ${liveEntry(db, "entries")} ORDER BY ulid LIMIT 1`)
         .get(ref.id)) as { id: number; ulid: string } | undefined;
   return r ? { id: r.id, ulid: r.ulid } : null;
+}
+
+/**
+ * The live note with this ULID, pending or numbered (stage C, spec P6), or
+ * null. Tombstones never own a write, as with ownerOfRef. 0005+ only.
+ */
+export function ownerOfUlid(db: DB, ulid: string): InsertedEntry | null {
+  if (!hasUlidColumns(db)) return null;
+  const r = db.prepare(`SELECT id, ulid FROM entries WHERE ulid = ? AND ${liveEntry(db, "entries")}`)
+    .get(ulid) as { id: number | null; ulid: string } | undefined;
+  return r ? { id: r.id, ulid: r.ulid } : null;
+}
+
+/**
+ * Give a pending note the number the post office assigned (stage C; the
+ * courier calls this). Only ever fills an empty id: a note numbered already
+ * keeps its number (never two numbers for one note, E-713). Returns true when
+ * it wrote.
+ */
+export function assignPendingNumber(db: DB, ulid: string, id: number): boolean {
+  if (!Number.isInteger(id) || id < 1) throw new Error(`not a note number: ${String(id)}`);
+  return db.prepare(`UPDATE entries SET id = ? WHERE ulid = ? AND id IS NULL`).run(id, ulid).changes > 0;
 }
 
 /** Deletes one ref of `owner`; returns rows removed. Keys on the level's real PK (F3). */

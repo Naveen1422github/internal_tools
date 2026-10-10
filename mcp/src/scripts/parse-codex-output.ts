@@ -35,7 +35,7 @@
  *                            other than the one the install lives in.
  */
 import { readFileSync } from "node:fs";
-import { getDb, getDbPath, migrate, closeDb, formatEntryRef, ownerOfRef, hasSeries } from "@collab-mcp/core";
+import { getDb, getDbPath, migrate, closeDb, formatEntryRef, hasSeries } from "@collab-mcp/core";
 import { addEntryAsync } from "@collab-mcp/core";
 import {
   parseIntoDraft,
@@ -265,7 +265,7 @@ const saved = await addEntryAsync(db, {
 
 process.stderr.write(
   `=== Saved to ${getDbPath()} ===\n` +
-    `  id:         ${saved.series === "E" ? saved.id : formatEntryRef(saved.id, saved.series)}\n` +
+    `  id:         ${saved.series === "E" && saved.id !== null ? saved.id : formatEntryRef(saved.id, saved.series)}${saved.pending ? ` (ulid ${saved.ulid})` : ""}\n` +
     `  type:       ${result.draft_entry.type}\n` +
     `  title:      ${result.draft_entry.title}\n` +
     `  module:     ${result.draft_entry.module ?? "(none)"}\n` +
@@ -303,7 +303,8 @@ if (haveDispatchSignal && (args.agent ?? "Codex") !== "Claude" && (args.agent ??
   `);
   const info = stmt.run({
     entry_id: saved.id,
-    ...(withUlid ? { entry_ulid: ownerOfRef(db, { series: saved.series, id: saved.id })?.ulid ?? null } : {}),
+    // By ulid: a pending note (stage C) has no number yet, and the ulid is the note either way.
+    ...(withUlid ? { entry_ulid: saved.ulid || null } : {}),
     agent: dispatchAgent,
     prompt_chars: promptChars,
     prompt_tokens_est: promptTokensEst,

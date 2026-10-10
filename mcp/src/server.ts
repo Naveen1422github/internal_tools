@@ -53,8 +53,13 @@ import {
   formatNoteRef,
   parseNoteRef,
   getEntryByRef,
+  getEntryByUlid,
+  parseNoteKey,
+  pendingCounts,
+  readSyncOverview,
   currentProject,
   type NoteRef,
+  type NoteKey,
 } from "@collab-mcp/core";
 
 // ------------------------------------------------------------
@@ -139,10 +144,56 @@ function resolveRefArg(v: number | string): NoteRef {
   return r;
 }
 
-/** Spec rule 8: every write and search answer says which project it worked in. */
+const KEY_FORMS = `${REF_FORMS}, or the note's 26-character ULID (the only way to reach a pending note, which has no number yet)`;
+
+/** A tool's note argument -> a number reference or a ULID (stage C: pending notes are reached by ULID, spec P6). */
+function resolveKeyArg(v: number | string): NoteKey {
+  const k = parseNoteKey(v);
+  if (!k) throw new Error(`"${v}" is not a note number or ULID. Accepted: ${KEY_FORMS}.`);
+  return k;
+}
+
+/** How an answer names a note given by key: its number, or `E-pending (<ulid>)` while it waits. */
+function keyLabel(k: NoteKey, id?: number | null): string {
+  if (!("ulid" in k)) return k.series === "E" ? String(k.id) : formatNoteRef(k);
+  const e = getEntryByUlid(db, k.ulid) as ({ id: number | null; series?: string } | null);
+  const n = id !== undefined ? id : e?.id ?? null;
+  return n === null ? `${formatEntryRef(null, e?.series ?? "E")} (${k.ulid})` : formatEntryRef(n, e?.series ?? "E");
+}
+
+/** How the office looks from here, for a team project's status line (stage C, rule 8). */
+function officeState(): string {
+  const o = readSyncOverview(db);
+  if (!o.enabled) return "not shared";
+  if (!o.courier.running) return "courier not running";
+  switch (o.courier.state) {
+    case "connected": return "office connected";
+    case "offline": return "office offline";
+    case "needs-action": return "needs action: see collab_doctor";
+    case "needs-update": return "needs update: see collab_doctor";
+    case "revoked": return "access revoked";
+    default: return `office ${o.courier.state}`;
+  }
+}
+
+/**
+ * Spec rule 8: every write and search answer says which project it worked in;
+ * for a team project also the office state and the notes waiting for their
+ * number; with no project, the E notes waiting (stage C). A notebook with no
+ * projects and nothing pending prints exactly what it printed before (rule 1).
+ */
 function statusLine(): string {
-  const p = currentProject(db);
-  return p ? `project: ${p.code} ${p.name} (${p.mode})` : "project: none (E series)";
+  return statusFor(currentProject(db));
+}
+function statusFor(p: { code: string; name: string; mode: string } | null): string {
+  const pending = pendingCounts(db);
+  if (p && p.mode === "team") {
+    const n = pending.filter((r) => r.series === p.code).reduce((a, r) => a + r.n, 0);
+    return `project: ${p.code} ${p.name} (team, ${officeState()}, ${n} pending)`;
+  }
+  if (p) return `project: ${p.code} ${p.name} (${p.mode})`;
+  const e = pending.filter((r) => r.series === "E").reduce((a, r) => a + r.n, 0);
+  return e > 0 ? `project: none (E series, ${e} pending)` : "project: none (E series)";
 }
 
 const SCOPE = z
@@ -248,7 +299,7 @@ server.registerTool(
       "Use after collab.search or collab.list_recent has surfaced an id you want to read deliberately.",
     ].join("\n"),
     inputSchema: {
-      id: NOTE_REF.describe("Note number: an integer (the one inside E-NNNNN), or a reference like 'SH-12' / 'E-00760'"),
+      id: NOTE_REF.describe("Note number: an integer (the one inside E-NNNNN), a reference like 'SH-12' / 'E-00760', or the note's ULID (a pending note has no number yet)"),
     },
     annotations: {
       readOnlyHint: true,
@@ -258,11 +309,11 @@ server.registerTool(
     },
   },
   async (args) => {
-    const ref = resolveRefArg(args.id);
-    const entry = getEntryByRef(db, ref);
+    const key = resolveKeyArg(args.id);
+    const entry = "ulid" in key ? getEntryByUlid(db, key.ulid) : getEntryByRef(db, key);
     if (!entry) {
       return {
-        content: [{ type: "text", text: `No entry found with id ${ref.series === "E" ? ref.id : formatNoteRef(ref)}.` }],
+        content: [{ type: "text", text: `No entry found with id ${"ulid" in key ? key.ulid : key.series === "E" ? key.id : formatNoteRef(key)}.` }],
         structuredContent: null as any,
       };
     }
@@ -393,13 +444,14 @@ server.registerTool(
     });
     const tt = result.taskTransition;
     const added = formatEntryRef(result.id, result.series);
-    const status = result.project
-      ? `project: ${result.project.code} ${result.project.name} (${result.project.mode})`
-      : "project: none (E series)";
-    let text = tt
-      ? `${status}\nAdded ${added} (${args.type}). `
-        + `Auto-advanced ${tt.id}: ${tt.from} -> ${tt.to}.`
+    const status = statusFor(result.project);
+    // Stage C (E-820): a note the office could not number yet is saved pending.
+    const head = result.pending
+      ? `${status}\nSaved ${added} (${args.type}), waiting for its number: ${result.pendingReason ?? "the courier will number it"}. Link to it by ulid ${result.ulid} until then.`
       : `${status}\nAdded ${added} (${args.type}).`;
+    let text = tt
+      ? `${head} Auto-advanced ${tt.id}: ${tt.from} -> ${tt.to}.`
+      : head;
     // E-657 guardrail: tell the writing agent where its module's main note is,
     // only for important types (the hub must not become a dump).
     if (args.module && ["decision", "proposal", "gotcha"].includes(args.type)) {
@@ -407,7 +459,7 @@ server.registerTool(
       if (hs.state === "ok") {
         const h = hs.coverage!.hub;
         const hubRef = h.series ? formatEntryRef(h.id, h.series) : String(h.id);
-        const newRef = result.series === "E" ? String(result.id) : added;
+        const newRef = result.pending ? result.ulid : result.series === "E" ? String(result.id) : added;
         text += ` Main note for '${args.module}' is ${formatEntryRef(h.id, h.series)}; `
           + `if this belongs in it, link it with collab_update_refs (id ${hubRef}, add entry '${newRef}').`;
       }
@@ -437,7 +489,7 @@ server.registerTool(
       "Refs are NOT mutated here (future extension). To deprecate/roll up instead, use collab.rollup.",
     ].join("\n"),
     inputSchema: {
-      id: NOTE_REF.describe("Note number: an integer (the one inside E-NNNNN), or a reference like 'SH-12'"),
+      id: NOTE_REF.describe("Note number: an integer (the one inside E-NNNNN), a reference like 'SH-12', or the note's ULID (a pending note has no number yet)"),
       title: z.string().min(1).optional(),
       summary: z.string().min(1).max(200).optional(),
       description: z.string().optional(),
@@ -450,10 +502,9 @@ server.registerTool(
     },
   },
   async (args) => {
-    const ref = resolveRefArg(args.id);
+    const key = resolveKeyArg(args.id);
     const result = updateEntry(db, {
-      id: ref.id,
-      series: ref.series,
+      ...("ulid" in key ? { ulid: key.ulid } : { id: key.id, series: key.series }),
       title: args.title,
       summary: args.summary,
       description: args.description,
@@ -462,7 +513,7 @@ server.registerTool(
       content: [
         {
           type: "text",
-          text: `Updated ${formatEntryRef(result.id, ref.series)} (${result.updated_fields.join(", ")}).`,
+          text: `Updated ${"ulid" in key ? keyLabel(key, result.id) : formatEntryRef(result.id, key.series)} (${result.updated_fields.join(", ")}).`,
         },
       ],
       structuredContent: structured(result),
@@ -485,10 +536,10 @@ server.registerTool(
       "Provide 'add' and/or 'remove' arrays of {ref_type, ref_value}. Idempotent: re-adding an",
       "existing ref or removing a missing one is a no-op. The response lists what ACTUALLY changed.",
       "Each ref is {ref_type: 'file'|'task'|'entry'|'url', ref_value: string}. For an entry link,",
-      "ref_type='entry' and ref_value is the target note's number as a string (e.g. '304' for E-00304, or 'SH-12').",
+      "ref_type='entry' and ref_value is the target note's number as a string (e.g. '304' for E-00304, or 'SH-12'), or its ULID (a pending note).",
     ].join("\n"),
     inputSchema: {
-      id: NOTE_REF.describe("Note whose refs to mutate: an integer (the one inside E-NNNNN), or a reference like 'SH-12'."),
+      id: NOTE_REF.describe("Note whose refs to mutate: an integer (the one inside E-NNNNN), a reference like 'SH-12', or the note's ULID (a pending note has no number yet)."),
       add: z
         .array(z.object({ ref_type: REF_TYPE, ref_value: z.string().min(1) }))
         .optional()
@@ -506,8 +557,8 @@ server.registerTool(
     },
   },
   async (args) => {
-    const ref = resolveRefArg(args.id);
-    const result = updateEntryRefs(db, { id: ref.id, series: ref.series, add: args.add, remove: args.remove });
+    const key = resolveKeyArg(args.id);
+    const result = updateEntryRefs(db, { ...("ulid" in key ? { ulid: key.ulid } : { id: key.id, series: key.series }), add: args.add, remove: args.remove });
     const parts: string[] = [];
     if (result.added.length > 0) {
       parts.push(`+${result.added.map((r) => `${r.ref_type}:${r.ref_value}`).join(", ")}`);
@@ -518,7 +569,7 @@ server.registerTool(
     const change = parts.length > 0 ? parts.join(" | ") : "no change (all no-ops)";
     return {
       content: [
-        { type: "text", text: `${formatEntryRef(result.id, ref.series)} refs: ${change}.` },
+        { type: "text", text: `${"ulid" in key ? keyLabel(key, result.id) : formatEntryRef(result.id, key.series)} refs: ${change}.` },
       ],
       structuredContent: structured(result),
     };
@@ -1159,8 +1210,8 @@ server.registerTool(
       ids: z
         .array(NOTE_REF)
         .min(1)
-        .describe("Notes being replaced: integers (the ones inside E-NNNNN) or references like 'SH-12'."),
-      by: NOTE_REF.describe("The note that replaces them (integer = E, or a reference like 'SH-12')."),
+        .describe("Notes being replaced: integers (the ones inside E-NNNNN), references like 'SH-12', or ULIDs (pending notes)."),
+      by: NOTE_REF.describe("The note that replaces them (integer = E, a reference like 'SH-12', or a ULID: a note saved pending can supersede right away)."),
     },
     annotations: {
       readOnlyHint: false,
@@ -1170,11 +1221,12 @@ server.registerTool(
     },
   },
   async (args) => {
-    const ids = args.ids.map(resolveRefArg);
-    const by = resolveRefArg(args.by);
+    const ids = args.ids.map(resolveKeyArg);
+    const by = resolveKeyArg(args.by);
     const result = supersede(db, { ids, by });
-    const supersededIds = [...new Map(ids.map((r) => [formatNoteRef(r), r])).keys()].join(", ");
-    const byId = formatNoteRef(by);
+    const label = (k: NoteKey) => ("ulid" in k ? keyLabel(k) : formatNoteRef(k));
+    const supersededIds = [...new Map(ids.map((r) => [label(r), r])).keys()].join(", ");
+    const byId = label(by);
     return {
       content: [{ type: "text", text: `Superseded ${supersededIds} → replaced by ${byId}.` }],
       structuredContent: structured(result),
@@ -1342,7 +1394,7 @@ function supersededBy(e: { superseded_by?: number | null; superseded_target?: { 
 }
 
 function formatEntry(e: {
-  id: number; type: string; title: string; summary: string;
+  id: number | null; ulid?: string; type: string; title: string; summary: string;
   description: string | null; status: string; agent: string | null;
   module: string | null; modules?: string[]; category?: string;
   superseded_by?: number | null; task_id: string | null;
@@ -1351,7 +1403,7 @@ function formatEntry(e: {
   tokens_estimate: number; created_at: string;
   refs: Array<{ ref_type: string; ref_value: string }>;
 }): string {
-  const head = `[${formatEntryRef(e.id, e.series)}] ${e.type} - ${e.title}`;
+  const head = `[${formatEntryRef(e.id, e.series)}${e.id === null && e.ulid ? ` ${e.ulid}` : ""}] ${e.type} - ${e.title}`;
   const moduleBit =
     e.modules && e.modules.length > 0
       ? `modules=${e.modules.join(",")}`

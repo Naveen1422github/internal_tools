@@ -2,15 +2,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { DB } from "../db.js";
 import { getSyncValue, isSyncEnabled } from "./state.js";
-import { readOwnChanges, entryUlidOf } from "./changes.js";
+import { readOwnChanges } from "./changes.js";
 import { ensureCrsqlite } from "./extension.js";
-import { hasSeries } from "../schema.js";
 import { courierDir as defaultCourierDir, courierFiles } from "./courier-paths.js";
 import { SYNC_KEYS } from "./http-allocator.js";
-
-// The courier's own sync_state keys (courier/src/keys.ts COURIER_KEYS; core cannot import the courier).
-const SHARED_KEY = "shared_modules";
-const SENT_KEY = "sent_db_version";
+import { SHARED_KEY, SENT_KEY, sendContext, sendVerdictOf, type NotePlace } from "./send-filter.js";
+import { hasSeries, hasUlidPrimaryKey } from "../schema.js";
 
 // What the web UI's status bar shows (spec part 2, V1): read from THIS laptop
 // only. Never returns the device key or any sync_state value not listed below.
@@ -24,6 +21,8 @@ export type SyncOverview =
       deviceId: string;
       sharedModules: string[];
       unsent: number;
+      /** Notes saved without a number yet (stage C): the courier numbers them when it reaches the office. */
+      pending: number;
       courier: { running: boolean; state: string; lastError: string | null; lastPushAt: string | null; lastPullAt: string | null };
       lastContactAt: string | null;
       health: SyncHealth;
@@ -38,38 +37,36 @@ function sharedSet(db: DB): Set<string> {
 }
 
 /**
- * This laptop's own changes since the sent-bookmark whose note's PRIMARY module
- * is shared. A note in a project is never sent by this path (stage B1), so it
- * never waits either (same filter as the courier's push).
+ * This laptop's own changes since the sent-bookmark that the courier will send
+ * (verdict "send") or that wait to be sent (verdict "hold": a pending note, or
+ * a team project not learned yet). The SAME rule as the courier's push
+ * (send-filter.ts), so the status can never disagree with what is sent. Team
+ * notes count without any shared module.
  */
 export function unsentSharedCount(db: DB): number {
   if (!isSyncEnabled(db)) return 0;
   ensureCrsqlite(db);
-  const shared = sharedSet(db);
-  if (shared.size === 0) return 0;
   const since = Number(getSyncValue(db, SENT_KEY) ?? 0);
-  const moduleOf = new Map<string, string | null>();
-  const projectCol = hasSeries(db) ? "project_ulid" : "NULL";
+  const ctx = sendContext(db);
+  const memo = new Map<string, NotePlace>();
   let n = 0;
   for (const w of readOwnChanges(db, since)) {
-    const pk = Buffer.from(w.pk, "base64");
-    let module: string | null;
-    if (w.table === "modules") {
-      const r = db.prepare(`SELECT cell FROM crsql_unpack_columns(?)`).get(pk) as { cell: unknown } | undefined;
-      module = r ? String(r.cell) : null;
-    } else {
-      const ulid = entryUlidOf(db, w.table, pk);
-      if (!ulid) continue;
-      if (!moduleOf.has(ulid)) {
-        const e = db.prepare(`SELECT module, ${projectCol} AS project FROM entries WHERE ulid = ?`)
-          .get(ulid) as { module: string | null; project: string | null } | undefined;
-        moduleOf.set(ulid, e?.project ? null : e?.module ?? null); // a project note: no module to send under
-      }
-      module = moduleOf.get(ulid) ?? null;
-    }
-    if (module && shared.has(module)) n++;
+    if (sendVerdictOf(db, w, ctx, memo).verdict !== "skip") n++;
   }
   return n;
+}
+
+/**
+ * Notes waiting for their number (stage C, rule 8), per series and project:
+ * live notes with id NULL. Before 0006 every note has a number.
+ */
+export function pendingCounts(db: DB): Array<{ series: string; project: string | null; n: number }> {
+  if (!hasUlidPrimaryKey(db)) return [];
+  return db.prepare(
+    hasSeries(db)
+      ? `SELECT series, project_ulid AS project, COUNT(*) AS n FROM entries WHERE id IS NULL AND deleted_at IS NULL GROUP BY series, project_ulid ORDER BY series, project_ulid`
+      : `SELECT 'E' AS series, NULL AS project, COUNT(*) AS n FROM entries WHERE id IS NULL AND deleted_at IS NULL HAVING COUNT(*) > 0`,
+  ).all() as Array<{ series: string; project: string | null; n: number }>;
 }
 
 export function readSyncOverview(
@@ -92,7 +89,8 @@ export function readSyncOverview(
   let health: SyncHealth;
   if (!st) health = "unknown";
   else if (!running) health = "not-syncing";
-  else if (state === "needs-update") health = "needs-update";
+  // needs-action (stage C: a project clash) also means "a person must act".
+  else if (state === "needs-update" || state === "needs-action") health = "needs-update";
   else if (state === "revoked") health = "revoked";
   else if (state === "offline" || state === "starting" || unsent > 0) health = "behind";
   else health = "ok";
@@ -102,6 +100,7 @@ export function readSyncOverview(
     deviceId: getSyncValue(db, SYNC_KEYS.device) ?? "",
     sharedModules: [...sharedSet(db)].sort(),
     unsent,
+    pending: pendingCounts(db).reduce((sum, r) => sum + r.n, 0),
     courier: { running, state, lastError: st?.lastError ?? null, lastPushAt, lastPullAt },
     lastContactAt,
     health,

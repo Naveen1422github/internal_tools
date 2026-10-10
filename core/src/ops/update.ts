@@ -2,7 +2,7 @@ import type { DB } from "../db.js";
 import { estimateTokens } from "../db.js";
 import type { RefInput } from "./add.js";
 import { hasUlidPrimaryKey } from "../schema.js";
-import { ownerOf, ownerOfRef, insertRefs, deleteRef } from "../entry-write.js";
+import { ownerOf, ownerOfRef, ownerOfUlid, insertRefs, deleteRef } from "../entry-write.js";
 import { snapshotForRevision, finishRevision } from "../revisions.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { assertHeads, NeedsMergeError } from "./merge.js";
@@ -12,16 +12,19 @@ import { formatEntryRef } from "../entry-ref.js";
 // Types
 // ------------------------------------------------------------
 export interface UpdateEntryArgs {
-  id: number;
+  /** The note's number; omitted when `ulid` names the note. */
+  id?: number;
   /** The note's series (stage B1): omitted = E, so `id` alone keeps meaning E-<id>. */
   series?: string;
+  /** The note's ULID instead of its number: reaches a pending note too (stage C, spec P6). */
+  ulid?: string;
   title?: string;
   summary?: string;       // <= 200 chars; enforced here (DB also CHECKs)
   description?: string;
 }
 
 export interface UpdateEntryResult {
-  id: number;
+  id: number | null; // null = the note is pending (stage C)
   updated_fields: string[];
 }
 
@@ -36,12 +39,12 @@ export interface UpdateEntryResult {
 // future extension). Use this to correct/clarify durable entries, not to churn them.
 export function updateEntry(db: DB, args: UpdateEntryArgs): UpdateEntryResult {
   ensureCrsqlite(db);
-  if (!Number.isInteger(args.id) || args.id < 1) {
+  if (args.ulid === undefined && (!Number.isInteger(args.id) || (args.id as number) < 1)) {
     throw new Error("id must be a positive integer");
   }
 
   const sets: string[] = [];
-  const params: Record<string, string | number> = { id: args.id };
+  const params: Record<string, string | number | null> = { id: args.id ?? null };
   const updated: string[] = [];
 
   if (args.title !== undefined) {
@@ -76,12 +79,14 @@ export function updateEntry(db: DB, args: UpdateEntryArgs): UpdateEntryResult {
   // tombstones never own) and write by ulid (F3). Before 0006 id is the PK.
   let where = "id = @id";
   const series = args.series ?? "E";
-  const label = series === "E" ? String(args.id) : formatEntryRef(args.id, series);
-  if (series !== "E" && !hasUlidPrimaryKey(db)) throw new Error(`no entry found with id ${label}`);
+  const label = args.ulid !== undefined ? args.ulid : series === "E" ? String(args.id) : formatEntryRef(args.id, series);
+  if ((series !== "E" || args.ulid !== undefined) && !hasUlidPrimaryKey(db)) throw new Error(`no entry found with id ${label}`);
+  let ownerId: number | null = args.id ?? null;
   if (hasUlidPrimaryKey(db)) {
-    const owner = ownerOfRef(db, { series, id: args.id });
+    const owner = args.ulid !== undefined ? ownerOfUlid(db, args.ulid) : ownerOfRef(db, { series, id: args.id as number });
     if (!owner) throw new Error(`no entry found with id ${label}`);
     params.ulid = owner.ulid as string;
+    ownerId = owner.id;
     where = "ulid = @ulid";
   }
 
@@ -90,14 +95,14 @@ export function updateEntry(db: DB, args: UpdateEntryArgs): UpdateEntryResult {
   const tx = db.transaction(() => {
     const before = params.ulid ? snapshotForRevision(db, params.ulid as string) : null;
     // V9: an ordinary edit would settle the conflict without seeing the other version.
-    if (before?.needs_merge === 1) throw new NeedsMergeError(args.id);
+    if (before?.needs_merge === 1) throw new NeedsMergeError(ownerId as number);
     const info = db.prepare(`UPDATE entries SET ${sets.join(", ")} WHERE ${where}`).run(params);
     if (info.changes === 0) throw new Error(`no entry found with id ${label}`);
     finishRevision(db, before);
   });
   tx();
 
-  return { id: args.id, updated_fields: updated };
+  return { id: ownerId, updated_fields: updated };
 }
 
 /**
@@ -133,22 +138,25 @@ export function resolveNeedsMerge(db: DB, id: number, expectedHeads: string[]): 
 // so callers can tell a real edit from a no-op.
 // ------------------------------------------------------------
 export interface UpdateEntryRefsArgs {
-  id: number;
+  /** The note's number; omitted when `ulid` names the note. */
+  id?: number;
   /** The note's series (stage B1): omitted = E. */
   series?: string;
+  /** The note's ULID instead of its number: reaches a pending note too (stage C, spec P6). */
+  ulid?: string;
   add?: RefInput[];
   remove?: RefInput[];
 }
 
 export interface UpdateEntryRefsResult {
-  id: number;
+  id: number | null; // null = the note is pending (stage C)
   added: RefInput[];
   removed: RefInput[];
 }
 
 export function updateEntryRefs(db: DB, args: UpdateEntryRefsArgs): UpdateEntryRefsResult {
   ensureCrsqlite(db);
-  if (!Number.isInteger(args.id) || args.id < 1) {
+  if (args.ulid === undefined && (!Number.isInteger(args.id) || (args.id as number) < 1)) {
     throw new Error("id must be a positive integer");
   }
   const toAdd = args.add ?? [];
@@ -159,8 +167,10 @@ export function updateEntryRefs(db: DB, args: UpdateEntryRefsArgs): UpdateEntryR
 
   // Owner by E-number (F3): lowest live ulid at 0006; tombstones refused.
   const series = args.series ?? "E";
-  const owner = ownerOfRef(db, { series, id: args.id });
-  if (!owner) throw new Error(`no entry found with id ${series === "E" ? args.id : formatEntryRef(args.id, series)}`);
+  const owner = args.ulid !== undefined ? ownerOfUlid(db, args.ulid) : ownerOfRef(db, { series, id: args.id as number });
+  if (!owner) {
+    throw new Error(`no entry found with id ${args.ulid ?? (series === "E" ? args.id : formatEntryRef(args.id, series))}`);
+  }
 
   const added: RefInput[] = [];
   const removed: RefInput[] = [];
@@ -175,5 +185,5 @@ export function updateEntryRefs(db: DB, args: UpdateEntryRefsArgs): UpdateEntryR
   });
   tx();
 
-  return { id: args.id, added, removed };
+  return { id: owner.id, added, removed };
 }

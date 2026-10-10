@@ -22,6 +22,9 @@ const USAGE = `usage: collab [--notebook <name>] <command>
   collab notebook which                   the notebook this folder uses, and why
   collab notebook reindex                 rebuild the search index of that notebook
   collab project create <name> --code <C> a solo project: its notes are numbered C-1, C-2, ...
+  collab project create <name> --code <C> --team
+                                          a team project: the post office numbers its notes and shares them
+  collab project promote <code>           make a solo project a team project (its notes keep their numbers)
   collab project rename <code> <new name> rename a project (its code never changes)
   collab project list                     the projects in this notebook (* = this folder's)
   collab project use <code>               make it this folder's project (writes .collab)

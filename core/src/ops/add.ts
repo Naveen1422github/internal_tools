@@ -3,9 +3,9 @@ import { estimateTokens } from "../db.js";
 import { autoAdvanceTaskForEntry, type TaskStatus } from "./task.js";
 import { insertEntryRow, insertEntryModules, insertRefs } from "../entry-write.js";
 import { isSyncEnabled } from "../sync/state.js";
-import { resolveAllocator, allocateWithRetry, PostOfficeUnreachableError } from "../sync/allocator.js";
+import { resolveAllocator, allocateWithRetry, SAVE_ATTEMPT } from "../sync/allocator.js";
 import { newUlid } from "../ulid.js";
-import { currentProject, findProject, notFound, type Project } from "../projects.js";
+import { currentProject, findProject, isTeamProject, notFound, type Project } from "../projects.js";
 
 // ------------------------------------------------------------
 // Types
@@ -40,6 +40,8 @@ export interface AddEntryArgs {
   task_id?: string;
   refs?: RefInput[];
   assigned?: { ulid: string; id: number }; // internal: set only by addEntryAsync
+  /** internal: the ulid a pending note was asked for under (E-713), set only by addEntryAsync */
+  pendingUlid?: string;
   /**
    * The project to write into: its code or ULID (stage B1). "none" = no project
    * (series E). addEntryAsync defaults it to the folder's current project
@@ -92,7 +94,14 @@ function decodeOnce(s: string): string {
 // addEntry
 // ------------------------------------------------------------
 export type AddEntryResult = {
-  id: number;
+  /** null = pending: saved, waiting for its number from the post office (stage C). */
+  id: number | null;
+  /** true <=> id === null. The courier numbers it when the office is reachable. */
+  pending: boolean;
+  /** The note's permanent id: link to a pending note by it (spec P6). "" only on a pre-0005 DB. */
+  ulid: string;
+  /** Why a pending note has no number yet (the office's answer, or that none is configured). */
+  pendingReason?: string;
   /** "E" for a note without a project, else the project's code (SH). */
   series: string;
   project: { code: string; name: string; mode: string } | null;
@@ -191,14 +200,18 @@ export function addEntry(
       tokens_estimate: tokens,
       category,
       assigned: a.assigned,
+      // A team note without a number from the office waits for one (rule 4).
+      pending: isTeamProject(project) && !a.assigned,
+      pendingUlid: a.pendingUlid,
       ...(project ? { series: project.code, project_ulid: project.ulid } : {}),
     });
     insertEntryModules(db, owner, orderedModules, primaryModule);
     insertRefs(db, owner, a.refs ?? []);
-    return owner.id;
+    return owner;
   });
 
-  const id = tx(args);
+  const owner = tx(args);
+  const id = owner.id;
 
   // Lifecycle automation: advance the linked task when a completion-signal
   // entry lands. Best-effort — a failure here must never fail the entry write.
@@ -213,6 +226,8 @@ export function addEntry(
 
   return {
     id,
+    pending: id === null,
+    ulid: owner.ulid ?? "",
     series: project ? project.code : "E",
     project: project ? { code: project.code, name: project.name, mode: project.mode } : null,
     ...(taskTransition ? { taskTransition } : {}),
@@ -222,11 +237,23 @@ export function addEntry(
   };
 }
 
+const withReason = (r: AddEntryResult, why: string): AddEntryResult => ({ ...r, pendingReason: why });
+
+/** The office's own words for a failed ask, without the allocator's "Not saved" wrapper. */
+function reasonOf(e: unknown): string {
+  const cause = (e as { cause?: unknown } | null)?.cause;
+  if (cause instanceof Error) return cause.message;
+  return e instanceof Error ? e.message : String(e);
+}
+
 /**
  * The entry point for every async caller. Checks the input FIRST (E-713), then:
- * sharing off => identical to addEntry; sharing on => ask the post office for
- * the number with ONE ulid across bounded retries; if that fails, nothing is
- * written (E-708: refuse to save).
+ * a solo project or an unshared notebook => identical to addEntry (local
+ * numbers, no network call); a team project or a shared E note => ONE quick
+ * ask to the post office for the number. Saving never waits on the office
+ * (rule 6, E-820, replacing E-708's refusal): without an answer the note is
+ * saved pending with the SAME ulid, so the courier's retry gets the number the
+ * office may already have given (E-713).
  */
 export async function addEntryAsync(db: DB, args: AddEntryArgs): Promise<AddEntryResult> {
   ensureCrsqlite(db);
@@ -235,13 +262,18 @@ export async function addEntryAsync(db: DB, args: AddEntryArgs): Promise<AddEntr
     const cur = currentProject(db);
     if (cur) args = { ...args, project: cur.ulid };
   }
-  // A solo-project note is numbered on this laptop: never an allocator call,
-  // whatever sharing says (spec rule 4; team projects arrive with stage C).
-  if (resolveProjectArg(db, args)) return addEntry(db, args);
-  if (!isSyncEnabled(db)) return addEntry(db, args);
+  const project = resolveProjectArg(db, args);
+  if (project && !isTeamProject(project)) return addEntry(db, args); // solo: never the office (rule 4)
+  if (!project && !isSyncEnabled(db)) return addEntry(db, args);      // unshared notebook: as today
+  const series = project ? project.code : "E";
   const allocator = resolveAllocator(db);
-  if (!allocator) throw new PostOfficeUnreachableError("no post office connection is configured on this machine");
   const ulid = newUlid();
-  const id = await allocateWithRetry(allocator, ulid);
+  if (!allocator) return withReason(addEntry(db, { ...args, pendingUlid: ulid }), "no post office connection is configured on this machine");
+  let id: number;
+  try {
+    id = await allocateWithRetry(allocator, ulid, series, SAVE_ATTEMPT);
+  } catch (e) {
+    return withReason(addEntry(db, { ...args, pendingUlid: ulid }), reasonOf(e));
+  }
   return addEntry(db, { ...args, assigned: { ulid, id } });
 }

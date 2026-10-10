@@ -18,7 +18,7 @@ if (n > 0) {
   process.exit(0);
 }
 
-const seeded: number[] = [];
+const seeded: Array<number | null> = []; // null = pending (stage C), never on a fresh unshared seed
 
 seeded.push(
   addEntry(db, {

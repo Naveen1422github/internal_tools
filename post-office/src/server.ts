@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
   StoreError, allocate, authenticate, redeemJoin, isRevoked, sharedModules, setModuleShared, teamStatus, officeSchema,
+  registerProject, listOfficeProjects,
   type Member, type Store,
 } from "./store.js";
 import { acceptChanges, fetchDeliveries, lastSeq } from "./deliveries.js";
@@ -138,9 +139,21 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
     switch (route) {
       case "POST /v1/allocate": {
         const b = await readJson(req, maxBody);
-        const id = allocate(o.store, b?.ulid, me.device_id);
+        // No series = an older laptop: E, exactly as before. The answer echoes the
+        // series so a newer laptop can refuse a number from an older office (stage C).
+        const series = b?.series === undefined ? "E" : String(b.series);
+        const id = allocate(o.store, b?.ulid, me.device_id, series);
         if (o.testHooks?.dropAllocateAnswer?.(String(b?.ulid))) { req.socket.destroy(); return; }
-        return send(res, 200, { id });
+        return send(res, 200, { id, series });
+      }
+      case "GET /v1/projects":
+        return send(res, 200, { projects: listOfficeProjects(o.store) });
+      case "POST /v1/projects": {
+        const b = await readJson(req, maxBody);
+        const project = registerProject(o.store, b ?? {});
+        ring("projects", { code: project.code });
+        log(`${me.name}: team project ${project.code} (${project.name}) registered`);
+        return send(res, 200, { project });
       }
       case "POST /v1/changes": {
         const b = await readJson(req, maxBody);

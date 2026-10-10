@@ -44,9 +44,9 @@ test('bad codes are rejected with a message naming the rule', () => {
   });
 });
 
-test('team mode is rejected in B1', () => {
+test('createProject refuses team mode and points at the team commands (stage C)', () => {
   at0009((db) => {
-    assert.throws(() => createProject(db, { name: 'x', code: 'XX', mode: 'team' } as any), /team projects arrive with stage C/);
+    assert.throws(() => createProject(db, { name: 'x', code: 'XX', mode: 'team' } as any), /--team/);
   });
 });
 

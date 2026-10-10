@@ -42,7 +42,7 @@ test('an unknown project is refused, listing the known codes', async () => {
   } finally { t.cleanup(); }
 });
 
-test('sync-enabled notebook, office unreachable: a project note saves with no allocator call; an E note still refuses (E-708)', async () => {
+test('sync-enabled notebook, office unreachable: a project note saves with no allocator call; an E note goes pending (stage C, E-820)', async () => {
   const t = freshDb({ shared: true });
   let calls = 0;
   setAllocator({ allocate: async () => { calls++; throw new Error('office down'); } });
@@ -52,9 +52,10 @@ test('sync-enabled notebook, office unreachable: a project note saves with no al
     const a = await addEntryAsync(t.db, note('solo note', { project: 'SH', module: 'portfolio' }));
     assert.equal(`${a.series}-${a.id}`, 'SH-1');
     assert.equal(calls, 0, 'no network call while saving a solo note');
-    await assert.rejects(addEntryAsync(t.db, note('E note', { module: 'portfolio' })));
+    const e = await addEntryAsync(t.db, note('E note', { module: 'portfolio' }));
+    assert.equal(e.pending, true);
     assert.ok(calls >= 1, 'the E note went through the allocator as today');
-    assert.equal((t.db.prepare(`SELECT COUNT(*) c FROM entries WHERE title = 'E note'`).get() as any).c, 0);
+    assert.equal((t.db.prepare(`SELECT COUNT(*) c FROM entries WHERE title = 'E note' AND id IS NULL`).get() as any).c, 1);
   } finally { setAllocator(null); t.cleanup(); }
 });
 

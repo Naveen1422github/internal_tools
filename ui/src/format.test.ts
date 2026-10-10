@@ -6,9 +6,10 @@ describe('formatEntryRef', () => {
     expect(formatEntryRef(12)).toBe('E-00012');
     expect(formatEntryRef(123456)).toBe('E-123456');
   });
-  it('a missing number prints E-?, never E-0null', () => {
-    expect(formatEntryRef(null)).toBe('E-?');
-    expect(formatEntryRef(undefined)).toBe('E-?');
+  it('a missing number prints E-pending (stage C), never E-0null', () => {
+    expect(formatEntryRef(null)).toBe('E-pending');
+    expect(formatEntryRef(null, 'SH')).toBe('SH-pending');
+    expect(formatEntryRef(undefined)).toBe('E-pending');
   });
   it('a project series prints its bare number; only E is padded', () => {
     expect(formatEntryRef(7, 'ACME')).toBe('ACME-7');

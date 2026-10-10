@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import { migrate, addEntry, createProject, addNotebook, initModule } from '@collab-mcp/core';
+import { migrate, addEntry, createProject, addNotebook, initModule, enableSync, setSyncValue } from '@collab-mcp/core';
 
 const SERVER = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'server.js');
 
@@ -151,5 +151,83 @@ test('.collab naming a project that is not in this notebook: a clear error, neve
     assert.equal(r.isError, true);
     assert.match(r.text, /collab project list/);
     assert.match(r.text, /\.collab/);
+  });
+});
+
+// Stage C, rule 8: a team project's status line says how the office looks and what waits.
+test('status line: a team project shows the office state and its pending notes; E pending shows with no project', async () => {
+  const cdir = mkdtempSync(join(tmpdir(), 'collab-courier-status-'));
+  writeFileSync(join(cdir, 'status.json'), JSON.stringify({ state: 'connected', lastError: null, pid: process.pid }));
+  writeFileSync(join(cdir, 'courier.pid'), String(process.pid));
+  const saved = process.env.COLLAB_COURIER_DIR;
+  process.env.COLLAB_COURIER_DIR = cdir; // the spawned server inherits it
+  try {
+    await withServer(async ({ call, dbPath, setProject }) => {
+      const tm = '01J0000000000000000000TEAM';
+      const db = new Database(dbPath);
+      try {
+        enableSync(db);
+        setSyncValue(db, 'po_url', 'https://127.0.0.1:1');
+        setSyncValue(db, 'po_fingerprint', 'fp');
+        setSyncValue(db, 'device_id', 'd');
+        setSyncValue(db, 'device_key', 'k');
+        db.prepare(`INSERT INTO projects (ulid, name, code, mode, team) VALUES (?, 'Team', 'TM', 'team', 'fp')`).run(tm);
+        addEntry(db, { type: 'decision', title: 'tm 1', summary: 's', project: 'TM' });
+        addEntry(db, { type: 'decision', title: 'tm 2', summary: 's', project: 'TM' });
+        addEntry(db, { type: 'decision', title: 'e waiting', summary: 's' });
+      } finally { db.prepare('SELECT crsql_finalize()').get(); db.close(); }
+      setProject(tm);
+      const s = await call('collab_search', { query: '' });
+      assert.equal(s.isError, false, s.text);
+      assert.match(s.text, /^project: TM Team \(team, office connected, 2 pending\)/);
+      setProject(null);
+      const n = await call('collab_search', { query: '', scope: 'all' });
+      assert.match(n.text, /^project: none \(E series, 1 pending\)/);
+    });
+  } finally {
+    if (saved === undefined) delete process.env.COLLAB_COURIER_DIR; else process.env.COLLAB_COURIER_DIR = saved;
+    rmSync(cdir, { recursive: true, force: true });
+  }
+});
+
+// Stage C, spec P6: a pending note (no number yet) is reached and linked by its ULID.
+test('pending notes by ULID: get, update, update_refs and supersede take the ULID; unknown ULID is not found', async () => {
+  await withServer(async ({ call, dbPath }) => {
+    const db = new Database(dbPath);
+    let pendingUlid: string;
+    try {
+      db.prepare(`INSERT INTO projects (ulid, name, code, mode, team) VALUES ('01J0000000000000000000TEAM', 'Team', 'TM', 'team', 'fp')`).run();
+      const p = addEntry(db, { type: 'decision', title: 'Waiting for a number', summary: 'pending', project: 'TM' });
+      assert.equal(p.pending, true);
+      pendingUlid = p.ulid;
+    } finally { db.close(); }
+    const g = await call('collab_get', { id: pendingUlid });
+    assert.equal(g.isError, false, g.text);
+    assert.equal(g.structured.title, 'Waiting for a number');
+    assert.match(g.text, /\[TM-pending /);
+    const lower = await call('collab_get', { id: pendingUlid.toLowerCase() });
+    assert.equal(lower.structured.title, 'Waiting for a number');
+    const u = await call('collab_update', { id: pendingUlid, summary: 'edited while pending' });
+    assert.equal(u.isError, false, u.text);
+    assert.match(u.text, /Updated TM-pending/);
+    const r = await call('collab_update_refs', { id: pendingUlid, add: [{ ref_type: 'entry', ref_value: '1' }] });
+    assert.equal(r.isError, false, r.text);
+    assert.match(r.text, /TM-pending .* refs: \+entry:1/);
+    const s = await call('collab_supersede', { ids: [1], by: pendingUlid });
+    assert.equal(s.isError, false, s.text);
+    assert.match(s.text, /replaced by TM-pending/);
+    const check = new Database(dbPath, { readonly: true });
+    try {
+      assert.equal((check.prepare(`SELECT superseded_by_ulid u FROM entries WHERE series = 'E' AND id = 1`).get() as any).u, pendingUlid);
+      assert.equal((check.prepare(`SELECT summary FROM entries WHERE ulid = ?`).get(pendingUlid) as any).summary, 'edited while pending');
+    } finally { check.close(); }
+    // The same not-found answer a missing number gets (today an MCP error: structuredContent null).
+    const missing = await call('collab_get', { id: '01J0000000000000000000000Z' });
+    const missingNumber = await call('collab_get', { id: 99999 });
+    assert.equal(missing.isError, true);
+    assert.equal(missing.isError, missingNumber.isError);
+    const missingUpd = await call('collab_update', { id: '01J0000000000000000000000Z', summary: 'x' });
+    assert.equal(missingUpd.isError, true);
+    assert.match(missingUpd.text, /no entry found/);
   });
 });

@@ -1,26 +1,29 @@
 import type { DB } from "../db.js";
 import { hasUlidColumns } from "../db.js";
 import { hasUlidPrimaryKey } from "../schema.js";
-import { ownerOfRef, type InsertedEntry } from "../entry-write.js";
+import { type InsertedEntry } from "../entry-write.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { formatNoteRef } from "../entry-ref.js";
 import type { NoteRef } from "../ulid.js";
+import { ownerOfKey, type NoteKey } from "./get.js";
 
 // ------------------------------------------------------------
 // Types
 // ------------------------------------------------------------
 export interface SupersedeArgs {
-  ids: Array<number | NoteRef>; // entries being replaced (a bare number = E, stage B1)
-  by: number | NoteRef;         // the entry that replaces them
+  /** Entries being replaced: a bare number = E (stage B1); `{ ulid }` reaches a pending note (stage C). */
+  ids: Array<number | NoteKey>;
+  by: number | NoteKey;         // the entry that replaces them
 }
 
 export interface SupersedeResult {
-  superseded: number[];
-  by: number;
+  superseded: Array<number | null>; // null = a pending note (stage C)
+  by: number | null;
 }
 
-const asRef = (v: number | NoteRef): NoteRef => (typeof v === "number" ? { series: "E", id: v } : v);
-const keyOf = (r: NoteRef) => `${r.series}:${r.id}`;
+const asKey = (v: number | NoteKey): NoteKey => (typeof v === "number" ? { series: "E", id: v } : v);
+const keyOf = (k: NoteKey) => ("ulid" in k ? `ulid:${k.ulid}` : `${k.series}:${k.id}`);
+const labelOf = (k: NoteKey) => ("ulid" in k ? k.ulid : formatNoteRef(k as NoteRef));
 
 // ------------------------------------------------------------
 // supersede — mark old entries as replaced by a newer one.
@@ -38,28 +41,30 @@ export function supersede(db: DB, args: SupersedeArgs): SupersedeResult {
   if (!ids || ids.length === 0) {
     throw new Error("supersede requires a non-empty 'ids' array");
   }
-  const by = asRef(args.by);
+  const by = asKey(args.by);
 
   // 'by' must exist (and not be tombstoned). Resolved via ownerOfRef: at 0006
-  // an E-number may be shared, and the lowest live ulid owns it (F3).
-  const byOwner = ownerOfRef(db, by);
+  // an E-number may be shared, and the lowest live ulid owns it (F3). A ULID
+  // reaches a pending note (stage C).
+  const byOwner = ownerOfKey(db, by);
   if (!byOwner) {
-    throw new Error(`'by' entry ${formatNoteRef(by)} does not exist`);
-  }
-
-  // 'by' must not supersede itself.
-  const refs = ids.map(asRef);
-  if (refs.some((r) => keyOf(r) === keyOf(by))) {
-    throw new Error(`'by' (${formatNoteRef(by)}) cannot be one of the superseded 'ids'`);
+    throw new Error(`'by' entry ${labelOf(by)} does not exist`);
   }
 
   // Every id must exist.
-  const unique = [...new Map(refs.map((r) => [keyOf(r), r])).values()];
-  const owners = new Map<string, InsertedEntry | null>(unique.map((r) => [keyOf(r), ownerOfRef(db, r)]));
-  const missing = unique.filter((r) => owners.get(keyOf(r)) === null);
+  const keys = ids.map(asKey);
+  const unique = [...new Map(keys.map((k) => [keyOf(k), k])).values()];
+  const owners = new Map<string, InsertedEntry | null>(unique.map((k) => [keyOf(k), ownerOfKey(db, k)]));
+
+  // 'by' must not supersede itself (by key, or the same note named two ways).
+  if (unique.some((k) => keyOf(k) === keyOf(by) || (byOwner.ulid !== null && owners.get(keyOf(k))?.ulid === byOwner.ulid))) {
+    throw new Error(`'by' (${labelOf(by)}) cannot be one of the superseded 'ids'`);
+  }
+
+  const missing = unique.filter((k) => owners.get(keyOf(k)) === null);
   if (missing.length > 0) {
     throw new Error(
-      `the following 'ids' do not exist: ${missing.map((r) => formatNoteRef(r)).join(", ")}`,
+      `the following 'ids' do not exist: ${missing.map(labelOf).join(", ")}`,
     );
   }
 
@@ -71,17 +76,17 @@ export function supersede(db: DB, args: SupersedeArgs): SupersedeResult {
     `UPDATE entries SET superseded_by = @by${withTwin ? ", superseded_by_ulid = @byUlid" : ""}, deprecated = 1
       WHERE ${byUlid ? "ulid = @ulid" : "id = @id"}`,
   );
-  const tx = db.transaction((targets: NoteRef[]) => {
-    for (const r of targets) {
-      const target = owners.get(keyOf(r))!;
+  const tx = db.transaction((targets: NoteKey[]) => {
+    for (const k of targets) {
+      const target = owners.get(keyOf(k))!;
       update.run({
-        by: by.id,
+        by: byOwner.id,
         ...(withTwin ? { byUlid: byOwner.ulid } : {}),
-        ...(byUlid ? { ulid: target.ulid } : { id: r.id }),
+        ...(byUlid ? { ulid: target.ulid } : { id: target.id }),
       });
     }
   });
   tx(unique);
 
-  return { superseded: unique.map((r) => r.id), by: by.id };
+  return { superseded: unique.map((k) => owners.get(keyOf(k))!.id), by: byOwner.id };
 }

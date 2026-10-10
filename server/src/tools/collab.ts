@@ -235,12 +235,13 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
 
       if (!id) {
         // Create: core owns id/ulid/author/links at every schema level.
-        const { id: newId, series } = await addEntryAsync(db, {
+        const { id: newId, series, ulid } = await addEntryAsync(db, {
           type, title, summary, description, agent: agent || undefined,
           module: primaryModule ?? undefined, modules: orderedModules, category: resolvedCategory as any,
           task_id: task_id || undefined, refs: normRefs,
         });
-        return send(200, { ok: true, id: newId, series });
+        // Stage C: id null = saved pending; reach it by ulid until the courier numbers it.
+        return send(200, { ok: true, id: newId, series, pending: newId === null, ulid });
       }
 
       // Edit: core resolves the E-number to its owner and writes by the level's

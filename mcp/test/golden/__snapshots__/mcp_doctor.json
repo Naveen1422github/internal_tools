@@ -87,6 +87,21 @@
       "detail": "every project note carries its project's code"
     },
     {
+      "name": "projects.pending",
+      "severity": "ok",
+      "detail": "no note waits for its number"
+    },
+    {
+      "name": "projects.team_office",
+      "severity": "ok",
+      "detail": "no team projects"
+    },
+    {
+      "name": "projects.clash",
+      "severity": "ok",
+      "detail": "no team project clashes with a local one"
+    },
+    {
       "name": "hub.missing",
       "severity": "ok",
       "detail": "every module with important notes has a main note"
