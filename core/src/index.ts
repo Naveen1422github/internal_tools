@@ -34,6 +34,7 @@ export * from './sync/errors.js';
 export * from './sync/http-allocator.js';
 export * from './sync/courier-paths.js';
 export * from './sync/overview.js';
+export * from './sync/send-filter.js';
 export * from './sync/cert.js';
 export * from './sync/joincode.js';
 export * from './sync/http.js';

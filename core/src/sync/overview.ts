@@ -2,15 +2,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { DB } from "../db.js";
 import { getSyncValue, isSyncEnabled } from "./state.js";
-import { readOwnChanges, entryUlidOf } from "./changes.js";
+import { readOwnChanges } from "./changes.js";
 import { ensureCrsqlite } from "./extension.js";
-import { hasSeries } from "../schema.js";
 import { courierDir as defaultCourierDir, courierFiles } from "./courier-paths.js";
 import { SYNC_KEYS } from "./http-allocator.js";
-
-// The courier's own sync_state keys (courier/src/keys.ts COURIER_KEYS; core cannot import the courier).
-const SHARED_KEY = "shared_modules";
-const SENT_KEY = "sent_db_version";
+import { SHARED_KEY, SENT_KEY, sendContext, sendVerdictOf, type NotePlace } from "./send-filter.js";
 
 // What the web UI's status bar shows (spec part 2, V1): read from THIS laptop
 // only. Never returns the device key or any sync_state value not listed below.
@@ -38,36 +34,21 @@ function sharedSet(db: DB): Set<string> {
 }
 
 /**
- * This laptop's own changes since the sent-bookmark whose note's PRIMARY module
- * is shared. A note in a project is never sent by this path (stage B1), so it
- * never waits either (same filter as the courier's push).
+ * This laptop's own changes since the sent-bookmark that the courier will send
+ * (verdict "send") or that wait to be sent (verdict "hold": a pending note, or
+ * a team project not learned yet). The SAME rule as the courier's push
+ * (send-filter.ts), so the status can never disagree with what is sent. Team
+ * notes count without any shared module.
  */
 export function unsentSharedCount(db: DB): number {
   if (!isSyncEnabled(db)) return 0;
   ensureCrsqlite(db);
-  const shared = sharedSet(db);
-  if (shared.size === 0) return 0;
   const since = Number(getSyncValue(db, SENT_KEY) ?? 0);
-  const moduleOf = new Map<string, string | null>();
-  const projectCol = hasSeries(db) ? "project_ulid" : "NULL";
+  const ctx = sendContext(db);
+  const memo = new Map<string, NotePlace>();
   let n = 0;
   for (const w of readOwnChanges(db, since)) {
-    const pk = Buffer.from(w.pk, "base64");
-    let module: string | null;
-    if (w.table === "modules") {
-      const r = db.prepare(`SELECT cell FROM crsql_unpack_columns(?)`).get(pk) as { cell: unknown } | undefined;
-      module = r ? String(r.cell) : null;
-    } else {
-      const ulid = entryUlidOf(db, w.table, pk);
-      if (!ulid) continue;
-      if (!moduleOf.has(ulid)) {
-        const e = db.prepare(`SELECT module, ${projectCol} AS project FROM entries WHERE ulid = ?`)
-          .get(ulid) as { module: string | null; project: string | null } | undefined;
-        moduleOf.set(ulid, e?.project ? null : e?.module ?? null); // a project note: no module to send under
-      }
-      module = moduleOf.get(ulid) ?? null;
-    }
-    if (module && shared.has(module)) n++;
+    if (sendVerdictOf(db, w, ctx, memo).verdict !== "skip") n++;
   }
   return n;
 }
