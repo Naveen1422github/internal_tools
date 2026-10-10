@@ -1,7 +1,34 @@
 import type { DB } from "../db.js";
 import { hasUlidColumns } from "../db.js";
 import { hasSeries, hasUlidPrimaryKey } from "../schema.js";
-import type { NoteRef } from "../ulid.js";
+import { isUlid, parseNoteRef, type NoteRef } from "../ulid.js";
+import { ownerOfRef, ownerOfUlid, type InsertedEntry } from "../entry-write.js";
+
+/** How a tool names a note: by number (`760`, `SH-12`) or, for any note, by its ULID (stage C). */
+export type NoteKey = NoteRef | { ulid: string };
+
+/** A tool's note argument as a key: a 26-char ULID, else any number form; null when unreadable. */
+export function parseNoteKey(input: string | number): NoteKey | null {
+  if (typeof input === "number") return Number.isSafeInteger(input) && input > 0 ? { series: "E", id: input } : null;
+  const v = String(input ?? "").trim().toUpperCase();
+  if (isUlid(v)) return { ulid: v };
+  return parseNoteRef(input);
+}
+
+/** The live note a key names (pending or numbered for a ULID), or null. */
+export function ownerOfKey(db: DB, key: NoteKey): InsertedEntry | null {
+  return "ulid" in key ? ownerOfUlid(db, key.ulid) : ownerOfRef(db, key);
+}
+
+/**
+ * The live note `input` names: a 26-char ULID reaches the note with that ulid,
+ * pending or not (spec P6: a pending note is linkable by ULID); otherwise any
+ * number form (`760`, `E-00760`, `SH-12`) as ownerOfRef. null when unknown.
+ */
+export function resolveNoteKey(db: DB, input: string | number): InsertedEntry | null {
+  const key = parseNoteKey(input);
+  return key ? ownerOfKey(db, key) : null;
+}
 
 /** The note at the other end of a link, found by its ULID (J17). */
 export interface LinkTarget {
@@ -21,7 +48,7 @@ export interface EntryRef {
 }
 
 export interface EntryFull {
-  id: number;
+  id: number | null;           // null = pending: waiting for its number (stage C)
   type: string;
   kind: string;
   title: string;

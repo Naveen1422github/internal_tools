@@ -153,3 +153,45 @@ test('.collab naming a project that is not in this notebook: a clear error, neve
     assert.match(r.text, /\.collab/);
   });
 });
+
+// Stage C, spec P6: a pending note (no number yet) is reached and linked by its ULID.
+test('pending notes by ULID: get, update, update_refs and supersede take the ULID; unknown ULID is not found', async () => {
+  await withServer(async ({ call, dbPath }) => {
+    const db = new Database(dbPath);
+    let pendingUlid: string;
+    try {
+      db.prepare(`INSERT INTO projects (ulid, name, code, mode, team) VALUES ('01J0000000000000000000TEAM', 'Team', 'TM', 'team', 'fp')`).run();
+      const p = addEntry(db, { type: 'decision', title: 'Waiting for a number', summary: 'pending', project: 'TM' });
+      assert.equal(p.pending, true);
+      pendingUlid = p.ulid;
+    } finally { db.close(); }
+    const g = await call('collab_get', { id: pendingUlid });
+    assert.equal(g.isError, false, g.text);
+    assert.equal(g.structured.title, 'Waiting for a number');
+    assert.match(g.text, /\[TM-pending /);
+    const lower = await call('collab_get', { id: pendingUlid.toLowerCase() });
+    assert.equal(lower.structured.title, 'Waiting for a number');
+    const u = await call('collab_update', { id: pendingUlid, summary: 'edited while pending' });
+    assert.equal(u.isError, false, u.text);
+    assert.match(u.text, /Updated TM-pending/);
+    const r = await call('collab_update_refs', { id: pendingUlid, add: [{ ref_type: 'entry', ref_value: '1' }] });
+    assert.equal(r.isError, false, r.text);
+    assert.match(r.text, /TM-pending .* refs: \+entry:1/);
+    const s = await call('collab_supersede', { ids: [1], by: pendingUlid });
+    assert.equal(s.isError, false, s.text);
+    assert.match(s.text, /replaced by TM-pending/);
+    const check = new Database(dbPath, { readonly: true });
+    try {
+      assert.equal((check.prepare(`SELECT superseded_by_ulid u FROM entries WHERE series = 'E' AND id = 1`).get() as any).u, pendingUlid);
+      assert.equal((check.prepare(`SELECT summary FROM entries WHERE ulid = ?`).get(pendingUlid) as any).summary, 'edited while pending');
+    } finally { check.close(); }
+    // The same not-found answer a missing number gets (today an MCP error: structuredContent null).
+    const missing = await call('collab_get', { id: '01J0000000000000000000000Z' });
+    const missingNumber = await call('collab_get', { id: 99999 });
+    assert.equal(missing.isError, true);
+    assert.equal(missing.isError, missingNumber.isError);
+    const missingUpd = await call('collab_update', { id: '01J0000000000000000000000Z', summary: 'x' });
+    assert.equal(missingUpd.isError, true);
+    assert.match(missingUpd.text, /no entry found/);
+  });
+});

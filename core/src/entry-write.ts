@@ -1,7 +1,7 @@
 import type { DB } from "./db.js";
 import { hasUlidColumns } from "./db.js";
 import { hasSeries, hasUlidPrimaryKey, liveEntry } from "./schema.js";
-import { newUlid, type NoteRef } from "./ulid.js";
+import { newUlid, isUlid, type NoteRef } from "./ulid.js";
 import { resolveAuthor } from "./author.js";
 import type { RefInput } from "./ops/add.js";
 import { isSyncEnabled } from "./sync/state.js";
@@ -126,6 +126,19 @@ export function insertEntryRow(db: DB, row: EntryRowInput): InsertedEntry {
   return { id: Number(r.lastInsertRowid), ulid: null };
 }
 
+/**
+ * The target of an entry ref whose value is a ULID (stage C, spec P6: a pending
+ * note has no number yet, so it is linked by ULID). The fill trigger only
+ * parses number forms and only fires when target_ulid is NULL, so this needs
+ * no trigger change. null when no note has that ULID.
+ */
+function ulidTarget(db: DB, r: RefRowInput): string | null {
+  if (r.ref_type !== "entry" || typeof r.ref_value !== "string") return null;
+  const v = r.ref_value.trim().toUpperCase();
+  if (!isUlid(v)) return null;
+  return db.prepare(`SELECT 1 FROM entries WHERE ulid = ?`).get(v) ? v : null;
+}
+
 /** Inserts refs; returns how many rows were actually new (INSERT OR IGNORE). */
 export function insertRefs(db: DB, owner: InsertedEntry, refs: RefRowInput[]): number {
   if (refs.length === 0) return 0;
@@ -134,7 +147,7 @@ export function insertRefs(db: DB, owner: InsertedEntry, refs: RefRowInput[]): n
     const stmt = db.prepare(
       `INSERT OR IGNORE INTO refs (entry_ulid, entry_id, ref_type, ref_value, target_ulid) VALUES (?, ?, ?, ?, ?)`,
     );
-    for (const r of refs) changed += stmt.run(owner.ulid, owner.id, r.ref_type, r.ref_value, r.target_ulid ?? null).changes;
+    for (const r of refs) changed += stmt.run(owner.ulid, owner.id, r.ref_type, r.ref_value, r.target_ulid ?? ulidTarget(db, r)).changes;
   } else {
     const stmt = db.prepare(`INSERT OR IGNORE INTO refs (entry_id, ref_type, ref_value) VALUES (?, ?, ?)`);
     for (const r of refs) changed += stmt.run(owner.id, r.ref_type, r.ref_value).changes;
@@ -179,6 +192,17 @@ export function ownerOfRef(db: DB, ref: NoteRef): InsertedEntry | null {
         .get(ref.id, ref.series)
     : db.prepare(`SELECT id, ulid FROM entries WHERE id = ? AND ${liveEntry(db, "entries")} ORDER BY ulid LIMIT 1`)
         .get(ref.id)) as { id: number; ulid: string } | undefined;
+  return r ? { id: r.id, ulid: r.ulid } : null;
+}
+
+/**
+ * The live note with this ULID, pending or numbered (stage C, spec P6), or
+ * null. Tombstones never own a write, as with ownerOfRef. 0005+ only.
+ */
+export function ownerOfUlid(db: DB, ulid: string): InsertedEntry | null {
+  if (!hasUlidColumns(db)) return null;
+  const r = db.prepare(`SELECT id, ulid FROM entries WHERE ulid = ? AND ${liveEntry(db, "entries")}`)
+    .get(ulid) as { id: number | null; ulid: string } | undefined;
   return r ? { id: r.id, ulid: r.ulid } : null;
 }
 
