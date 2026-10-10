@@ -60,6 +60,26 @@ CREATE TABLE IF NOT EXISTS po_shared_modules (
   slug      TEXT NOT NULL PRIMARY KEY,
   shared_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- Stage C: team projects of this office (spec P1/P9) and their own numbering.
+CREATE TABLE IF NOT EXISTS po_projects (
+  ulid       TEXT NOT NULL PRIMARY KEY,
+  name       TEXT NOT NULL,
+  code       TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_po_projects_name ON po_projects (lower(name));
+CREATE TABLE IF NOT EXISTS po_series_counters (
+  series TEXT    NOT NULL PRIMARY KEY,
+  value  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS po_series_allocations (
+  ulid       TEXT    NOT NULL PRIMARY KEY,
+  series     TEXT    NOT NULL,
+  id         INTEGER NOT NULL,
+  device_id  TEXT,
+  created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (series, id)
+);
 `;
 
 function tune(db: Store): void {
@@ -129,21 +149,82 @@ export function nextNumber(db: Store): number {
   return Number(getMeta(db, "counter") ?? 0) + 1;
 }
 
+const CODE_RE = /^[A-Z][A-Z0-9]{1,7}$/;
+
+/** A team project of this office (stage C, spec P1). */
+export interface OfficeProject { ulid: string; name: string; code: string; created_at: string }
+
 /**
- * E-number for `ulid` (D7). Idempotent by ulid: a retried request gets the same
- * number (E-713). The increment and the record commit in ONE transaction, so a
- * number is never handed out twice and never silently skipped by a failure.
+ * Number for `ulid` in `series` (D7). `E` uses the original counter; any other
+ * series must be a registered team project and has its own counter (stage C).
+ * Idempotent by ulid: a retried request gets the same number (E-713), and one
+ * ulid never gets numbers in two series. The increment and the record commit in
+ * ONE transaction, so a number is never handed out twice and never silently
+ * skipped by a failure.
  */
-export function allocate(db: Store, ulid: unknown, deviceId: string | null): number {
+export function allocate(db: Store, ulid: unknown, deviceId: string | null, series = "E"): number {
   if (typeof ulid !== "string" || !ULID_RE.test(ulid)) throw new StoreError(`not a ULID: ${String(ulid).slice(0, 40)}`);
+  if (series === "E") {
+    return db.transaction(() => {
+      const other = db.prepare(`SELECT series, id FROM po_series_allocations WHERE ulid = ?`).get(ulid) as { series: string; id: number } | undefined;
+      if (other) throw new StoreError(`this note was already numbered ${other.series}-${other.id}`, 409);
+      const hit = db.prepare(`SELECT id FROM po_allocations WHERE ulid = ?`).get(ulid) as { id: number } | undefined;
+      if (hit) return hit.id;
+      const id = nextNumber(db);
+      setMeta(db, "counter", String(id));
+      db.prepare(`INSERT INTO po_allocations (ulid, id, device_id) VALUES (?, ?, ?)`).run(ulid, id, deviceId);
+      return id;
+    }).immediate();
+  }
   return db.transaction(() => {
-    const hit = db.prepare(`SELECT id FROM po_allocations WHERE ulid = ?`).get(ulid) as { id: number } | undefined;
-    if (hit) return hit.id;
-    const id = nextNumber(db);
-    setMeta(db, "counter", String(id));
-    db.prepare(`INSERT INTO po_allocations (ulid, id, device_id) VALUES (?, ?, ?)`).run(ulid, id, deviceId);
-    return id;
+    if (!db.prepare(`SELECT 1 FROM po_projects WHERE code = ?`).get(series)) {
+      throw new StoreError(`no team project with code ${series} on this post office`, 404);
+    }
+    const hit = db.prepare(`SELECT series, id FROM po_series_allocations WHERE ulid = ?`).get(ulid) as { series: string; id: number } | undefined;
+    if (hit) {
+      if (hit.series !== series) throw new StoreError(`this note was already numbered ${hit.series}-${hit.id}`, 409);
+      return hit.id;
+    }
+    if (db.prepare(`SELECT 1 FROM po_allocations WHERE ulid = ?`).get(ulid)) {
+      throw new StoreError("this note was already given an E number", 409);
+    }
+    const row = db.prepare(`UPDATE po_series_counters SET value = value + 1 WHERE series = ? RETURNING value`).get(series) as { value: number };
+    db.prepare(`INSERT INTO po_series_allocations (ulid, series, id, device_id) VALUES (?, ?, ?, ?)`).run(ulid, series, row.value, deviceId);
+    return row.value;
   }).immediate();
+}
+
+/**
+ * Register a team project (spec P1, P9). Idempotent for the same ulid + code;
+ * another project with the same code or name (case-insensitive) is refused
+ * (P10). `seed` = the highest number already used in that series (promote);
+ * a new project sends 0.
+ */
+export function registerProject(db: Store, p: { ulid: unknown; name: unknown; code: unknown; seed?: unknown }): OfficeProject {
+  const ulid = String(p.ulid ?? ""), name = String(p.name ?? "").trim(), code = String(p.code ?? "").trim().toUpperCase();
+  const seed = p.seed === undefined ? 0 : Number(p.seed);
+  if (!ULID_RE.test(ulid)) throw new StoreError("a project needs a ULID");
+  if (!name) throw new StoreError("a project needs a name");
+  if (code === "E" || code === "NONE" || !CODE_RE.test(code)) throw new StoreError(`project code "${code}" is not valid`);
+  if (!Number.isInteger(seed) || seed < 0) throw new StoreError("seed must be a whole number >= 0");
+  return db.transaction(() => {
+    const same = db.prepare(`SELECT ulid, name, code, created_at FROM po_projects WHERE ulid = ?`).get(ulid) as OfficeProject | undefined;
+    if (same) {
+      if (same.code !== code) throw new StoreError(`project ${ulid} is already registered with code ${same.code}`, 409);
+      return same;
+    }
+    const byCode = db.prepare(`SELECT name FROM po_projects WHERE code = ?`).get(code) as { name: string } | undefined;
+    if (byCode) throw new StoreError(`this team already has a project with code ${code} ("${byCode.name}")`, 409);
+    const byName = db.prepare(`SELECT code FROM po_projects WHERE lower(name) = lower(?)`).get(name) as { code: string } | undefined;
+    if (byName) throw new StoreError(`this team already has a project named "${name}" (${byName.code})`, 409);
+    db.prepare(`INSERT INTO po_projects (ulid, name, code) VALUES (?, ?, ?)`).run(ulid, name, code);
+    db.prepare(`INSERT INTO po_series_counters (series, value) VALUES (?, ?)`).run(code, seed);
+    return db.prepare(`SELECT ulid, name, code, created_at FROM po_projects WHERE ulid = ?`).get(ulid) as OfficeProject;
+  }).immediate();
+}
+
+export function listOfficeProjects(db: Store): OfficeProject[] {
+  return db.prepare(`SELECT ulid, name, code, created_at FROM po_projects ORDER BY code`).all() as OfficeProject[];
 }
 
 // ---------------------------------------------------------------- members

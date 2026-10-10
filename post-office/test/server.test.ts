@@ -110,3 +110,29 @@ test('status, 404, 413', async () => {
     assert.equal((await requestJson(o.target(a), 'POST', '/v1/changes', { changes: [], pad: 'x'.repeat(5000) })).status, 413);
   } finally { await o.stop(); }
 });
+
+test('stage C: allocate echoes its series; team projects are listed and rung', async () => {
+  const o = await office(10);
+  try {
+    const a = await o.join('a'), b = await o.join('b');
+    const r = await requestJson(o.target(a), 'POST', '/v1/allocate', { ulid: newUlid() });
+    assert.deepEqual(r.body, { id: 11, series: 'E' });
+    const lb = listen(o.target(b));
+    await lb.isReady;
+    const u = newUlid();
+    const created = await requestJson(o.target(a), 'POST', '/v1/projects', { ulid: u, name: 'Support hub', code: 'SH', seed: 0 });
+    assert.equal(created.status, 200);
+    assert.equal(created.body.project.code, 'SH');
+    await until(() => lb.events.some(([n, d]) => n === 'projects' && d.code === 'SH'));
+    const list = await requestJson(o.target(b), 'GET', '/v1/projects');
+    assert.deepEqual(list.body.projects.map((p: any) => [p.ulid, p.code]), [[u, 'SH']]);
+    const clash = await requestJson(o.target(b), 'POST', '/v1/projects', { ulid: newUlid(), name: 'Other', code: 'SH', seed: 0 });
+    assert.equal(clash.status, 409);
+    assert.match(clash.body.error, /SH/);
+    const sh = await requestJson(o.target(a), 'POST', '/v1/allocate', { ulid: newUlid(), series: 'SH' });
+    assert.deepEqual(sh.body, { id: 1, series: 'SH' });
+    const unknown = await requestJson(o.target(a), 'POST', '/v1/allocate', { ulid: newUlid(), series: 'XX' });
+    assert.equal(unknown.status, 404);
+    lb.stream.close();
+  } finally { await o.stop(); }
+});
