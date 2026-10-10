@@ -4,8 +4,10 @@ import assert from 'node:assert';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { closeDb } from '@collab-mcp/core';
+import Database from 'better-sqlite3';
+import { closeDb, resolveDbPath, enableSync, setSyncValue, addEntry, SYNC_KEYS } from '@collab-mcp/core';
 import { main } from '../src/main.js';
+import { stubServer } from '../../core/test/helpers/https-stub.js';
 
 // Temp data folder and temp cwd only: nothing here touches a real notebook.
 async function withWorld(fn: (w: { root: string; run: (...argv: string[]) => Promise<{ code: number; out: string[]; err: string[] }> }) => Promise<void>) {
@@ -81,4 +83,52 @@ test('project create with a clash prints the P10 message and exits non-zero', as
     const usage = await run('project', 'create', 'x');
     assert.equal(usage.code, 2);
   });
+});
+
+// Stage C (P9, E-820): any member creates a team project or promotes a solo one.
+test('project create --team and project promote talk to the post office and say what happens next', async () => {
+  const seeds: number[] = [];
+  const office = await stubServer((req, res, body) => {
+    if (req.method === 'POST' && req.url === '/v1/projects') {
+      const b = JSON.parse(body);
+      seeds.push(b.seed);
+      res.end(JSON.stringify({ project: { ulid: b.ulid, name: b.name, code: b.code, created_at: 'now' } }));
+      return;
+    }
+    res.writeHead(404); res.end('{}');
+  });
+  try {
+    await withWorld(async ({ run }) => {
+      assert.equal((await run('notebook', 'new', 't')).code, 0);
+      const unshared = await run('project', 'create', 'Support', '--code', 'SH', '--team');
+      assert.equal(unshared.code, 1);
+      assert.match(unshared.err.join('\n'), /share this notebook first/);
+      // Share it (what `collab sync setup` writes), pointing at the stub office.
+      const db = new Database(resolveDbPath().path);
+      try {
+        enableSync(db);
+        setSyncValue(db, SYNC_KEYS.url, office.url);
+        setSyncValue(db, SYNC_KEYS.fingerprint, office.fingerprint);
+        setSyncValue(db, SYNC_KEYS.device, 'd-test');
+        setSyncValue(db, SYNC_KEYS.key, 'k-test');
+      } finally { db.prepare('SELECT crsql_finalize()').get(); db.close(); }
+      const c = await run('project', 'create', 'Support', '--code', 'SH', '--team');
+      assert.equal(c.code, 0, c.err.join('\n'));
+      assert.equal(c.out[0], `Created team project SH (Support): numbers come from the post office at ${office.url}; with the office down, notes are saved and wait for their number.`);
+      assert.match((await run('project', 'list')).out.join('\n'), /SH\s+Support\s+team/);
+
+      assert.equal((await run('project', 'create', 'Navi', '--code', 'NV')).code, 0);
+      const w = new Database(resolveDbPath().path);
+      try {
+        for (const title of ['one', 'two', 'three']) addEntry(w, { type: 'decision', title, summary: 's', project: 'NV' });
+      } finally { w.prepare('SELECT crsql_finalize()').get(); w.close(); }
+      const pr = await run('project', 'promote', 'nv');
+      assert.equal(pr.code, 0, pr.err.join('\n'));
+      assert.deepEqual(seeds, [0, 3]);
+      assert.match(pr.out.join('\n'), /NV.*team project/);
+      assert.match(pr.out.join('\n'), /after NV-3/);
+      assert.match(pr.out.join('\n'), /next note is NV-4/);
+      assert.match((await run('project', 'list')).out.join('\n'), /NV\s+Navi\s+team/);
+    });
+  } finally { await office.close(); }
 });

@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  closeDb, collabStartDir, createProject, currentProject, findCollabFile, findProject, getDb, listProjects, notFound,
-  renameProject, resolveDbPath, type Project,
+  closeDb, collabStartDir, createProject, createTeamProject, currentProject, findCollabFile, findProject, getDb, listProjects,
+  notFound, promoteProject, highestNumberOf, renameProject, resolveDbPath, getSyncValue, SYNC_KEYS, type Project,
 } from "@collab-mcp/core";
 import type { CliResult, Io } from "./io.js";
 
@@ -10,7 +10,7 @@ import type { CliResult, Io } from "./io.js";
 
 const fail = (io: Io, msg: string): CliResult => { io.err(`collab: ${msg.replace(/^\[collab(-mcp)?\] /, "")}`); return { code: 1 }; };
 
-const USAGE = "usage: collab project create <name> --code <CODE> | rename <code> <new name> | list | use <code>";
+const USAGE = "usage: collab project create <name> --code <CODE> [--team] | promote <code> | rename <code> <new name> | list | use <code>";
 
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -65,13 +65,36 @@ export async function runProject(args: string[], io: Io): Promise<CliResult> {
   try {
     switch (sub) {
       case "create": {
-        const [name] = words(rest);
-        const code = flag(rest, "--code");
-        if (!name || !code) { io.err("usage: collab project create <name> --code <CODE>"); return { code: 2 }; }
-        if (rest.includes("--team")) return fail(io, "team projects arrive with stage C; create a solo project for now");
+        const team = rest.includes("--team");
+        const opts = rest.filter((a) => a !== "--team" && a !== "--solo");
+        const [name] = words(opts);
+        const code = flag(opts, "--code");
+        if (!name || !code) { io.err("usage: collab project create <name> --code <CODE> [--team]"); return { code: 2 }; }
+        if (team) {
+          // Stage C: registered at this notebook's post office first (E-820: any member creates one).
+          const db = getDb();
+          const p = await createTeamProject(db, { name, code });
+          io.out(`Created team project ${p.code} (${p.name}): numbers come from the post office at ${getSyncValue(db, SYNC_KEYS.url)}; with the office down, notes are saved and wait for their number.`);
+          io.out(`Use it in this folder: collab project use ${p.code}`);
+          return { code: 0 };
+        }
         const p = createProject(getDb(), { name, code });
         io.out(`Created project ${p.code} (${p.name}), solo: its notes are numbered ${p.code}-1, ${p.code}-2, ... on this computer and never sent.`);
         io.out(`Use it in this folder: collab project use ${p.code}`);
+        return { code: 0 };
+      }
+      case "promote": {
+        const [code] = words(rest);
+        if (!code) { io.err("usage: collab project promote <code>"); return { code: 2 }; }
+        const db = getDb();
+        const before = findProject(db, code);
+        if (!before) throw notFound(db, code);
+        const wasTeam = before.mode === "team";
+        const p = await promoteProject(db, code);
+        const seed = highestNumberOf(db, p.code); // what promoteProject sent as the office's seed
+        if (wasTeam) { io.out(`Project ${p.code} (${p.name}) is already a team project of this notebook's post office.`); return { code: 0 }; }
+        io.out(`Project ${p.code} (${p.name}) is now a team project: the post office at ${getSyncValue(db, SYNC_KEYS.url)} continues its numbers after ${p.code}-${seed}; the next note is ${p.code}-${seed + 1}.`);
+        io.out("Its notes keep their numbers; the courier sends them to the team on its next sync.");
         return { code: 0 };
       }
       case "rename": {

@@ -7,6 +7,9 @@ import type { DB } from "./db.js";
 import { collabStartDir, findCollabFile } from "./db.js";
 import { hasSeries } from "./schema.js";
 import { newUlid, SERIES_CODE_RE } from "./ulid.js";
+import { isSyncEnabled } from "./sync/state.js";
+import { postOfficeTargetFromDb } from "./sync/http-allocator.js";
+import { requestJson, type PostOfficeTarget } from "./sync/http.js";
 
 export interface Project {
   ulid: string;
@@ -61,8 +64,18 @@ const FIXES = "Fix: rename one of them (`collab project rename <code> <new name>
 export function createProject(db: DB, args: { name: string; code: string; mode?: "solo" }): Project {
   needs0009(db);
   const mode = (args.mode ?? "solo") as string;
-  if (mode === "team") throw new Error("[collab] team projects arrive with stage C; create a solo project for now");
+  if (mode === "team") {
+    throw new Error("[collab] a team project is registered at the post office: use `collab project create <name> --code <CODE> --team` (createTeamProject), or promote a solo one (`collab project promote <code>`)");
+  }
   if (mode !== "solo") throw new Error(`[collab] invalid project mode: ${mode} (solo)`);
+  const { name, code } = checkNew(db, args);
+  const ulid = newUlid();
+  db.prepare(`INSERT INTO projects (ulid, name, code, mode) VALUES (?, ?, ?, 'solo')`).run(ulid, name, code);
+  return findProject(db, ulid)!;
+}
+
+/** A new project's name and code, checked against this notebook (P10). */
+function checkNew(db: DB, args: { name: string; code: string }): { name: string; code: string } {
   const name = String(args.name ?? "").trim();
   if (!name) throw new Error("[collab] a project needs a name");
   const code = checkCode(args.code);
@@ -75,9 +88,79 @@ export function createProject(db: DB, args: { name: string; code: string; mode?:
   if (byCode) {
     throw new ProjectClashError(`[collab] this notebook already has a project with code ${code} ("${byCode.name}"). ${FIXES}`);
   }
+  return { name, code };
+}
+
+/** This notebook's post office, or the error saying to share the notebook first. One office per notebook (E-820). */
+function officeOf(db: DB): PostOfficeTarget {
+  const target = isSyncEnabled(db) ? postOfficeTargetFromDb(db) : null;
+  if (!target) {
+    throw new Error("[collab] share this notebook first (`collab sync setup <join code>`): a team project's numbers come from its post office");
+  }
+  return target;
+}
+
+/** POST /v1/projects. The office answers the same project for the same ulid (idempotent). */
+async function registerAtOffice(
+  target: PostOfficeTarget, body: { ulid: string; name: string; code: string; seed: number }, doing: string, nothing: string,
+): Promise<void> {
+  let r;
+  try {
+    r = await requestJson(target, "POST", "/v1/projects", body, { timeoutMs: 5000 });
+  } catch (e) {
+    throw new Error(`[collab] ${doing} needs the post office; ${nothing}. The post office at ${target.url} could not be reached: ${(e as Error).message}`);
+  }
+  if (r.status === 200) return;
+  if (r.status === 409) throw new ProjectClashError(`[collab] the post office refused: ${r.body?.error ?? "a clash"}. ${FIXES}`);
+  if (r.status === 404) {
+    throw new Error(`[collab] the post office at ${target.url} keeps no team projects yet: update it first; ${nothing}`);
+  }
+  throw new Error(`[collab] the post office at ${target.url} answered ${r.status}${r.body?.error ? `: ${r.body.error}` : ""}; ${nothing}`);
+}
+
+/**
+ * A new team project (stage C, spec P1/P9, E-820: any member creates one).
+ * Registered at the office FIRST, then written locally: a failed local write
+ * after a successful register is safe to retry (same ulid, idempotent).
+ */
+export async function createTeamProject(db: DB, args: { name: string; code: string }): Promise<Project> {
+  needs0009(db);
+  const { name, code } = checkNew(db, args);
+  const target = officeOf(db);
   const ulid = newUlid();
-  db.prepare(`INSERT INTO projects (ulid, name, code, mode) VALUES (?, ?, ?, 'solo')`).run(ulid, name, code);
+  await registerAtOffice(target, { ulid, name, code, seed: 0 }, "creating a team project", "nothing was created");
+  db.prepare(`INSERT INTO projects (ulid, name, code, mode, team) VALUES (?, ?, ?, 'team', ?)`).run(ulid, name, code, target.fingerprint);
   return findProject(db, ulid)!;
+}
+
+/** The highest number ever handed out in a solo project's series (the counter never shrinks; a hard-deleted number counts). */
+export function highestNumberOf(db: DB, code: string): number {
+  const r = db.prepare(
+    `SELECT MAX(COALESCE((SELECT value FROM local_counters WHERE name = 'series:' || @code), 0),
+                COALESCE((SELECT MAX(id) FROM entries WHERE series = @code), 0)) AS n`,
+  ).get({ code }) as { n: number };
+  return r.n;
+}
+
+/**
+ * Promote a solo project to a team project of this notebook's office (P9):
+ * the office continues its numbers after the highest one ever used here, so
+ * every note keeps its number. Notes are not touched: the courier's project
+ * backfill sends them. Promoting twice is a no-op.
+ */
+export async function promoteProject(db: DB, codeOrUlid: string): Promise<Project> {
+  needs0009(db);
+  const p = findProject(db, codeOrUlid);
+  if (!p) throw notFound(db, codeOrUlid);
+  const target = officeOf(db);
+  if (p.mode === "team") {
+    if (p.team === target.fingerprint) return p;
+    throw new Error(`[collab] ${p.code} is a team project of another post office; one office per notebook (E-820)`);
+  }
+  const seed = highestNumberOf(db, p.code);
+  await registerAtOffice(target, { ulid: p.ulid, name: p.name, code: p.code, seed }, "promoting a project", "nothing was changed");
+  db.prepare(`UPDATE projects SET mode = 'team', team = ?, updated_at = datetime('now') WHERE ulid = ?`).run(target.fingerprint, p.ulid);
+  return findProject(db, p.ulid)!;
 }
 
 /**
