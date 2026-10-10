@@ -13,7 +13,7 @@ import Database from 'better-sqlite3';
 import type { Database as DB } from 'better-sqlite3';
 import {
   migrateTo, addEntry, addEntryAsync, updateEntry, deleteEntry, initModule, getModule, doctor, searchEntries,
-  getSyncValue, postOfficeTargetFromDb, requestJson, newUlid, PostOfficeUnreachableError,
+  getSyncValue, postOfficeTargetFromDb, requestJson, newUlid,
 } from '@collab-mcp/core';
 import { setModuleShared, revokeMember, seedFromNotesDb } from '@collab-mcp/post-office';
 import { tempDir, startOffice, openWriter, closeWriter, until, sleep, type Office } from './world.js';
@@ -99,15 +99,16 @@ test('2. B offline while A writes: B catches up on reconnect', async () => {
   await until(() => row(B.w, preexistingTeamId)?.description === 'v1, edited while B was away', 5000, 'B to catch up the edit');
 });
 
-test('3. post office offline: a new note is refused (nothing saved, the message names the post office); offline edits sync once it is back', async () => {
+// Stage C (E-820) replaces E-708's refusal: the new note is saved pending.
+test('3. post office offline: a new note is saved pending (no number, says why); offline edits sync once it is back', async () => {
   const quokka = find(B.w, 'quokka')[0].id;
   await office.down();
   const before = count(B.w);
-  await assert.rejects(
-    addEntryAsync(B.w, { type: 'decision', title: 'Refused note', summary: 's', module: 'team' }),
-    (e: unknown) => e instanceof PostOfficeUnreachableError && /post office/.test((e as Error).message) && /Nothing was written/.test((e as Error).message),
-  );
-  assert.equal(count(B.w), before, 'nothing saved');
+  const waiting = await addEntryAsync(B.w, { type: 'decision', title: 'Waiting note', summary: 's', module: 'team' });
+  assert.equal(waiting.pending, true);
+  assert.equal(waiting.id, null);
+  assert.ok(waiting.pendingReason, 'the answer says why it has no number yet');
+  assert.equal(count(B.w), before + 1, 'saved at once');
   updateEntry(B.w, { id: quokka, description: 'edited on B while the post office was down' });
   await until(() => B.c.status.state === 'offline', 3000, 'B to notice');
   await sleep(700); // a few retries fail meanwhile
@@ -207,10 +208,10 @@ test('7. a revoked key is refused', async () => {
   revokeMember(office.store, B.device);
   await until(() => B.c.status.state === 'revoked', 3000, 'B to be told');
   assert.match(B.c.status.lastError ?? '', /revoked/);
-  await assert.rejects(
-    addEntryAsync(B.w, { type: 'decision', title: 'After revoke', summary: 's', module: 'team' }),
-    (e: unknown) => e instanceof PostOfficeUnreachableError && /revoked/.test((e as Error).message),
-  );
+  // Stage C (E-820): saving is never refused; the note waits, and says why.
+  const after = await addEntryAsync(B.w, { type: 'decision', title: 'After revoke', summary: 's', module: 'team' });
+  assert.equal(after.pending, true);
+  assert.match(after.pendingReason ?? '', /revoked/);
   const fromB = () => office.requests.filter((r) => r.device === B.device).length;
   const n = fromB();
   await sleep(1000);

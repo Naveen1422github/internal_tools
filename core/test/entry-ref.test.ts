@@ -7,9 +7,10 @@ test('pads to 5 digits with the E series by default', () => {
   assert.equal(formatEntryRef(12), 'E-00012');
   assert.equal(formatEntryRef(123456), 'E-123456');
 });
-test('a missing number prints E-?, never E-0null', () => {
-  assert.equal(formatEntryRef(null), 'E-?');
-  assert.equal(formatEntryRef(undefined), 'E-?');
+test('a missing number prints E-pending (stage C), never E-0null', () => {
+  assert.equal(formatEntryRef(null), 'E-pending');
+  assert.equal(formatEntryRef(null, 'SH'), 'SH-pending');
+  assert.equal(formatEntryRef(undefined), 'E-pending');
 });
 test('a project series prints its bare number; only E is padded', () => {
   assert.equal(formatEntryRef(7, 'ACME'), 'ACME-7');

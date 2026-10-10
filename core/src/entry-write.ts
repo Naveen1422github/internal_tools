@@ -5,7 +5,6 @@ import { newUlid, type NoteRef } from "./ulid.js";
 import { resolveAuthor } from "./author.js";
 import type { RefInput } from "./ops/add.js";
 import { isSyncEnabled } from "./sync/state.js";
-import { SyncAllocationRequiredError } from "./sync/allocator.js";
 
 // The ONE place that knows how an entry and its links are written at each
 // schema level (pre-0005 / 0005 / 0006). Every writer goes through here.
@@ -18,7 +17,8 @@ import { SyncAllocationRequiredError } from "./sync/allocator.js";
 // a path that bypassed the trigger.
 
 export interface InsertedEntry {
-  id: number;
+  /** null = pending: saved, waiting for its number from the post office (stage C). */
+  id: number | null;
   ulid: string | null; // null only on a pre-0005 DB
 }
 
@@ -36,6 +36,10 @@ export interface EntryRowInput {
   category?: string;
   rollup_of_task?: string | null;
   assigned?: { ulid: string; id: number }; // internal: pre-assigned by the post office
+  /** Team-project note without a number in hand: saved with id NULL (stage C, rule 4). */
+  pending?: boolean;
+  /** The ulid a pending note was already asked for under: the courier retries with it (E-713). */
+  pendingUlid?: string;
   /** 0009+: a project's code; omitted = series E (the column default). */
   series?: string;
   project_ulid?: string | null;
@@ -85,11 +89,12 @@ export function insertEntryRow(db: DB, row: EntryRowInput): InsertedEntry {
   if (row.category !== undefined) cols.push("category");
 
   if (row.series !== undefined && row.series !== "E") {
-    // A solo-project note (stage B1): numbered on this laptop in its own
-    // series, never by the post office, whether or not sharing is on.
     if (!hasSeries(db)) throw new Error("[collab] writing into a project needs migration 0009");
-    const ulid = newUlid();
-    const id = nextEntryNumber(db, row.series);
+    // Team project: the number comes from the post office (assigned) or later
+    // from the courier (pending, id NULL). Never a local number (rule 4).
+    // Solo project: numbered here, never sent (B1).
+    const ulid = row.assigned?.ulid ?? row.pendingUlid ?? newUlid();
+    const id = row.assigned ? row.assigned.id : row.pending ? null : nextEntryNumber(db, row.series);
     cols.push("ulid", "author", "id", "series", "project_ulid");
     run(db, cols, { ...values, ulid, author: resolveAuthor(), id, series: row.series, project_ulid: row.project_ulid ?? null });
     return { id, ulid };
@@ -101,9 +106,11 @@ export function insertEntryRow(db: DB, row: EntryRowInput): InsertedEntry {
       run(db, cols, { ...values, ulid: row.assigned.ulid, author: resolveAuthor(), id: row.assigned.id });
       return { id: row.assigned.id, ulid: row.assigned.ulid };
     }
-    if (isSyncEnabled(db)) throw new SyncAllocationRequiredError();
-    const ulid = newUlid();
-    const id = nextEntryNumber(db);
+    const ulid = row.pendingUlid ?? newUlid();
+    // Shared notebook: E numbers come only from the post office. Without one
+    // in hand the note is saved pending and the courier numbers it (E-820;
+    // this replaces E-708's refusal to save).
+    const id = isSyncEnabled(db) ? null : nextEntryNumber(db);
     cols.push("ulid", "author", "id");
     run(db, cols, { ...values, ulid, author: resolveAuthor(), id });
     return { id, ulid };

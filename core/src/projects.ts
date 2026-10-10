@@ -34,6 +34,9 @@ export class ProjectNotFoundError extends Error {
 
 const COLS = "ulid, name, code, mode, team, created_at";
 
+/** A team project: numbered only by its post office, sent only there (stage C, rules 4-5). */
+export function isTeamProject(p: Project | null): boolean { return !!p && p.mode === "team"; }
+
 function needs0009(db: DB): void {
   if (!hasSeries(db)) {
     throw new Error("[collab] projects needs migration 0009 (projects). Restart the MCP server (or run `collab web` once): it applies migrations on start.");

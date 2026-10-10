@@ -9,7 +9,7 @@ import { isCrsqliteLoaded, CrsqliteMissingError } from '../src/sync/extension.js
 import Database from 'better-sqlite3';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { setAllocator, setAllocationRetry, PostOfficeUnreachableError, type Allocator } from '../src/sync/allocator.js';
+import { setAllocator, setAllocationRetry, allocateWithRetry, PostOfficeUnreachableError, type Allocator } from '../src/sync/allocator.js';
 
 /** An in-memory post office counter, idempotent by ulid (what Task 7 builds for real). */
 function fakeOffice(seed = 0, behave?: (ulid: string, call: number) => 'answer' | 'drop-after-assign' | 'hang' | 'fail' | 'refuse') {
@@ -85,52 +85,61 @@ test('1000 saves with 50 invalid: the allocated numbers have no gaps', async () 
   } finally { setAllocator(null); cleanup(); }
 });
 
-test('an answer lost after the post office assigned: the retry reuses the ulid and gets the same number', async () => {
+// Stage C (E-820): a save asks ONCE and goes pending without an answer; the
+// courier retries later with allocateWithRetry and the SAME ulid (E-713).
+test('an answer lost after the post office assigned: saved pending; the retry reuses the ulid and gets the same number', async () => {
   const { db, cleanup } = freshDb({ shared: true });
   const po = fakeOffice(0, (_u, call) => (call === 1 ? 'drop-after-assign' : 'answer'));
   try {
     setAllocator(po.allocator);
     setAllocationRetry({ delaysMs: [0, 0] });
     const r = await addEntryAsync(db, ok);
-    assert.equal(r.id, 1);
+    assert.equal(r.pending, true);
+    assert.equal(po.calls.length, 1);
+    assert.equal(po.calls[0], r.ulid, 'the pending note keeps the ulid it was asked for under');
+    assert.equal(await allocateWithRetry(po.allocator, r.ulid), 1);
     assert.equal(po.calls.length, 2);
     assert.equal(po.calls[0], po.calls[1], 'one ulid for every try');
     assert.equal(po.counter(), 1, 'the counter moved once');
-    assert.equal((db.prepare('SELECT ulid FROM entries WHERE id = 1').get() as { ulid: string }).ulid, po.calls[0]);
   } finally { setAllocator(null); setAllocationRetry(null); cleanup(); }
 });
 
 test('an unanswered request times out and is retried with the same ulid', async () => {
-  const { db, cleanup } = freshDb({ shared: true });
   const po = fakeOffice(0, (_u, call) => (call === 1 ? 'hang' : 'answer'));
   try {
-    setAllocator(po.allocator);
     setAllocationRetry({ timeoutMs: 50, delaysMs: [0, 0] });
-    assert.equal((await addEntryAsync(db, ok)).id, 1);
+    assert.equal(await allocateWithRetry(po.allocator, '01J0000000000000000000000A'), 1);
     assert.equal(po.calls[0], po.calls[1]);
-  } finally { setAllocator(null); setAllocationRetry(null); cleanup(); }
+  } finally { setAllocationRetry(null); }
 });
 
-test('three failures: refused, nothing written, one ulid used for all three tries', async () => {
+test('three failures: one ulid used for all three tries; the save itself went pending after one', async () => {
   const { db, cleanup } = freshDb({ shared: true });
   const po = fakeOffice(0, () => 'fail');
   try {
     setAllocator(po.allocator);
     setAllocationRetry({ delaysMs: [0, 0] });
-    await assert.rejects(addEntryAsync(db, ok), PostOfficeUnreachableError);
-    assert.equal(po.calls.length, 3);
+    const r = await addEntryAsync(db, ok);
+    assert.equal(r.pending, true);
+    assert.equal(po.calls.length, 1);
+    await assert.rejects(allocateWithRetry(po.allocator, r.ulid), PostOfficeUnreachableError);
+    assert.equal(po.calls.length, 4);
     assert.equal(new Set(po.calls).size, 1);
-    assert.equal(count(db), 0);
+    assert.equal(count(db), 1);
   } finally { setAllocator(null); setAllocationRetry(null); cleanup(); }
 });
 
-test('a non-retriable refusal (revoked key) is not retried', async () => {
+test('a non-retriable refusal (revoked key) is not retried; the note is saved pending', async () => {
   const { db, cleanup } = freshDb({ shared: true });
   const po = fakeOffice(0, () => 'refuse');
   try {
     setAllocator(po.allocator);
-    await assert.rejects(addEntryAsync(db, ok), /access revoked/);
+    const r = await addEntryAsync(db, ok);
+    assert.equal(r.pending, true);
+    assert.match(r.pendingReason ?? '', /access revoked/);
     assert.equal(po.calls.length, 1);
+    await assert.rejects(allocateWithRetry(po.allocator, r.ulid), /access revoked/);
+    assert.equal(po.calls.length, 2);
   } finally { setAllocator(null); cleanup(); }
 });
 

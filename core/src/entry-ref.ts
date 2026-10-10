@@ -5,7 +5,7 @@
 import type { NoteRef } from "./ulid.js";
 
 export function formatEntryRef(id: number | null | undefined, series = "E"): string {
-  if (id === null || id === undefined) return `${series}-?`;
+  if (id === null || id === undefined) return `${series}-pending`; // saved, waiting for its number (stage C)
   return series === "E" ? `${series}-${String(id).padStart(5, "0")}` : `${series}-${id}`;
 }
 

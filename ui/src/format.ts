@@ -2,7 +2,7 @@
 // core/src/entry-ref.ts exactly (the UI doesn't import core); keep them in step.
 // Only the E series is zero-padded; project series print the bare number.
 export function formatEntryRef(id: number | null | undefined, series = "E"): string {
-  if (id === null || id === undefined) return `${series}-?`;
+  if (id === null || id === undefined) return `${series}-pending`; // saved, waiting for its number (stage C)
   return series === "E" ? `${series}-${String(id).padStart(5, "0")}` : `${series}-${id}`;
 }
 

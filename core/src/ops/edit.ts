@@ -70,7 +70,7 @@ export function editEntry(db: DB, args: EditEntryArgs): { id: number } {
   const tx = db.transaction(() => {
     // Spec "Edits write revisions" (0007+; no-op below 0007).
     const before = byUlid ? snapshotForRevision(db, owner.ulid as string) : null;
-    if (before?.needs_merge === 1) throw new NeedsMergeError(owner.id); // V9
+    if (before?.needs_merge === 1) throw new NeedsMergeError(owner.id as number); // V9 (found by number: never pending)
     db.prepare(`
       UPDATE entries SET type=?, kind=?, title=?, summary=?, description=?, agent=?, module=?, task_id=?, tokens_estimate=?, category=?
       WHERE ${byUlid ? "ulid = ?" : "id = ?"}
@@ -79,7 +79,7 @@ export function editEntry(db: DB, args: EditEntryArgs): { id: number } {
     finishRevision(db, before);
   });
   tx();
-  return { id: owner.id };
+  return { id: owner.id as number }; // found by number above: never pending
 }
 
 /** Make `module` the primary module of each entry in `ids`. Unknown ids are skipped. */

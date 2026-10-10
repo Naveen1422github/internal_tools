@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import {
-  addEntryAsync, setAllocator, setAllocationRetry, setSyncValue, SYNC_KEYS, PostOfficeUnreachableError,
+  addEntryAsync, setAllocator, setAllocationRetry, setSyncValue, SYNC_KEYS, allocateWithRetry, httpAllocatorFromDb,
   type AddEntryArgs,
 } from '@collab-mcp/core';
 import { laptop } from './helpers.js';
@@ -21,6 +21,8 @@ function configure(db: any, url: string, fingerprint: string, m: { device: strin
   setSyncValue(db, SYNC_KEYS.key, m.key);
 }
 
+// Stage C (E-820): the save asks once and goes pending; the courier's retry
+// (allocateWithRetry, same ulid) gets the number the office already gave.
 test('E-713 over HTTPS: the answer is dropped after allocation, the retry gets the same number', async () => {
   let drops = 1;
   const o = await office(500, { testHooks: { dropAllocateAnswer: () => drops-- > 0 } });
@@ -29,7 +31,9 @@ test('E-713 over HTTPS: the answer is dropped after allocation, the retry gets t
     setAllocator(null);
     setAllocationRetry({ delaysMs: [0, 0] });
     configure(lap.db, o.po.url, o.cert.fingerprint, await o.join('b'));
-    assert.equal((await addEntryAsync(lap.db, ok)).id, 501);
+    const r = await addEntryAsync(lap.db, ok);
+    assert.equal(r.pending, true);
+    assert.equal(await allocateWithRetry(httpAllocatorFromDb(lap.db)!, r.ulid), 501);
     assert.equal(nextNumber(o.store), 502, 'the counter moved once');
     assert.equal((await addEntryAsync(lap.db, ok)).id, 502);
   } finally { setAllocationRetry(null); lap.cleanup(); await o.stop(); }
@@ -64,20 +68,24 @@ test('100 saves with 5 invalid over HTTPS: no gaps', async () => {
   } finally { lap.cleanup(); await o.stop(); }
 });
 
-test('revoked: refused at once, nothing written; post office down: refused, names the post office', async () => {
+test('revoked: answered at once, saved pending; post office down: saved pending, the reason says why (E-820)', async () => {
   const o = await office(0);
   const lap = laptop();
-  const count = () => (lap.db.prepare('SELECT COUNT(*) c FROM entries').get() as { c: number }).c;
+  const pending = () => (lap.db.prepare('SELECT COUNT(*) c FROM entries WHERE id IS NULL').get() as { c: number }).c;
   try {
     setAllocator(null);
     configure(lap.db, o.po.url, o.cert.fingerprint, await o.join('b'));
     revokeMember(o.store, 'b');
     const t0 = Date.now();
-    await assert.rejects(addEntryAsync(lap.db, ok), (e: any) => e instanceof PostOfficeUnreachableError && /revoked/.test(e.message));
+    const revoked = await addEntryAsync(lap.db, ok);
+    assert.equal(revoked.pending, true);
+    assert.match(revoked.pendingReason ?? '', /revoked/);
     assert.ok(Date.now() - t0 < 1000, 'no retries on 401');
     await o.po.close();
     setAllocationRetry({ delaysMs: [0, 0] });
-    await assert.rejects(addEntryAsync(lap.db, ok), /post office/);
-    assert.equal(count(), 0);
+    const down = await addEntryAsync(lap.db, ok);
+    assert.equal(down.pending, true);
+    assert.ok(down.pendingReason, 'says why');
+    assert.equal(pending(), 2);
   } finally { setAllocationRetry(null); lap.cleanup(); await o.stop().catch(() => {}); }
 });

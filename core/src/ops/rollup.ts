@@ -38,7 +38,8 @@ export interface RollupGroup {
 
 export interface RollupResult {
   groups: RollupGroup[];
-  created_entries: Array<{ id: number; group_key: string; group_kind: "module" | "task" }>;
+  /** id null = pending: a shared notebook numbers it through the courier (stage C). */
+  created_entries: Array<{ id: number | null; group_key: string; group_kind: "module" | "task" }>;
   deprecated_count: number;
   dry_run: boolean;
 }
@@ -261,7 +262,7 @@ export function rollup(db: DB, args: RollupArgs): RollupResult {
 
   // Wrap each group's (insert rollup + refs + deprecate originals) in a transaction
   // so a mid-write failure can't leave originals deprecated without a rollup entry.
-  const runGroup = db.transaction((group: RollupGroup): number => {
+  const runGroup = db.transaction((group: RollupGroup): number | null => {
     const { summary, description } = formatRollupBody(group);
     if (!summary || summary.trim().length === 0) {
       throw new Error("formatRollupBody returned empty summary");
@@ -400,7 +401,7 @@ export function archive(db: DB, args: ArchiveArgs): RollupResult {
     return { groups, created_entries: [], deprecated_count: 0, dry_run: true };
   }
 
-  const runGroup = db.transaction((group: RollupGroup): number => {
+  const runGroup = db.transaction((group: RollupGroup): number | null => {
     const { summary, description } = formatRollupBody(group);
     if (!summary || summary.trim().length === 0) {
       throw new Error("formatRollupBody returned empty summary");

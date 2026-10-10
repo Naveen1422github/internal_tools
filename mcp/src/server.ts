@@ -396,10 +396,13 @@ server.registerTool(
     const status = result.project
       ? `project: ${result.project.code} ${result.project.name} (${result.project.mode})`
       : "project: none (E series)";
-    let text = tt
-      ? `${status}\nAdded ${added} (${args.type}). `
-        + `Auto-advanced ${tt.id}: ${tt.from} -> ${tt.to}.`
+    // Stage C (E-820): a note the office could not number yet is saved pending.
+    const head = result.pending
+      ? `${status}\nSaved ${added} (${args.type}), waiting for its number: ${result.pendingReason ?? "the courier will number it"}. Link to it by ulid ${result.ulid} until then.`
       : `${status}\nAdded ${added} (${args.type}).`;
+    let text = tt
+      ? `${head} Auto-advanced ${tt.id}: ${tt.from} -> ${tt.to}.`
+      : head;
     // E-657 guardrail: tell the writing agent where its module's main note is,
     // only for important types (the hub must not become a dump).
     if (args.module && ["decision", "proposal", "gotcha"].includes(args.type)) {
@@ -407,7 +410,7 @@ server.registerTool(
       if (hs.state === "ok") {
         const h = hs.coverage!.hub;
         const hubRef = h.series ? formatEntryRef(h.id, h.series) : String(h.id);
-        const newRef = result.series === "E" ? String(result.id) : added;
+        const newRef = result.pending ? result.ulid : result.series === "E" ? String(result.id) : added;
         text += ` Main note for '${args.module}' is ${formatEntryRef(h.id, h.series)}; `
           + `if this belongs in it, link it with collab_update_refs (id ${hubRef}, add entry '${newRef}').`;
       }

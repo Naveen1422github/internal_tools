@@ -26,9 +26,19 @@ export function postOfficeTargetFromDb(db: DB): PostOfficeTarget | null {
 
 export class HttpAllocator implements Allocator {
   constructor(readonly target: PostOfficeTarget, private readonly timeoutMs = 1500) {}
-  async allocate(ulid: string): Promise<number> {
-    const r = await requestJson(this.target, "POST", "/v1/allocate", { ulid }, { timeoutMs: this.timeoutMs });
-    if (r.status === 200 && Number.isInteger(r.body?.id)) return r.body.id as number;
+  async allocate(ulid: string, series: string): Promise<number> {
+    const r = await requestJson(this.target, "POST", "/v1/allocate", { ulid, series }, { timeoutMs: this.timeoutMs });
+    if (r.status === 200 && Number.isInteger(r.body?.id)) {
+      // An older office ignores `series` and answers an E number without saying
+      // so: never store that under another series (stage C, Review Focus 2).
+      if (r.body?.series !== series) {
+        throw Object.assign(
+          new Error(`the post office did not number this note in series ${series} (it answered ${r.body?.series ?? "without a series"}): update the post office`),
+          { retriable: false },
+        );
+      }
+      return r.body.id as number;
+    }
     const e = new Error(`the post office answered ${r.status}${r.body?.error ? `: ${r.body.error}` : ""}`);
     // A 4xx means the request itself is wrong; asking again cannot help.
     if (r.status >= 400 && r.status < 500) Object.assign(e, { retriable: false });
