@@ -206,6 +206,17 @@ export function ownerOfUlid(db: DB, ulid: string): InsertedEntry | null {
   return r ? { id: r.id, ulid: r.ulid } : null;
 }
 
+/**
+ * Give a pending note the number the post office assigned (stage C; the
+ * courier calls this). Only ever fills an empty id: a note numbered already
+ * keeps its number (never two numbers for one note, E-713). Returns true when
+ * it wrote.
+ */
+export function assignPendingNumber(db: DB, ulid: string, id: number): boolean {
+  if (!Number.isInteger(id) || id < 1) throw new Error(`not a note number: ${String(id)}`);
+  return db.prepare(`UPDATE entries SET id = ? WHERE ulid = ? AND id IS NULL`).run(id, ulid).changes > 0;
+}
+
 /** Deletes one ref of `owner`; returns rows removed. Keys on the level's real PK (F3). */
 export function deleteRef(db: DB, owner: InsertedEntry, ref: RefInput): number {
   return hasUlidPrimaryKey(db)

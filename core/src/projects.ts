@@ -80,6 +80,48 @@ export function createProject(db: DB, args: { name: string; code: string; mode?:
   return findProject(db, ulid)!;
 }
 
+/**
+ * A team project as the office lists it (stage C, P1). Creates or refreshes
+ * the local row; never overwrites a local project with the same code or name
+ * (P10): that is a clash, reported and left alone.
+ */
+export function upsertTeamProjectFromOffice(
+  db: DB, p: { ulid: string; name: string; code: string }, fingerprint: string,
+): "created" | "updated" | "clash" {
+  needs0009(db);
+  const mine = db.prepare(`SELECT ulid, mode, team, name FROM projects WHERE ulid = ?`).get(p.ulid) as
+    | { ulid: string; mode: string; team: string | null; name: string } | undefined;
+  if (mine) {
+    if (mine.mode !== "team" || mine.team !== fingerprint || mine.name !== p.name) {
+      db.prepare(`UPDATE projects SET mode = 'team', team = ?, name = ?, updated_at = datetime('now') WHERE ulid = ?`).run(fingerprint, p.name, p.ulid);
+    }
+    return "updated";
+  }
+  const clash = db.prepare(`SELECT 1 FROM projects WHERE code = ? OR lower(name) = lower(?)`).get(p.code, p.name);
+  if (clash) return "clash";
+  db.prepare(`INSERT INTO projects (ulid, name, code, mode, team) VALUES (?, ?, ?, 'team', ?)`).run(p.ulid, p.name, p.code, fingerprint);
+  return "created";
+}
+
+/** One team project of the office that clashes with a local project (courier sync_state `project_clash`). */
+export interface ProjectClash { code: string; office_ulid: string; local_ulid: string | null; local_code?: string }
+
+/** The local project a team project clashes with (same code, or same name), or null. */
+export function localClashOf(db: DB, p: { code: string; name: string }): { ulid: string; code: string } | null {
+  return (db.prepare(`SELECT ulid, code FROM projects WHERE code = ? OR lower(name) = lower(?) ORDER BY code = ? DESC LIMIT 1`)
+    .get(p.code, p.name, p.code) as { ulid: string; code: string } | undefined) ?? null;
+}
+
+/** What to tell the person about clashes (courier status and doctor say the same, rule 8). */
+export function projectClashText(clashes: ProjectClash[]): string {
+  return clashes
+    .map((c) => {
+      const mine = c.local_code ?? c.code;
+      return `the team's ${c.code} clashes with your own ${mine}. Copy your notes into another code (\`collab copy\`, stage B2) and delete your ${mine}, then sync again.`;
+    })
+    .join(" ");
+}
+
 export function renameProject(db: DB, codeOrUlid: string, newName: string): Project {
   needs0009(db);
   const p = findProject(db, codeOrUlid);

@@ -73,7 +73,8 @@ export function readSyncOverview(
   let health: SyncHealth;
   if (!st) health = "unknown";
   else if (!running) health = "not-syncing";
-  else if (state === "needs-update") health = "needs-update";
+  // needs-action (stage C: a project clash) also means "a person must act".
+  else if (state === "needs-update" || state === "needs-action") health = "needs-update";
   else if (state === "revoked") health = "revoked";
   else if (state === "offline" || state === "starting" || unsent > 0) health = "behind";
   else health = "ok";

@@ -115,7 +115,12 @@ test('3. post office offline: a new note is saved pending (no number, says why);
   await office.up();
   await until(() => row(A.w, quokka)?.description === 'edited on B while the post office was down', 5000, 'the offline edit to arrive');
   const { id } = await addEntryAsync(B.w, { type: 'decision', title: 'Accepted again', summary: 's', module: 'team' });
-  await until(() => !!row(A.w, id), 3000, 'new notes to flow again');
+  await until(() => !!row(A.w, id!), 3000, 'new notes to flow again');
+  // The note saved pending got its number from B's courier and reached A whole.
+  const byUlid = (db: DB) => db.prepare('SELECT id, title FROM entries WHERE ulid = ?').get(waiting.ulid) as { id: number | null; title: string } | undefined;
+  await until(() => byUlid(A.w)?.id != null, 5000, 'the pending note to be numbered and delivered');
+  assert.equal(byUlid(A.w)!.title, 'Waiting note');
+  assert.equal(byUlid(A.w)!.id, byUlid(B.w)!.id);
 });
 
 test('4. the same note edited on A and B: different paragraphs merge; the same line becomes needs_merge', async () => {

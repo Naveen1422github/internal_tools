@@ -10,4 +10,8 @@ export const COURIER_KEYS = {
   shared: "shared_modules",
   /** JSON list: shared modules whose older notes were already sent (backfill done). */
   backfilled: "backfilled_modules",
+  /** JSON list: team project ulids whose older notes were already sent (stage C: promote, or a project learned late). */
+  backfilledProjects: "backfilled_projects",
+  /** JSON list of {code, office_ulid, local_ulid, local_code}: team projects that clash with a local one (P10). Non-empty = pulling is paused. */
+  projectClash: "project_clash",
 } as const;
