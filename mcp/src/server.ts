@@ -55,6 +55,8 @@ import {
   getEntryByRef,
   getEntryByUlid,
   parseNoteKey,
+  pendingCounts,
+  readSyncOverview,
   currentProject,
   type NoteRef,
   type NoteKey,
@@ -159,10 +161,39 @@ function keyLabel(k: NoteKey, id?: number | null): string {
   return n === null ? `${formatEntryRef(null, e?.series ?? "E")} (${k.ulid})` : formatEntryRef(n, e?.series ?? "E");
 }
 
-/** Spec rule 8: every write and search answer says which project it worked in. */
+/** How the office looks from here, for a team project's status line (stage C, rule 8). */
+function officeState(): string {
+  const o = readSyncOverview(db);
+  if (!o.enabled) return "not shared";
+  if (!o.courier.running) return "courier not running";
+  switch (o.courier.state) {
+    case "connected": return "office connected";
+    case "offline": return "office offline";
+    case "needs-action": return "needs action: see collab_doctor";
+    case "needs-update": return "needs update: see collab_doctor";
+    case "revoked": return "access revoked";
+    default: return `office ${o.courier.state}`;
+  }
+}
+
+/**
+ * Spec rule 8: every write and search answer says which project it worked in;
+ * for a team project also the office state and the notes waiting for their
+ * number; with no project, the E notes waiting (stage C). A notebook with no
+ * projects and nothing pending prints exactly what it printed before (rule 1).
+ */
 function statusLine(): string {
-  const p = currentProject(db);
-  return p ? `project: ${p.code} ${p.name} (${p.mode})` : "project: none (E series)";
+  return statusFor(currentProject(db));
+}
+function statusFor(p: { code: string; name: string; mode: string } | null): string {
+  const pending = pendingCounts(db);
+  if (p && p.mode === "team") {
+    const n = pending.filter((r) => r.series === p.code).reduce((a, r) => a + r.n, 0);
+    return `project: ${p.code} ${p.name} (team, ${officeState()}, ${n} pending)`;
+  }
+  if (p) return `project: ${p.code} ${p.name} (${p.mode})`;
+  const e = pending.filter((r) => r.series === "E").reduce((a, r) => a + r.n, 0);
+  return e > 0 ? `project: none (E series, ${e} pending)` : "project: none (E series)";
 }
 
 const SCOPE = z
@@ -413,9 +444,7 @@ server.registerTool(
     });
     const tt = result.taskTransition;
     const added = formatEntryRef(result.id, result.series);
-    const status = result.project
-      ? `project: ${result.project.code} ${result.project.name} (${result.project.mode})`
-      : "project: none (E series)";
+    const status = statusFor(result.project);
     // Stage C (E-820): a note the office could not number yet is saved pending.
     const head = result.pending
       ? `${status}\nSaved ${added} (${args.type}), waiting for its number: ${result.pendingReason ?? "the courier will number it"}. Link to it by ulid ${result.ulid} until then.`

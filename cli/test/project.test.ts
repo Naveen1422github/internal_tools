@@ -115,13 +115,15 @@ test('project create --team and project promote talk to the post office and say 
       const c = await run('project', 'create', 'Support', '--code', 'SH', '--team');
       assert.equal(c.code, 0, c.err.join('\n'));
       assert.equal(c.out[0], `Created team project SH (Support): numbers come from the post office at ${office.url}; with the office down, notes are saved and wait for their number.`);
-      assert.match((await run('project', 'list')).out.join('\n'), /SH\s+Support\s+team/);
+      assert.match((await run('project', 'list')).out.join('\n'), /SH\s+Support\s+team\s+0 note\(s\)$/m);
 
       assert.equal((await run('project', 'create', 'Navi', '--code', 'NV')).code, 0);
       const w = new Database(resolveDbPath().path);
       try {
         for (const title of ['one', 'two', 'three']) addEntry(w, { type: 'decision', title, summary: 's', project: 'NV' });
+        addEntry(w, { type: 'decision', title: 'waits', summary: 's', project: 'SH' }); // a team note saved without a number
       } finally { w.prepare('SELECT crsql_finalize()').get(); w.close(); }
+      assert.match((await run('project', 'list')).out.join('\n'), /SH\s+Support\s+team\s+1 note\(s\), 1 waiting for a number/);
       const pr = await run('project', 'promote', 'nv');
       assert.equal(pr.code, 0, pr.err.join('\n'));
       assert.deepEqual(seeds, [0, 3]);

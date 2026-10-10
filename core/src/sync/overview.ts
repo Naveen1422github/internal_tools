@@ -7,6 +7,7 @@ import { ensureCrsqlite } from "./extension.js";
 import { courierDir as defaultCourierDir, courierFiles } from "./courier-paths.js";
 import { SYNC_KEYS } from "./http-allocator.js";
 import { SHARED_KEY, SENT_KEY, sendContext, sendVerdictOf, type NotePlace } from "./send-filter.js";
+import { hasSeries, hasUlidPrimaryKey } from "../schema.js";
 
 // What the web UI's status bar shows (spec part 2, V1): read from THIS laptop
 // only. Never returns the device key or any sync_state value not listed below.
@@ -20,6 +21,8 @@ export type SyncOverview =
       deviceId: string;
       sharedModules: string[];
       unsent: number;
+      /** Notes saved without a number yet (stage C): the courier numbers them when it reaches the office. */
+      pending: number;
       courier: { running: boolean; state: string; lastError: string | null; lastPushAt: string | null; lastPullAt: string | null };
       lastContactAt: string | null;
       health: SyncHealth;
@@ -53,6 +56,19 @@ export function unsentSharedCount(db: DB): number {
   return n;
 }
 
+/**
+ * Notes waiting for their number (stage C, rule 8), per series and project:
+ * live notes with id NULL. Before 0006 every note has a number.
+ */
+export function pendingCounts(db: DB): Array<{ series: string; project: string | null; n: number }> {
+  if (!hasUlidPrimaryKey(db)) return [];
+  return db.prepare(
+    hasSeries(db)
+      ? `SELECT series, project_ulid AS project, COUNT(*) AS n FROM entries WHERE id IS NULL AND deleted_at IS NULL GROUP BY series, project_ulid ORDER BY series, project_ulid`
+      : `SELECT 'E' AS series, NULL AS project, COUNT(*) AS n FROM entries WHERE id IS NULL AND deleted_at IS NULL HAVING COUNT(*) > 0`,
+  ).all() as Array<{ series: string; project: string | null; n: number }>;
+}
+
 export function readSyncOverview(
   db: DB,
   opts: { courierDir?: string; isAlive?: (pid: number) => boolean } = {},
@@ -84,6 +100,7 @@ export function readSyncOverview(
     deviceId: getSyncValue(db, SYNC_KEYS.device) ?? "",
     sharedModules: [...sharedSet(db)].sort(),
     unsent,
+    pending: pendingCounts(db).reduce((sum, r) => sum + r.n, 0),
     courier: { running, state, lastError: st?.lastError ?? null, lastPushAt, lastPullAt },
     lastContactAt,
     health,

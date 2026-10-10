@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import { migrate, addEntry, createProject, addNotebook, initModule } from '@collab-mcp/core';
+import { migrate, addEntry, createProject, addNotebook, initModule, enableSync, setSyncValue } from '@collab-mcp/core';
 
 const SERVER = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'server.js');
 
@@ -152,6 +152,42 @@ test('.collab naming a project that is not in this notebook: a clear error, neve
     assert.match(r.text, /collab project list/);
     assert.match(r.text, /\.collab/);
   });
+});
+
+// Stage C, rule 8: a team project's status line says how the office looks and what waits.
+test('status line: a team project shows the office state and its pending notes; E pending shows with no project', async () => {
+  const cdir = mkdtempSync(join(tmpdir(), 'collab-courier-status-'));
+  writeFileSync(join(cdir, 'status.json'), JSON.stringify({ state: 'connected', lastError: null, pid: process.pid }));
+  writeFileSync(join(cdir, 'courier.pid'), String(process.pid));
+  const saved = process.env.COLLAB_COURIER_DIR;
+  process.env.COLLAB_COURIER_DIR = cdir; // the spawned server inherits it
+  try {
+    await withServer(async ({ call, dbPath, setProject }) => {
+      const tm = '01J0000000000000000000TEAM';
+      const db = new Database(dbPath);
+      try {
+        enableSync(db);
+        setSyncValue(db, 'po_url', 'https://127.0.0.1:1');
+        setSyncValue(db, 'po_fingerprint', 'fp');
+        setSyncValue(db, 'device_id', 'd');
+        setSyncValue(db, 'device_key', 'k');
+        db.prepare(`INSERT INTO projects (ulid, name, code, mode, team) VALUES (?, 'Team', 'TM', 'team', 'fp')`).run(tm);
+        addEntry(db, { type: 'decision', title: 'tm 1', summary: 's', project: 'TM' });
+        addEntry(db, { type: 'decision', title: 'tm 2', summary: 's', project: 'TM' });
+        addEntry(db, { type: 'decision', title: 'e waiting', summary: 's' });
+      } finally { db.prepare('SELECT crsql_finalize()').get(); db.close(); }
+      setProject(tm);
+      const s = await call('collab_search', { query: '' });
+      assert.equal(s.isError, false, s.text);
+      assert.match(s.text, /^project: TM Team \(team, office connected, 2 pending\)/);
+      setProject(null);
+      const n = await call('collab_search', { query: '', scope: 'all' });
+      assert.match(n.text, /^project: none \(E series, 1 pending\)/);
+    });
+  } finally {
+    if (saved === undefined) delete process.env.COLLAB_COURIER_DIR; else process.env.COLLAB_COURIER_DIR = saved;
+    rmSync(cdir, { recursive: true, force: true });
+  }
 });
 
 // Stage C, spec P6: a pending note (no number yet) is reached and linked by its ULID.

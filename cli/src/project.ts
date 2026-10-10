@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   closeDb, collabStartDir, createProject, createTeamProject, currentProject, findCollabFile, findProject, getDb, listProjects,
-  notFound, promoteProject, highestNumberOf, renameProject, resolveDbPath, getSyncValue, SYNC_KEYS, type Project,
+  notFound, promoteProject, highestNumberOf, renameProject, resolveDbPath, getSyncValue, pendingCounts, SYNC_KEYS, type Project,
 } from "@collab-mcp/core";
 import type { CliResult, Io } from "./io.js";
 
@@ -111,9 +111,12 @@ export async function runProject(args: string[], io: Io): Promise<CliResult> {
         let cur: Project | null = null;
         try { cur = currentProject(db); } catch (e) { io.err(`collab: ${(e as Error).message.replace(/^\[collab\] /, "")}`); }
         const count = db.prepare(`SELECT COUNT(*) n FROM entries WHERE project_ulid = ? AND deleted_at IS NULL`);
+        // Stage C (rule 8): notes still waiting for their number from the post office.
+        const pending = new Map(pendingCounts(db).filter((r) => r.project).map((r) => [r.project as string, r.n]));
         for (const p of all) {
           const n = (count.get(p.ulid) as { n: number }).n;
-          io.out(`${cur?.ulid === p.ulid ? "*" : " "} ${p.code.padEnd(8)} ${p.name.padEnd(24)} ${p.mode.padEnd(5)} ${String(n).padStart(5)} note(s)`);
+          const waiting = pending.get(p.ulid) ?? 0;
+          io.out(`${cur?.ulid === p.ulid ? "*" : " "} ${p.code.padEnd(8)} ${p.name.padEnd(24)} ${p.mode.padEnd(5)} ${String(n).padStart(5)} note(s)${waiting ? `, ${waiting} waiting for a number` : ""}`);
         }
         return { code: 0 };
       }

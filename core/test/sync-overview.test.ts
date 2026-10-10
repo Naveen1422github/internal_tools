@@ -5,7 +5,8 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { freshDb } from './helpers/sync.js';
-import { readSyncOverview, unsentSharedCount } from '../src/sync/overview.js';
+import { readSyncOverview, unsentSharedCount, pendingCounts } from '../src/sync/overview.js';
+import { migrate } from '../src/db.js';
 import { setSyncValue } from '../src/sync/state.js';
 import { addEntryAsync } from '../src/ops/add.js';
 import { setAllocator } from '../src/sync/allocator.js';
@@ -106,4 +107,26 @@ test('needs-update and revoked pass through; missing status.json is unknown', ()
     assert.equal((readSyncOverview(t.db, { courierDir: empty, isAlive: () => true }) as any).health, 'unknown');
     rmSync(empty, { recursive: true, force: true });
   } finally { t.cleanup(); }
+});
+
+// Stage C (rule 8): notes waiting for their number are counted and shown.
+test('pending: counted per series and in total; a project clash is a needs-update health', async () => {
+  const t = freshDb({ shared: true });
+  const dir = courier(st('needs-action'));
+  try {
+    migrate(t.db);
+    shared(t, ['portfolio']);
+    t.db.prepare(`INSERT INTO projects (ulid, name, code, mode, team) VALUES ('01J0000000000000000000TEAM', 'Support hub', 'SH', 'team', 'abc')`).run();
+    setAllocator({ allocate: async () => { throw new Error('down'); } });
+    await addEntryAsync(t.db, { type: 'decision', title: 'sh 1', summary: 's', project: 'SH' });
+    await addEntryAsync(t.db, { type: 'decision', title: 'sh 2', summary: 's', project: 'SH' });
+    await addEntryAsync(t.db, { type: 'decision', title: 'e 1', summary: 's', module: 'portfolio' });
+    const gone = await addEntryAsync(t.db, { type: 'decision', title: 'deleted', summary: 's' });
+    t.db.prepare(`UPDATE entries SET deleted_at = datetime('now') WHERE ulid = ?`).run(gone.ulid);
+    assert.deepEqual(pendingCounts(t.db).map((r) => ({ series: r.series, n: r.n })), [{ series: 'E', n: 1 }, { series: 'SH', n: 2 }]);
+    assert.equal(pendingCounts(t.db).find((r) => r.series === 'SH')!.project, '01J0000000000000000000TEAM');
+    const o: any = readSyncOverview(t.db, { courierDir: dir, isAlive: () => true });
+    assert.equal(o.pending, 3);
+    assert.equal(o.health, 'needs-update', 'a person must act');
+  } finally { setAllocator(null); t.cleanup(); rmSync(dir, { recursive: true, force: true }); }
 });

@@ -12,6 +12,8 @@ import { SYNC_KEYS } from "./http-allocator.js";
 // The courier's own sync_state keys (courier/src/keys.ts COURIER_KEYS; core cannot import the courier).
 export const SHARED_KEY = "shared_modules";
 export const SENT_KEY = "sent_db_version";
+/** JSON list of team projects that clash with a local one (written by the courier, read by doctor). */
+export const PROJECT_CLASH_KEY = "project_clash";
 
 /** send = goes to the office now; skip = never goes; hold = not now, still waiting (counts as unsent). */
 export type SendVerdict = "send" | "skip" | "hold";

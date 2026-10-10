@@ -3,7 +3,11 @@ import { collabStartDir, findCollabFile } from "../db.js";
 import { parseEntryRef } from "../ulid.js";
 import { getHubStatus, IMPORTANT_TYPES } from "./hub.js";
 import { hasSeries, liveEntry } from "../schema.js";
-import { currentProject } from "../projects.js";
+import { currentProject, projectClashText, type ProjectClash } from "../projects.js";
+import { pendingCounts } from "../sync/overview.js";
+import { PROJECT_CLASH_KEY } from "../sync/send-filter.js";
+import { SYNC_KEYS } from "../sync/http-allocator.js";
+import { getSyncValue } from "../sync/state.js";
 import { hasCrrTables, isCrsqliteLoaded } from "../sync/extension.js";
 import { guardedTriggers, SYNCED_TABLES } from "../sync/enable.js";
 import { formatEntryRef } from "../entry-ref.js";
@@ -608,7 +612,10 @@ export function doctor(db: DB, opts: { cwd?: string; env?: NodeJS.ProcessEnv } =
 }
 
 
-/** projects.current / projects.orphan_notes / projects.series_mismatch (stage B1). */
+/**
+ * projects.current / projects.orphan_notes / projects.series_mismatch (stage B1);
+ * projects.pending / projects.team_office / projects.clash (stage C, rule 8).
+ */
 function projectChecks(db: DB, opts: { cwd?: string; env?: NodeJS.ProcessEnv }): DoctorCheck[] {
   const out: DoctorCheck[] = [];
   try {
@@ -650,6 +657,43 @@ function projectChecks(db: DB, opts: { cwd?: string; env?: NodeJS.ProcessEnv }):
       ? `${mismatched.length} note(s) numbered in another series than their project's code`
       : "every project note carries its project's code",
     items: mismatched.length > 0 ? mismatched.map((r) => `${formatEntryRef(r.id, r.series)} (project ${r.code})`) : undefined,
+  });
+
+  // Stage C: notes saved without a number (team, or E on a shared notebook).
+  const pending = new Map<string, number>();
+  for (const r of pendingCounts(db)) pending.set(r.series, (pending.get(r.series) ?? 0) + r.n);
+  const total = [...pending.values()].reduce((a, b) => a + b, 0);
+  const bySeries = [...pending].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([s, n]) => `${s} ${n}`).join(", ");
+  out.push({
+    name: "projects.pending",
+    severity: total > 0 ? "warn" : "ok",
+    detail: total > 0
+      ? `${total} note${total === 1 ? "" : "s"} wait${total === 1 ? "s" : ""} for ${total === 1 ? "its" : "their"} number (${bySeries}); they are numbered when the courier reaches the post office`
+      : "no note waits for its number",
+  });
+
+  // One office per notebook (E-820): a team project names its office by fingerprint.
+  let fingerprint: string | null = null;
+  try { fingerprint = getSyncValue(db, SYNC_KEYS.fingerprint); } catch { fingerprint = null; }
+  const teams = db.prepare(`SELECT code, team FROM projects WHERE mode = 'team' ORDER BY code`).all() as Array<{ code: string; team: string | null }>;
+  const foreign = teams.filter((t) => !fingerprint || t.team !== fingerprint);
+  out.push({
+    name: "projects.team_office",
+    severity: foreign.length > 0 ? "error" : "ok",
+    detail: foreign.length > 0
+      ? foreign.map((t) => `${t.code} belongs to another post office; one office per notebook (E-820)`).join("; ")
+      : teams.length > 0 ? "every team project belongs to this notebook's post office" : "no team projects",
+    items: foreign.length > 0 ? foreign.map((t) => t.code) : undefined,
+  });
+
+  // A team project whose code or name a local project already uses (P10): the courier pauses pulling.
+  let clashes: ProjectClash[] = [];
+  try { clashes = JSON.parse(getSyncValue(db, PROJECT_CLASH_KEY) ?? "[]") as ProjectClash[]; } catch { clashes = []; }
+  out.push({
+    name: "projects.clash",
+    severity: clashes.length > 0 ? "error" : "ok",
+    detail: clashes.length > 0 ? projectClashText(clashes) : "no team project clashes with a local one",
+    items: clashes.length > 0 ? clashes.map((c) => c.code) : undefined,
   });
   return out;
 }
