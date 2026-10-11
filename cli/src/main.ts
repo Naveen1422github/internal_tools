@@ -27,7 +27,10 @@ const USAGE = `usage: collab [--notebook <name>] <command>
                                           a team project: the post office numbers its notes and shares them
   collab project promote <code>           make a solo project a team project (its notes keep their numbers)
   collab project rename <code> <new name> rename a project (its code never changes)
-  collab project list                     the projects in this notebook (* = this folder's)
+  collab project list                     the projects in this notebook (* = this folder's) and their bound modules
+  collab project bind <module> <code>     new notes whose primary module is <module> go to project <code>
+                                          (beats this folder's .collab; an explicit project beats it; local to this laptop)
+  collab project unbind <module>          remove that binding
   collab project use <code>               make it this folder's project (writes .collab)
   collab copy --from <module|project> --to <project> [--author me] [--since <date>] [--yes]
                                           copy notes into a project: lists them, asks, then copies

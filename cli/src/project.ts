@@ -3,7 +3,7 @@ import { join } from "node:path";
 import {
   closeDb, collabStartDir, createProjectOp, currentProject, findCollabFile, findProject, getDb,
   notFound, promoteProject, highestNumberOf, renameProject, resolveDbPath, getSyncValue, SYNC_KEYS, type Project,
-  projectCreatedLines, projectListLines, projectListRows,
+  projectCreatedLines, projectListLines, projectListRows, bindModule, unbindModule, bindChangeLine,
 } from "@collab-mcp/core";
 import type { CliResult, Io } from "./io.js";
 
@@ -11,7 +11,7 @@ import type { CliResult, Io } from "./io.js";
 
 const fail = (io: Io, msg: string): CliResult => { io.err(`collab: ${msg.replace(/^\[collab(-mcp)?\] /, "")}`); return { code: 1 }; };
 
-const USAGE = "usage: collab project create <name> --code <CODE> [--team] | promote <code> | rename <code> <new name> | list | use <code>";
+const USAGE = "usage: collab project create <name> --code <CODE> [--team] | promote <code> | rename <code> <new name> | list | use <code> | bind <module> <code> | unbind <module>";
 
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -105,6 +105,18 @@ export async function runProject(args: string[], io: Io): Promise<CliResult> {
         let cur: Project | null = null;
         try { cur = currentProject(db); } catch (e) { io.err(`collab: ${(e as Error).message.replace(/^\[collab\] /, "")}`); }
         for (const l of projectListLines(projectListRows(db, cur))) io.out(l);
+        return { code: 0 };
+      }
+      case "bind": {
+        const [module, code] = words(rest);
+        if (!module || !code) { io.err("usage: collab project bind <module> <code>"); return { code: 2 }; }
+        io.out(bindChangeLine(bindModule(getDb(), module, code)));
+        return { code: 0 };
+      }
+      case "unbind": {
+        const [module] = words(rest);
+        if (!module) { io.err("usage: collab project unbind <module>"); return { code: 2 }; }
+        io.out(bindChangeLine(unbindModule(getDb(), module)));
         return { code: 0 };
       }
       case "use": {
