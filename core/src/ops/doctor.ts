@@ -189,6 +189,8 @@ export function doctor(db: DB, opts: { cwd?: string; env?: NodeJS.ProcessEnv } =
     expectedTables.add("projects");
     expectedIndexes = union(expectedIndexes, new Set(["idx_entries_series_id", "idx_entries_project", "idx_projects_name"]));
   }
+  // 0011 adds the local project_modules table (module -> project binding).
+  if (applied("0011_project_modules")) expectedTables.add("project_modules");
   // A shared DB carries cr-sqlite's own bookkeeping (crsql_*, <t>__crsql_clock/
   // _pks/_itrig...). Those are the extension's, not ours: not "extra".
   const shared = hasCrrTables(db);

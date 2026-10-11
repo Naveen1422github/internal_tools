@@ -25,6 +25,11 @@ export function hasProjectLeft(db: DB): boolean {
   return !!db.prepare(`SELECT 1 FROM pragma_table_info('projects') WHERE name = 'left_at'`).get();
 }
 
+/** True once migration 0011 has created the local `project_modules` table (module -> project binding). */
+export function hasProjectModules(db: DB): boolean {
+  return !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'project_modules'`).get();
+}
+
 /** SQL predicate that hides tombstoned entries. Before 0006 there is no deleted_at column. */
 export function liveEntry(db: DB, alias = "e"): string {
   return hasUlidPrimaryKey(db) ? `${alias}.deleted_at IS NULL` : "1 = 1";

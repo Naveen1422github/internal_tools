@@ -20,11 +20,11 @@ const assigned = (id: number) => ({ ulid: `01K${String(++n).padStart(23, '0')}`,
 const teamRow = (db: any, code: string, fp = 'fp') =>
   db.prepare(`INSERT INTO projects (ulid, name, code, mode, team) VALUES (?, ?, ?, 'team', ?)`).run(`01JPR0JECT${code.padEnd(16, '0')}`, `team ${code}`, code, fp);
 
-test('fresh notebook: latest = 0010, projects.left_at exists and is NULL by default', () => {
+test('fresh notebook: latest = 0011, projects.left_at exists and is NULL by default', () => {
   const t = freshDb();
   try {
     migrate(t.db);
-    assert.equal(latestMigration(t.db), '0010_project_left');
+    assert.equal(latestMigration(t.db), '0011_project_modules');
     assert.equal(hasProjectLeft(t.db), true);
     const p = createProject(t.db, { name: 'mine', code: 'P1' });
     assert.equal(p.left_at, null);
@@ -41,7 +41,7 @@ test('a shared 0009 notebook with projects migrates to 0010 without any tracked 
     assert.equal(findProject(t.db, 'P1')!.left_at, null, 'reads work on a 0009 file');
     const v0 = dbVersion(t.db);
     migrate(t.db);
-    assert.equal(latestMigration(t.db), '0010_project_left');
+    assert.equal(latestMigration(t.db), '0011_project_modules');
     assert.equal(dbVersion(t.db), v0, 'no tracked change (projects is local)');
     assert.equal(findProject(t.db, 'P1')!.left_at, null);
   } finally { t.cleanup(); }

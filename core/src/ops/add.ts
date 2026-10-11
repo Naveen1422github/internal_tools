@@ -5,6 +5,7 @@ import { insertEntryRow, insertEntryModules, insertRefs } from "../entry-write.j
 import { isSyncEnabled } from "../sync/state.js";
 import { resolveAllocator, allocateWithRetry, SAVE_ATTEMPT } from "../sync/allocator.js";
 import { newUlid } from "../ulid.js";
+import { boundProjectFor } from "./bind.js";
 import { currentProject, findProject, isLeftProject, isTeamProject, leftProjectError, notFound, type Project } from "../projects.js";
 
 // ------------------------------------------------------------
@@ -44,8 +45,9 @@ export interface AddEntryArgs {
   pendingUlid?: string;
   /**
    * The project to write into: its code or ULID (stage B1). "none" = no project
-   * (series E). addEntryAsync defaults it to the folder's current project
-   * (.collab, spec P3); addEntry treats omitted as no project.
+   * (series E). Omitted: the bound project of the primary module (collab
+   * project bind), then (addEntryAsync only) the folder's current project
+   * (.collab, spec P3), else no project.
    */
   project?: string;
 }
@@ -145,13 +147,28 @@ export function validateAddEntryArgs(args: AddEntryArgs): void {
 }
 
 /** The project `args.project` names, or null; an unknown one throws ProjectNotFoundError listing the known codes. */
-function resolveProjectArg(db: DB, args: AddEntryArgs): Project | null {
-  if (args.project === undefined || args.project === null || args.project === "") return null;
+function resolveProjectArg(db: DB, args: AddEntryArgs, withFolder = false): Project | null {
+  if (args.project === undefined) return defaultProject(db, args, withFolder);
+  if (args.project === null || args.project === "") return null;
   if (args.project.trim().toLowerCase() === "none") return null;
   const p = findProject(db, args.project);
   if (!p) throw notFound(db, args.project);
   if (isLeftProject(p)) throw leftProjectError(p); // read-only (stage B2, P11)
   return p;
+}
+
+/**
+ * The project of a note that names none: the bound project of its PRIMARY
+ * module, then (withFolder: addEntryAsync only) the folder's .collab project,
+ * else none (E). The binding beats the folder; a bound left team fails loudly.
+ */
+function defaultProject(db: DB, args: AddEntryArgs, withFolder: boolean): Project | null {
+  const bound = boundProjectFor(db, args.module);
+  if (bound) {
+    if (isLeftProject(bound)) throw leftProjectError(bound);
+    return bound;
+  }
+  return withFolder ? currentProject(db) : null;
 }
 
 export function addEntry(
@@ -259,11 +276,8 @@ function reasonOf(e: unknown): string {
 export async function addEntryAsync(db: DB, args: AddEntryArgs): Promise<AddEntryResult> {
   ensureCrsqlite(db);
   validateAddEntryArgs(args);
-  if (args.project === undefined) {
-    const cur = currentProject(db);
-    if (cur) args = { ...args, project: cur.ulid };
-  }
-  const project = resolveProjectArg(db, args);
+  const project = resolveProjectArg(db, args, true);
+  if (args.project === undefined) args = { ...args, project: project ? project.ulid : "none" };
   if (project && !isTeamProject(project)) return addEntry(db, args); // solo: never the office (rule 4)
   if (!project && !isSyncEnabled(db)) return addEntry(db, args);      // unshared notebook: as today
   const series = project ? project.code : "E";
