@@ -8,6 +8,7 @@ import { hasSeries, hasProjectLeft } from "../schema.js";
 import { getSyncValue } from "./state.js";
 import { entryUlidOf, type WireChange } from "./changes.js";
 import { SYNC_KEYS } from "./http-allocator.js";
+import { isCopiedToValue } from "../entry-write.js";
 
 // The courier's own sync_state keys (courier/src/keys.ts COURIER_KEYS; core cannot import the courier).
 export const SHARED_KEY = "shared_modules";
@@ -76,6 +77,8 @@ function notePlace(db: DB, ulid: string): NotePlace {
 /**
  * The verdict for one own change. Rules, in order:
  * 0. a pending note that is tombstoned -> skip (it never left this laptop);
+ * 0b. an original's copied_to link (stage B2) -> skip: it points at a copy the
+ *    team never gets (a solo project's note, rule 5);
  * 1. a modules row -> send iff its slug is shared;
  * 2. a change of no note here -> skip;
  * 3. a note in a project: a team project of this office -> pending ? hold : send;
@@ -97,9 +100,16 @@ export function sendVerdictOf(
   }
   const ulid = entryUlidOf(db, w.table, pk);
   if (!ulid) return { ulid: null, verdict: "skip", place: GONE };
+  if (w.table === "refs" && isCopiedToRef(db, pk)) return { ulid, verdict: "skip", place: GONE };
   let place = memo.get(ulid);
   if (!place) { place = notePlace(db, ulid); memo.set(ulid, place); }
   return { ulid, verdict: verdictOf(place, ctx), place };
+}
+
+/** refs pk = (entry_ulid, ref_type, ref_value): a copied_to link has the marker in ref_value. */
+function isCopiedToRef(db: DB, pk: Buffer): boolean {
+  const cells = db.prepare(`SELECT cell FROM crsql_unpack_columns(?)`).all(pk) as Array<{ cell: unknown }>;
+  return cells.length >= 3 && isCopiedToValue(String(cells[2].cell));
 }
 
 function verdictOf(p: NotePlace, ctx: SendContext): SendVerdict {

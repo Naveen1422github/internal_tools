@@ -45,6 +45,15 @@ export interface EntryRowInput {
   project_ulid?: string | null;
 }
 
+/**
+ * An original's link to its copy (stage B2, spec P8): ref_type 'entry',
+ * ref_value 'copied_to:<COPY_ULID>', target_ulid = the copy. ref_type has a
+ * CHECK (file/task/entry/url) on a CRR, so the marker lives in ref_value.
+ * Never sent (send-filter rule 0b): the copy is not the team's.
+ */
+export const COPIED_TO_PREFIX = "copied_to:";
+export const isCopiedToValue = (v: string | null | undefined): boolean => typeof v === "string" && v.startsWith(COPIED_TO_PREFIX);
+
 export interface RefRowInput extends RefInput {
   target_ulid?: string | null;
 }
