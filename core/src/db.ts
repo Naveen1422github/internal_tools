@@ -302,6 +302,7 @@ export const KNOWN_MIGRATIONS: ReadonlySet<string> = new Set([
   "0007_sync_prep",
   "0008_revision_author",
   "0009_projects",
+  "0010_project_left",
 ]);
 
 /**

@@ -17,6 +17,14 @@ export function hasSeries(db: DB): boolean {
   return !!db.prepare(`SELECT 1 FROM pragma_table_info('entries') WHERE name = 'series'`).get();
 }
 
+/**
+ * True once migration 0010 has added `projects.left_at` (stage B2, P11).
+ * Not cached, for the same reason as hasUlidPrimaryKey.
+ */
+export function hasProjectLeft(db: DB): boolean {
+  return !!db.prepare(`SELECT 1 FROM pragma_table_info('projects') WHERE name = 'left_at'`).get();
+}
+
 /** SQL predicate that hides tombstoned entries. Before 0006 there is no deleted_at column. */
 export function liveEntry(db: DB, alias = "e"): string {
   return hasUlidPrimaryKey(db) ? `${alias}.deleted_at IS NULL` : "1 = 1";

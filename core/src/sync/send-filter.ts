@@ -4,7 +4,7 @@
 // disagree. One office per notebook (E-820): a team project of this notebook's
 // office has projects.team = that office's po_fingerprint (E-767).
 import type { DB } from "../db.js";
-import { hasSeries } from "../schema.js";
+import { hasSeries, hasProjectLeft } from "../schema.js";
 import { getSyncValue } from "./state.js";
 import { entryUlidOf, type WireChange } from "./changes.js";
 import { SYNC_KEYS } from "./http-allocator.js";
@@ -48,7 +48,9 @@ export function sendContext(db: DB): SendContext {
   const fingerprint = getSyncValue(db, SYNC_KEYS.fingerprint);
   const teamProjects = new Set<string>();
   if (fingerprint && hasSeries(db)) {
-    for (const r of db.prepare(`SELECT ulid FROM projects WHERE mode = 'team' AND team = ?`).all(fingerprint) as Array<{ ulid: string }>) {
+    // A team project this laptop left (stage B2, P11) is never sent again.
+    const notLeft = hasProjectLeft(db) ? " AND left_at IS NULL" : "";
+    for (const r of db.prepare(`SELECT ulid FROM projects WHERE mode = 'team' AND team = ?${notLeft}`).all(fingerprint) as Array<{ ulid: string }>) {
       teamProjects.add(r.ulid);
     }
   }

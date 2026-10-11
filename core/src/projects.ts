@@ -5,7 +5,7 @@
 // laptop and never sent; team projects arrive with stage C.
 import type { DB } from "./db.js";
 import { collabStartDir, findCollabFile } from "./db.js";
-import { hasSeries } from "./schema.js";
+import { hasSeries, hasProjectLeft } from "./schema.js";
 import { newUlid, SERIES_CODE_RE } from "./ulid.js";
 import { isSyncEnabled } from "./sync/state.js";
 import { postOfficeTargetFromDb } from "./sync/http-allocator.js";
@@ -18,6 +18,8 @@ export interface Project {
   mode: "solo" | "team";
   team: string | null;
   created_at: string;
+  /** A team project this laptop left (stage B2, P11): its notes are read-only. null = not left. */
+  left_at: string | null;
 }
 
 /** A project name or code already used in this notebook (P10: warn, don't mix). */
@@ -35,10 +37,16 @@ export class ProjectNotFoundError extends Error {
   }
 }
 
-const COLS = "ulid, name, code, mode, team, created_at";
+/** The project columns; left_at only exists from 0010 (stage B2). */
+function cols(db: DB): string {
+  return `ulid, name, code, mode, team, created_at, ${hasProjectLeft(db) ? "left_at" : "NULL AS left_at"}`;
+}
 
 /** A team project: numbered only by its post office, sent only there (stage C, rules 4-5). */
 export function isTeamProject(p: Project | null): boolean { return !!p && p.mode === "team"; }
+
+/** A team project this laptop left (stage B2, P11): read-only, never sent, never numbered. */
+export function isLeftProject(p: Project | null): boolean { return !!p && !!p.left_at; }
 
 function needs0009(db: DB): void {
   if (!hasSeries(db)) {
@@ -55,7 +63,7 @@ function checkCode(raw: string): string {
 }
 
 function nameClash(db: DB, name: string, exceptUlid?: string): Project | null {
-  return (db.prepare(`SELECT ${COLS} FROM projects WHERE lower(name) = lower(?) AND ulid IS NOT ?`)
+  return (db.prepare(`SELECT ${cols(db)} FROM projects WHERE lower(name) = lower(?) AND ulid IS NOT ?`)
     .get(name, exceptUlid ?? null) as Project | undefined) ?? null;
 }
 
@@ -84,7 +92,7 @@ function checkNew(db: DB, args: { name: string; code: string }): { name: string;
   if (byName) {
     throw new ProjectClashError(`[collab] this notebook already has a project named "${byName.name}" (${byName.code}). ${FIXES}`);
   }
-  const byCode = db.prepare(`SELECT ${COLS} FROM projects WHERE code = ?`).get(code) as Project | undefined;
+  const byCode = db.prepare(`SELECT ${cols(db)} FROM projects WHERE code = ?`).get(code) as Project | undefined;
   if (byCode) {
     throw new ProjectClashError(`[collab] this notebook already has a project with code ${code} ("${byCode.name}"). ${FIXES}`);
   }
@@ -205,6 +213,24 @@ export function projectClashText(clashes: ProjectClash[]): string {
     .join(" ");
 }
 
+/**
+ * Mark a team project as left (spec P11): its notes stay on this laptop,
+ * read-only and marked "left team", and are never sent or numbered again.
+ * Stage D's leave calls this; marking twice keeps the first time.
+ */
+export function markProjectLeft(db: DB, codeOrUlid: string): Project {
+  needs0009(db);
+  if (!hasProjectLeft(db)) {
+    throw new Error("[collab] leaving a team project needs migration 0010 (project_left). Restart the MCP server (or run `collab web` once): it applies migrations on start.");
+  }
+  const p = findProject(db, codeOrUlid);
+  if (!p) throw notFound(db, codeOrUlid);
+  if (p.mode !== "team") throw new Error(`[collab] ${p.code} is a solo project: only a team project can be left`);
+  if (p.left_at) return p;
+  db.prepare(`UPDATE projects SET left_at = datetime('now'), updated_at = datetime('now') WHERE ulid = ?`).run(p.ulid);
+  return findProject(db, p.ulid)!;
+}
+
 export function renameProject(db: DB, codeOrUlid: string, newName: string): Project {
   needs0009(db);
   const p = findProject(db, codeOrUlid);
@@ -222,14 +248,14 @@ export function renameProject(db: DB, codeOrUlid: string, newName: string): Proj
 /** Every project in this notebook, by name. */
 export function listProjects(db: DB): Project[] {
   needs0009(db);
-  return db.prepare(`SELECT ${COLS} FROM projects ORDER BY lower(name), ulid`).all() as Project[];
+  return db.prepare(`SELECT ${cols(db)} FROM projects ORDER BY lower(name), ulid`).all() as Project[];
 }
 
 /** A project by code (any case) or exact ULID, or null. */
 export function findProject(db: DB, codeOrUlid: string): Project | null {
   needs0009(db);
   const v = String(codeOrUlid ?? "").trim();
-  return (db.prepare(`SELECT ${COLS} FROM projects WHERE code = upper(?) OR ulid = ? LIMIT 1`).get(v, v) as Project | undefined) ?? null;
+  return (db.prepare(`SELECT ${cols(db)} FROM projects WHERE code = upper(?) OR ulid = ? LIMIT 1`).get(v, v) as Project | undefined) ?? null;
 }
 
 /** The error for a project that isn't in this notebook, listing the known codes. */
