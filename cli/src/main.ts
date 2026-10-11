@@ -4,6 +4,7 @@ import type { CliResult, Deps, Io } from "./io.js";
 import { runNotebook } from "./notebook.js";
 import { runDoctor } from "./doctor.js";
 import { runProject } from "./project.js";
+import { runCopy } from "./copy.js";
 
 export type { CliResult, Deps, Io } from "./io.js";
 
@@ -28,6 +29,8 @@ const USAGE = `usage: collab [--notebook <name>] <command>
   collab project rename <code> <new name> rename a project (its code never changes)
   collab project list                     the projects in this notebook (* = this folder's)
   collab project use <code>               make it this folder's project (writes .collab)
+  collab copy --from <module|project> --to <project> [--author me] [--since <date>] [--yes]
+                                          copy notes into a project: lists them, asks, then copies
   collab doctor [--json] [--fix]          check the whole setup and print the fix for each problem
   collab --version`;
 
@@ -78,6 +81,8 @@ export async function main(argv: string[], io: Io, deps: Deps = {}): Promise<Cli
       return runNotebook(rest, io);
     case "project":
       return runProject(rest, io);
+    case "copy":
+      return runCopy(rest, io);
     case "doctor":
       return runDoctor(rest, io, importModule);
     default:

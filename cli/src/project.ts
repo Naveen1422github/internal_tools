@@ -1,8 +1,9 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  closeDb, collabStartDir, createProject, createTeamProject, currentProject, findCollabFile, findProject, getDb, listProjects,
-  notFound, promoteProject, highestNumberOf, renameProject, resolveDbPath, getSyncValue, pendingCounts, SYNC_KEYS, type Project,
+  closeDb, collabStartDir, createProjectOp, currentProject, findCollabFile, findProject, getDb,
+  notFound, promoteProject, highestNumberOf, renameProject, resolveDbPath, getSyncValue, SYNC_KEYS, type Project,
+  projectCreatedLines, projectListLines, projectListRows,
 } from "@collab-mcp/core";
 import type { CliResult, Io } from "./io.js";
 
@@ -70,17 +71,11 @@ export async function runProject(args: string[], io: Io): Promise<CliResult> {
         const [name] = words(opts);
         const code = flag(opts, "--code");
         if (!name || !code) { io.err("usage: collab project create <name> --code <CODE> [--team]"); return { code: 2 }; }
-        if (team) {
-          // Stage C: registered at this notebook's post office first (E-820: any member creates one).
-          const db = getDb();
-          const p = await createTeamProject(db, { name, code });
-          io.out(`Created team project ${p.code} (${p.name}): numbers come from the post office at ${getSyncValue(db, SYNC_KEYS.url)}; with the office down, notes are saved and wait for their number.`);
-          io.out(`Use it in this folder: collab project use ${p.code}`);
-          return { code: 0 };
-        }
-        const p = createProject(getDb(), { name, code });
-        io.out(`Created project ${p.code} (${p.name}), solo: its notes are numbered ${p.code}-1, ${p.code}-2, ... on this computer and never sent.`);
-        io.out(`Use it in this folder: collab project use ${p.code}`);
+        // Team (stage C): registered at this notebook's post office first (E-820: any member creates one).
+        // Same function and words as the MCP tool collab_project_create (stage B2).
+        const db = getDb();
+        const p = await createProjectOp(db, { name, code, team });
+        for (const l of projectCreatedLines(db, p)) io.out(l);
         return { code: 0 };
       }
       case "promote": {
@@ -105,19 +100,11 @@ export async function runProject(args: string[], io: Io): Promise<CliResult> {
         return { code: 0 };
       }
       case "list": {
+        // Same rows and words as the MCP tool collab_project_list (stage B2).
         const db = getDb();
-        const all = listProjects(db);
-        if (!all.length) { io.out("No projects yet. Create one: collab project create <name> --code <CODE>"); return { code: 0 }; }
         let cur: Project | null = null;
         try { cur = currentProject(db); } catch (e) { io.err(`collab: ${(e as Error).message.replace(/^\[collab\] /, "")}`); }
-        const count = db.prepare(`SELECT COUNT(*) n FROM entries WHERE project_ulid = ? AND deleted_at IS NULL`);
-        // Stage C (rule 8): notes still waiting for their number from the post office.
-        const pending = new Map(pendingCounts(db).filter((r) => r.project).map((r) => [r.project as string, r.n]));
-        for (const p of all) {
-          const n = (count.get(p.ulid) as { n: number }).n;
-          const waiting = pending.get(p.ulid) ?? 0;
-          io.out(`${cur?.ulid === p.ulid ? "*" : " "} ${p.code.padEnd(8)} ${p.name.padEnd(24)} ${p.mode.padEnd(5)} ${String(n).padStart(5)} note(s)${waiting ? `, ${waiting} waiting for a number` : ""}`);
-        }
+        for (const l of projectListLines(projectListRows(db, cur))) io.out(l);
         return { code: 0 };
       }
       case "use": {
