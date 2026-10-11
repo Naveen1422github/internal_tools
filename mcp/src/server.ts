@@ -68,6 +68,9 @@ import {
   projectCreatedLines,
   projectListLines,
   projectListRows,
+  bindModule,
+  unbindModule,
+  bindChangeLine,
   type Project,
   type NoteRef,
   type NoteKey,
@@ -431,7 +434,7 @@ server.registerTool(
       project: z
         .string()
         .optional()
-        .describe("Project code (SH) or ULID to write into; 'none' = no project (E series). Omitted = this folder's .collab project."),
+        .describe("Project code (SH) or ULID to write into; 'none' = no project (E series). Explicit beats everything. Omitted = the project the PRIMARY module is bound to (collab_project_bind), else this folder's .collab project, else none."),
     },
     annotations: {
       readOnlyHint: false,
@@ -1455,6 +1458,7 @@ server.registerTool(
     description: [
       "Same as `collab project list`: every project in this notebook with its mode, note count and the notes",
       "waiting for a number. * marks this folder's project (.collab); a team you left is marked read-only.",
+      "'modules: a, b' lists the modules bound to the project (collab_project_bind).",
     ].join("\n"),
     inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -1467,6 +1471,53 @@ server.registerTool(
       const rows = projectListRows(db, cur);
       lines.push(...projectListLines(rows));
       return { content: [{ type: "text", text: lines.join("\n") }], structuredContent: structured({ projects: rows }) };
+    } catch (e) {
+      return toolError(e);
+    }
+  }
+);
+
+server.registerTool(
+  "collab_project_bind",
+  {
+    title: "Bind a module to a project",
+    description: [
+      "Same as `collab project bind <module> <code>`: new notes whose PRIMARY module is <module> go to that project,",
+      "so you never have to pass `project`. The binding is local to this laptop and is never shared with a post office.",
+      "It beats the folder's .collab project; an explicit `project` on collab_add beats it. Re-binding a module replaces",
+      "its old binding. The module must exist; the project must exist and not be a team you left.",
+    ].join("\n"),
+    inputSchema: {
+      module: z.string().min(1).describe("A module slug."),
+      project: z.string().min(1).describe("Project code (SH) or ULID."),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async (args) => {
+    try {
+      const c = bindModule(db, args.module, args.project);
+      return { content: [{ type: "text", text: bindChangeLine(c) }], structuredContent: structured({ binding: c }) };
+    } catch (e) {
+      return toolError(e);
+    }
+  }
+);
+
+server.registerTool(
+  "collab_project_unbind",
+  {
+    title: "Remove a module's project binding",
+    description: [
+      "Same as `collab project unbind <module>`: new notes of that primary module go back to the folder's .collab",
+      "project (or none). The binding is local to this laptop, never shared. Unbinding an unbound module changes nothing.",
+    ].join("\n"),
+    inputSchema: { module: z.string().min(1).describe("A module slug.") },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async (args) => {
+    try {
+      const c = unbindModule(db, args.module);
+      return { content: [{ type: "text", text: bindChangeLine(c) }], structuredContent: structured({ binding: c }) };
     } catch (e) {
       return toolError(e);
     }

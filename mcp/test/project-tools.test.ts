@@ -323,3 +323,30 @@ test('a note of a team you left: get says so, update refuses with the fix, the s
     assert.match(s2.text, /^project: LT Left \(team, left team: read-only\)/);
   });
 });
+
+test('collab_project_bind / unbind: local binding, list shows modules, precedence on collab_add', async () => {
+  await withServer(async ({ call, setProject, sh, dbPath }) => {
+    await call('collab_project_create', { name: 'Navi', code: 'NV' });
+    setProject(sh); // the folder says SH
+    const noBinding = await call('collab_add', { type: 'decision', title: 'unbound', summary: 's', module: 'demo' });
+    assert.equal(noBinding.structured.series, 'SH');
+    const b = await call('collab_project_bind', { module: 'demo', project: 'nv' });
+    assert.equal(b.isError, false, b.text);
+    assert.match(b.text, /Module demo is bound to NV/);
+    assert.deepEqual(b.structured.binding, { module: 'demo', from: null, to: 'NV' });
+    const l = await call('collab_project_list', {});
+    assert.match(l.text, /NV\s+Navi\s+solo\s+0 note\(s\)\s+modules: demo$/m);
+    assert.deepEqual(l.structured.projects.find((p: any) => p.code === 'NV').modules, ['demo']);
+    const bound = await call('collab_add', { type: 'decision', title: 'bound', summary: 's', module: 'demo' });
+    assert.equal(bound.structured.series, 'NV', 'the binding beats the folder');
+    const explicit = await call('collab_add', { type: 'decision', title: 'explicit', summary: 's', module: 'demo', project: 'SH' });
+    assert.equal(explicit.structured.series, 'SH');
+    const none = await call('collab_add', { type: 'decision', title: 'none', summary: 's', module: 'demo', project: 'none' });
+    assert.equal(none.structured.series, 'E');
+    assert.equal((await call('collab_project_bind', { module: 'nope', project: 'NV' })).isError, true);
+    assert.equal((await call('collab_project_bind', { module: 'demo', project: 'ZZ' })).isError, true);
+    const u = await call('collab_project_unbind', { module: 'demo' });
+    assert.match(u.text, /no longer bound to NV/);
+    assert.equal((await call('collab_add', { type: 'decision', title: 'back', summary: 's', module: 'demo' })).structured.series, 'SH');
+  });
+});
