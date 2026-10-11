@@ -16,6 +16,8 @@ export * from './ops/rollup.js';
 export * from './ops/ingest.js';
 export * from './ops/export.js';
 export * from './ops/savings.js';
+export * from './ops/copy.js';
+export * from './ops/project.js';
 export * from './constants.js';
 export * from './validate.js';
 export * from './ulid.js';

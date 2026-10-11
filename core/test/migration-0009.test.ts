@@ -24,7 +24,7 @@ const OUR_TRIGGERS = [
 test('fresh notebook: projects table, entries.series/project_ulid, dispatches.entry_ulid, latest = 0009', () => {
   const t = freshDb();
   try {
-    migrate(t.db);
+    migrateTo(t.db, '0009'); // 0009 itself (0010 adds projects.left_at: project-left.test.ts)
     assert.equal(latestMigration(t.db), '0009_projects');
     assert.deepEqual(cols(t.db, 'projects').map((c) => c.name).sort(),
       ['code', 'created_at', 'mode', 'name', 'team', 'ulid', 'updated_at']);
@@ -45,7 +45,7 @@ test('a 0008 notebook with 3 notes migrates: every note is series E, no project,
     migrateTo(t.db, '0008');
     assert.equal(hasSeries(t.db), false);
     const ids = [0, 1, 2].map((i) => addEntry(t.db, { type: 'decision', title: `old ${i}`, summary: 's', description: `pumpkin ${i}`, module: 'm' }).id);
-    migrate(t.db);
+    migrateTo(t.db, '0009');
     assert.equal(latestMigration(t.db), '0009_projects');
     const rows = t.db.prepare(`SELECT series, project_ulid FROM entries`).all() as Array<{ series: string; project_ulid: string | null }>;
     assert.equal(rows.length, 3);
@@ -62,7 +62,7 @@ test('a SYNC-ENABLED 0008 notebook migrates: no tracked change, our triggers pre
     migrateTo(t.db, '0008');
     for (let i = 0; i < 3; i++) await addEntryAsync(t.db, { type: 'decision', title: `n ${i}`, summary: 's', module: 'm' });
     const v0 = dbVersion(t.db);
-    migrate(t.db);
+    migrateTo(t.db, '0009');
     assert.equal(latestMigration(t.db), '0009_projects');
     assert.equal(dbVersion(t.db), v0, 'the migration itself writes no tracked change (S3-1)');
     for (const n of OUR_TRIGGERS) assert.ok(trigger(t.db, n), `trigger ${n}`);

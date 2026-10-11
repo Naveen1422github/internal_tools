@@ -58,6 +58,17 @@ import {
   pendingCounts,
   readSyncOverview,
   currentProject,
+  findProject,
+  hasProjectLeft,
+  planCopy,
+  applyCopy,
+  copyPlanLines,
+  copyResultLines,
+  createProjectOp,
+  projectCreatedLines,
+  projectListLines,
+  projectListRows,
+  type Project,
   type NoteRef,
   type NoteKey,
 } from "@collab-mcp/core";
@@ -185,8 +196,10 @@ function officeState(): string {
 function statusLine(): string {
   return statusFor(currentProject(db));
 }
-function statusFor(p: { code: string; name: string; mode: string } | null): string {
+function statusFor(p: { code: string; name: string; mode: string; left_at?: string | null } | null): string {
   const pending = pendingCounts(db);
+  // Stage B2 (P11): a team this laptop left is read-only; no office, nothing waits.
+  if (p && p.left_at) return `project: ${p.code} ${p.name} (team, left team: read-only)`;
   if (p && p.mode === "team") {
     const n = pending.filter((r) => r.series === p.code).reduce((a, r) => a + r.n, 0);
     return `project: ${p.code} ${p.name} (team, ${officeState()}, ${n} pending)`;
@@ -1352,6 +1365,115 @@ server.registerTool(
 );
 
 // ------------------------------------------------------------
+// Copy and projects (stage B2, user decision 2026-10-11: an AI agent can do
+// anything the CLI can). Each tool calls the same core function as its CLI
+// command and prints the same lines; only the next-step hint differs.
+// ------------------------------------------------------------
+/** A refusal, worded as the CLI words it (without the `collab:` prefix). */
+const toolError = (e: unknown) => ({
+  content: [{ type: "text" as const, text: (e as Error).message.replace(/^\[collab(-mcp)?\] /, "") }],
+  isError: true,
+});
+
+server.registerTool(
+  "collab_copy",
+  {
+    title: "Copy notes into a project",
+    description: [
+      "Same as `collab copy --from <module|project> --to <project> [--author me] [--since <date>]` (spec P8).",
+      "Copies notes into a project: each copy is a NEW note (new ULID) numbered by the target project",
+      "(solo: on this laptop, never sent; team: by its post office). Links between the copied notes point at",
+      "the copies; each original gets one copied_to link and is otherwise untouched; text mentions are not rewritten.",
+      "",
+      "dry_run defaults to TRUE: the answer is the list of what would be copied, and nothing is written.",
+      "Show the list to the user; call again with dry_run: false only once they agree. The answer then says",
+      "exactly what changed (each old -> new number). Copying a team you left into a solo project makes the notes editable.",
+    ].join("\n"),
+    inputSchema: {
+      from: z.string().min(1).describe("A module slug (its E notes) or a project code/ULID. 'module:<slug>' / 'project:<code>' when a name is both."),
+      to: z.string().min(1).describe("The target project's code or ULID."),
+      author: z.string().optional().describe("'me' = only this machine's author's notes; or an author name."),
+      since: z.string().optional().describe("YYYY-MM-DD: only notes created on or after this date."),
+      dry_run: z.boolean().optional().describe("Default true: list only. false: perform the copy."),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async (args) => {
+    try {
+      const plan = planCopy(db, { from: args.from, to: args.to, author: args.author, since: args.since });
+      const status = statusFor(findProject(db, plan.target.ulid));
+      if (args.dry_run !== false || plan.items.length === 0) {
+        const lines = copyPlanLines(plan);
+        if (plan.items.length) lines.push("Nothing copied yet: call collab_copy again with dry_run: false to copy these notes.");
+        // dry_run false with nothing to copy: the same answer as the CLI (the list), and it says nothing was copied.
+        const what = args.dry_run === false ? { dry_run: false, copied: [], plan } : { dry_run: true, plan };
+        return { content: [{ type: "text", text: [status, ...lines].join("\n") }], structuredContent: structured(what) };
+      }
+      const result = await applyCopy(db, plan);
+      return {
+        content: [{ type: "text", text: [statusFor(findProject(db, plan.target.ulid)), ...copyResultLines(result)].join("\n") }],
+        structuredContent: structured({ dry_run: false, result }),
+      };
+    } catch (e) {
+      return toolError(e);
+    }
+  }
+);
+
+server.registerTool(
+  "collab_project_create",
+  {
+    title: "Create a project",
+    description: [
+      "Same as `collab project create <name> --code <CODE> [--team]` (spec P2).",
+      "A project numbers its own notes: CODE-1, CODE-2. Solo (default): numbered on this laptop and never sent.",
+      "team: true registers it at this notebook's post office first (the notebook must be shared); the office numbers",
+      "its notes and shares them with the team. The code (2-8 letters/digits, starting with a letter, not E) never changes.",
+      "Does not switch this folder to the project: that is `collab project use <code>`.",
+    ].join("\n"),
+    inputSchema: {
+      name: z.string().min(1),
+      code: z.string().min(1).describe("2-8 letters or digits, starting with a letter (e.g. SH); not E."),
+      team: z.boolean().optional().describe("true: a team project (needs a shared notebook). Default: solo."),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  async (args) => {
+    try {
+      const p = await createProjectOp(db, { name: args.name, code: args.code, team: args.team === true });
+      return { content: [{ type: "text", text: projectCreatedLines(db, p).join("\n") }], structuredContent: structured({ project: p }) };
+    } catch (e) {
+      return toolError(e);
+    }
+  }
+);
+
+server.registerTool(
+  "collab_project_list",
+  {
+    title: "List the projects",
+    description: [
+      "Same as `collab project list`: every project in this notebook with its mode, note count and the notes",
+      "waiting for a number. * marks this folder's project (.collab); a team you left is marked read-only.",
+    ].join("\n"),
+    inputSchema: {},
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async () => {
+    try {
+      let cur: Project | null = null;
+      const lines: string[] = [];
+      try { cur = currentProject(db); } catch (e) { lines.push(`collab: ${(e as Error).message.replace(/^\[collab\] /, "")}`); }
+      const rows = projectListRows(db, cur);
+      lines.push(...projectListLines(rows));
+      return { content: [{ type: "text", text: lines.join("\n") }], structuredContent: structured({ projects: rows }) };
+    } catch (e) {
+      return toolError(e);
+    }
+  }
+);
+
+// ------------------------------------------------------------
 // Formatters
 // ------------------------------------------------------------
 function formatSearchResult(r: { results: any[]; auto_expanded: boolean; total_tokens: number }): string {
@@ -1359,14 +1481,23 @@ function formatSearchResult(r: { results: any[]; auto_expanded: boolean; total_t
   const header = r.auto_expanded
     ? `Found ${r.results.length} result(s) - auto-expanded (${r.total_tokens} tokens).`
     : `Found ${r.results.length} result(s) - summaries only. Call collab.get(id) for full bodies.`;
+  const left = leftCodes();
   const lines = r.results.map((e) => {
-    const head = `[${formatEntryRef(e.id, e.series)}] ${e.type} - ${e.title}`;
+    const head = `[${formatEntryRef(e.id, e.series)}] ${e.type} - ${e.title}${e.series && left.has(e.series) ? LEFT_MARK : ""}`;
     const body = r.auto_expanded && e.description
       ? `  ${e.summary}\n  ---\n  ${e.description.slice(0, 800)}${e.description.length > 800 ? "..." : ""}`
       : `  ${e.summary}`;
     return `${head}\n${body}`;
   });
   return `${header}\n\n${lines.join("\n\n")}`;
+}
+
+const LEFT_MARK = " (left team, read-only)";
+
+/** Codes of the team projects this laptop left (stage B2, P11): their notes are marked read-only. */
+function leftCodes(): Set<string> {
+  if (!hasProjectLeft(db)) return new Set();
+  return new Set((db.prepare(`SELECT code FROM projects WHERE left_at IS NOT NULL`).all() as Array<{ code: string }>).map((r) => r.code));
 }
 
 function formatTaskMatches(
@@ -1401,9 +1532,10 @@ function formatEntry(e: {
   superseded_target?: { id: number | null; present: boolean; series?: string } | null;
   series?: string;
   tokens_estimate: number; created_at: string;
-  refs: Array<{ ref_type: string; ref_value: string }>;
+  left_team?: true;
+  refs: Array<{ ref_type: string; ref_value: string; copied_to?: true; target?: { id: number | null; series?: string; present: boolean; ulid: string } | null }>;
 }): string {
-  const head = `[${formatEntryRef(e.id, e.series)}${e.id === null && e.ulid ? ` ${e.ulid}` : ""}] ${e.type} - ${e.title}`;
+  const head = `[${formatEntryRef(e.id, e.series)}${e.id === null && e.ulid ? ` ${e.ulid}` : ""}] ${e.type} - ${e.title}${e.left_team ? LEFT_MARK : ""}`;
   const moduleBit =
     e.modules && e.modules.length > 0
       ? `modules=${e.modules.join(",")}`
@@ -1423,9 +1555,15 @@ function formatEntry(e: {
   const meta = metaBits.join(" | ");
   const body = e.description ?? "(no description)";
   const refs = e.refs.length
-    ? "\n\nRefs:\n" + e.refs.map((r) => `  - ${r.ref_type}: ${r.ref_value}`).join("\n")
+    ? "\n\nRefs:\n" + e.refs.map((r) => (r.copied_to ? `  - ${copiedToLabel(r.target)}` : `  - ${r.ref_type}: ${r.ref_value}`)).join("\n")
     : "";
   return `${head}\n  ${meta}\n\n  ${e.summary}\n  ---\n${body}${refs}`;
+}
+
+/** An original's link to its copy (stage B2, P8). */
+function copiedToLabel(t: { id: number | null; series?: string; present: boolean; ulid: string } | null | undefined): string {
+  if (!t || !t.present) return `copied to ${t?.ulid ?? "?"} (not on this laptop)`;
+  return `copied to ${formatEntryRef(t.id, t.series ?? "E")}${t.id === null ? ` (${t.ulid})` : ""}`;
 }
 
 // ------------------------------------------------------------

@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { createSocket, type Socket } from "node:dgram";
 import {
   loadCrsqlite, isCrsqliteLoaded, isSyncEnabled, getSyncValue, setSyncValue, postOfficeTargetFromDb,
-  readOwnChanges, decodeChange, applyChanges, reindexFts, requestJson, openEventStream, hasSeries,
+  readOwnChanges, decodeChange, applyChanges, reindexFts, requestJson, openEventStream, hasSeries, hasProjectLeft,
   sendContext, sendVerdictOf, resolveAllocator, allocateWithRetry, formatEntryRef,
   upsertTeamProjectFromOffice, localClashOf, projectClashText, assignPendingNumber,
   AccessRevokedError, SchemaMismatchError, PinMismatchError, COURIER_PORT_KEY,
@@ -304,8 +304,8 @@ export class Courier {
       ? this.db.prepare(
           `SELECT e.ulid, e.series FROM entries e LEFT JOIN projects p ON p.ulid = e.project_ulid
             WHERE e.id IS NULL AND e.deleted_at IS NULL
-              AND (e.project_ulid IS NULL OR (p.mode = 'team' AND p.team = ?))
-            ORDER BY e.ulid`,
+              AND (e.project_ulid IS NULL OR (p.mode = 'team' AND p.team = ?${hasProjectLeft(this.db) ? " AND p.left_at IS NULL" : ""}))
+            ORDER BY e.ulid`, // a team this laptop left is never numbered again (stage B2, P11)
         ).all(this.target.fingerprint)
       : this.db.prepare(`SELECT ulid, 'E' AS series FROM entries WHERE id IS NULL AND deleted_at IS NULL ORDER BY ulid`).all()
     ) as Array<{ ulid: string; series: string }>;

@@ -2,7 +2,7 @@ import type { DB } from "../db.js";
 import { collabStartDir, findCollabFile } from "../db.js";
 import { parseEntryRef } from "../ulid.js";
 import { getHubStatus, IMPORTANT_TYPES } from "./hub.js";
-import { hasSeries, liveEntry } from "../schema.js";
+import { hasProjectLeft, hasSeries, liveEntry } from "../schema.js";
 import { currentProject, projectClashText, type ProjectClash } from "../projects.js";
 import { pendingCounts } from "../sync/overview.js";
 import { PROJECT_CLASH_KEY } from "../sync/send-filter.js";
@@ -614,7 +614,8 @@ export function doctor(db: DB, opts: { cwd?: string; env?: NodeJS.ProcessEnv } =
 
 /**
  * projects.current / projects.orphan_notes / projects.series_mismatch (stage B1);
- * projects.pending / projects.team_office / projects.clash (stage C, rule 8).
+ * projects.pending / projects.team_office / projects.clash (stage C, rule 8);
+ * projects.left (stage B2, P11).
  */
 function projectChecks(db: DB, opts: { cwd?: string; env?: NodeJS.ProcessEnv }): DoctorCheck[] {
   const out: DoctorCheck[] = [];
@@ -675,7 +676,9 @@ function projectChecks(db: DB, opts: { cwd?: string; env?: NodeJS.ProcessEnv }):
   // One office per notebook (E-820): a team project names its office by fingerprint.
   let fingerprint: string | null = null;
   try { fingerprint = getSyncValue(db, SYNC_KEYS.fingerprint); } catch { fingerprint = null; }
-  const teams = db.prepare(`SELECT code, team FROM projects WHERE mode = 'team' ORDER BY code`).all() as Array<{ code: string; team: string | null }>;
+  // A team this laptop left is not an office problem: projects.left explains it.
+  const notLeft = hasProjectLeft(db) ? " AND left_at IS NULL" : "";
+  const teams = db.prepare(`SELECT code, team FROM projects WHERE mode = 'team'${notLeft} ORDER BY code`).all() as Array<{ code: string; team: string | null }>;
   const foreign = teams.filter((t) => !fingerprint || t.team !== fingerprint);
   out.push({
     name: "projects.team_office",
@@ -694,6 +697,27 @@ function projectChecks(db: DB, opts: { cwd?: string; env?: NodeJS.ProcessEnv }):
     severity: clashes.length > 0 ? "error" : "ok",
     detail: clashes.length > 0 ? projectClashText(clashes) : "no team project clashes with a local one",
     items: clashes.length > 0 ? clashes.map((c) => c.code) : undefined,
+  });
+
+  // Stage B2 (P11): a team this laptop left keeps its notes, read-only.
+  const left = hasProjectLeft(db)
+    ? db.prepare(
+        `SELECT p.code, p.name,
+                (SELECT COUNT(*) FROM entries e WHERE e.project_ulid = p.ulid AND e.deleted_at IS NULL) AS n,
+                (SELECT COUNT(*) FROM entries e WHERE e.project_ulid = p.ulid AND e.deleted_at IS NULL AND e.id IS NULL) AS unnumbered
+           FROM projects p WHERE p.left_at IS NOT NULL ORDER BY p.code`,
+      ).all() as Array<{ code: string; name: string; n: number; unnumbered: number }>
+    : [];
+  out.push({
+    name: "projects.left",
+    severity: left.length > 0 ? "warn" : "ok",
+    detail: left.length > 0
+      ? left.map((l) =>
+          `${l.code} (${l.name}): you left this team; its ${l.n} note${l.n === 1 ? " is" : "s are"} read-only` +
+          `${l.unnumbered ? ` (${l.unnumbered} never got a number)` : ""}. ` +
+          `To edit them, copy them into a solo project: collab copy --from ${l.code} --to <solo code>`).join("; ")
+      : "no team you left",
+    items: left.length > 0 ? left.map((l) => l.code) : undefined,
   });
   return out;
 }

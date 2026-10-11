@@ -7,6 +7,7 @@ import { snapshotForRevision, finishRevision } from "../revisions.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { assertHeads, NeedsMergeError } from "./merge.js";
 import { formatEntryRef } from "../entry-ref.js";
+import { assertNoteWritable } from "../projects.js";
 
 // ------------------------------------------------------------
 // Types
@@ -85,6 +86,7 @@ export function updateEntry(db: DB, args: UpdateEntryArgs): UpdateEntryResult {
   if (hasUlidPrimaryKey(db)) {
     const owner = args.ulid !== undefined ? ownerOfUlid(db, args.ulid) : ownerOfRef(db, { series, id: args.id as number });
     if (!owner) throw new Error(`no entry found with id ${label}`);
+    assertNoteWritable(db, owner.ulid); // a left team's note is read-only (stage B2, P11)
     params.ulid = owner.ulid as string;
     ownerId = owner.id;
     where = "ulid = @ulid";
@@ -115,6 +117,7 @@ export function resolveNeedsMerge(db: DB, id: number, expectedHeads: string[]): 
   ensureCrsqlite(db);
   const owner = ownerOf(db, id);
   if (!owner || !owner.ulid) throw new Error(`no entry found with id ${id}`);
+  assertNoteWritable(db, owner.ulid);
   db.transaction(() => {
     const before = snapshotForRevision(db, owner.ulid as string);
     if (!before || before.needs_merge !== 1) throw new Error(`${formatEntryRef(id)} is not waiting for a merge`);
@@ -171,6 +174,7 @@ export function updateEntryRefs(db: DB, args: UpdateEntryRefsArgs): UpdateEntryR
   if (!owner) {
     throw new Error(`no entry found with id ${args.ulid ?? (series === "E" ? args.id : formatEntryRef(args.id, series))}`);
   }
+  assertNoteWritable(db, owner.ulid);
 
   const added: RefInput[] = [];
   const removed: RefInput[] = [];

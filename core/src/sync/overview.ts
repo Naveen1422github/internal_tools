@@ -7,7 +7,7 @@ import { ensureCrsqlite } from "./extension.js";
 import { courierDir as defaultCourierDir, courierFiles } from "./courier-paths.js";
 import { SYNC_KEYS } from "./http-allocator.js";
 import { SHARED_KEY, SENT_KEY, sendContext, sendVerdictOf, type NotePlace } from "./send-filter.js";
-import { hasSeries, hasUlidPrimaryKey } from "../schema.js";
+import { hasProjectLeft, hasSeries, hasUlidPrimaryKey } from "../schema.js";
 
 // What the web UI's status bar shows (spec part 2, V1): read from THIS laptop
 // only. Never returns the device key or any sync_state value not listed below.
@@ -62,9 +62,15 @@ export function unsentSharedCount(db: DB): number {
  */
 export function pendingCounts(db: DB): Array<{ series: string; project: string | null; n: number }> {
   if (!hasUlidPrimaryKey(db)) return [];
+  // A left team project's pending notes will never be numbered (stage B2, P11):
+  // doctor names them (projects.left); they are not "waiting".
+  const leftOut = hasProjectLeft(db)
+    ? ` AND (project_ulid IS NULL OR project_ulid NOT IN (SELECT ulid FROM projects WHERE left_at IS NOT NULL))`
+    : "";
   return db.prepare(
     hasSeries(db)
-      ? `SELECT series, project_ulid AS project, COUNT(*) AS n FROM entries WHERE id IS NULL AND deleted_at IS NULL GROUP BY series, project_ulid ORDER BY series, project_ulid`
+      ? `SELECT series, project_ulid AS project, COUNT(*) AS n FROM entries WHERE id IS NULL AND deleted_at IS NULL${leftOut}
+          GROUP BY series, project_ulid ORDER BY series, project_ulid`
       : `SELECT 'E' AS series, NULL AS project, COUNT(*) AS n FROM entries WHERE id IS NULL AND deleted_at IS NULL HAVING COUNT(*) > 0`,
   ).all() as Array<{ series: string; project: string | null; n: number }>;
 }

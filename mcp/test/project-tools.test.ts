@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import { migrate, addEntry, createProject, addNotebook, initModule, enableSync, setSyncValue } from '@collab-mcp/core';
+import { migrate, addEntry, createProject, addNotebook, initModule, enableSync, setSyncValue, planCopy, copyPlanLines, markProjectLeft, projectListLines, projectListRows, findProject, projectCreatedLines } from '@collab-mcp/core';
 
 const SERVER = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'server.js');
 
@@ -229,5 +229,97 @@ test('pending notes by ULID: get, update, update_refs and supersede take the ULI
     const missingUpd = await call('collab_update', { id: '01J0000000000000000000000Z', summary: 'x' });
     assert.equal(missingUpd.isError, true);
     assert.match(missingUpd.text, /no entry found/);
+  });
+});
+
+// ---- Stage B2: collab_copy, collab_project_create, collab_project_list (user decision 2026-10-11) ----
+
+/** A short-lived second connection to the server's notebook (the server re-reads on every call). */
+function withDb<T>(dbPath: string, fn: (db: Database.Database) => T): T {
+  const db = new Database(dbPath);
+  try { return fn(db); } finally { try { db.prepare('SELECT crsql_finalize()').get(); } catch { /* not loaded */ } db.close(); }
+}
+
+test('collab_copy: dry run (the default) lists exactly the CLI lines and writes nothing; dry_run false copies', async () => {
+  await withServer(async ({ dbPath, call }) => {
+    withDb(dbPath, (db) => createProject(db, { name: 'Navi', code: 'NV' }));
+    const expected = withDb(dbPath, (db) => copyPlanLines(planCopy(db, { from: 'demo', to: 'NV' })));
+    const count = () => withDb(dbPath, (db) => (db.prepare(`SELECT COUNT(*) n FROM entries`).get() as { n: number }).n);
+    const before = count();
+    const dry = await call('collab_copy', { from: 'demo', to: 'NV' });
+    assert.equal(dry.isError, false, dry.text);
+    const lines = dry.text.split('\n');
+    assert.equal(lines[0], 'project: NV Navi (solo)', 'status line of the target');
+    assert.deepEqual(lines.slice(1, 1 + expected.length), expected, 'the same lines as `collab copy`');
+    assert.equal(lines.at(-1), 'Nothing copied yet: call collab_copy again with dry_run: false to copy these notes.');
+    assert.equal(dry.structured.dry_run, true);
+    assert.deepEqual(dry.structured.plan.items.map((i: any) => i.ref), ['E-00001']);
+    assert.equal(count(), before, 'a dry run writes nothing');
+
+    const done = await call('collab_copy', { from: 'demo', to: 'NV', dry_run: false });
+    assert.equal(done.isError, false, done.text);
+    assert.match(done.text, /^project: NV Navi \(solo\)\nCopied 1 note from module demo \(E notes\) into NV \(Navi, solo\):\n {2}E-00001 -> NV-1\n/);
+    assert.equal(done.structured.result.copied[0].to, 'NV-1');
+    assert.equal(count(), before + 1);
+    const orig = await call('collab_get', { id: 1 });
+    assert.match(orig.text, /copied to NV-1/);
+
+    const again = await call('collab_copy', { from: 'demo', to: 'NV', dry_run: false });
+    assert.equal(again.isError, false, again.text);
+    assert.match(again.text, /already copied to NV-1/);
+    assert.equal(again.structured.dry_run, false);
+    assert.deepEqual(again.structured.copied, []);
+    assert.equal(count(), before + 1, 'nothing left to copy: nothing written');
+  });
+});
+
+test('collab_copy refusals are tool errors with the CLI sentence', async () => {
+  await withServer(async ({ call }) => {
+    const r = await call('collab_copy', { from: 'demo', to: 'ZZ' });
+    assert.equal(r.isError, true);
+    assert.match(r.text, /^no project "ZZ" in this notebook\. Known: SH\./);
+  });
+});
+
+test('collab_project_create and collab_project_list print what the CLI prints', async () => {
+  await withServer(async ({ dbPath, call }) => {
+    const c = await call('collab_project_create', { name: 'Navi', code: 'nv' });
+    assert.equal(c.isError, false, c.text);
+    const nv = withDb(dbPath, (db) => findProject(db, 'NV')!);
+    assert.equal(c.text, withDb(dbPath, (db) => projectCreatedLines(db, nv)).join('\n'));
+    assert.equal(c.structured.project.code, 'NV');
+    const l = await call('collab_project_list', {});
+    assert.equal(l.isError, false, l.text);
+    assert.equal(l.text, withDb(dbPath, (db) => projectListLines(projectListRows(db, null))).join('\n'));
+    assert.match(l.text, /NV\s+Navi\s+solo\s+0 note\(s\)/);
+    assert.deepEqual(l.structured.projects.map((p: any) => p.code).sort(), ['NV', 'SH']);
+    const clash = await call('collab_project_create', { name: 'navi', code: 'XY' });
+    assert.equal(clash.isError, true);
+    assert.match(clash.text, /already has a project named "Navi".*rename/);
+    const team = await call('collab_project_create', { name: 'Team', code: 'TM', team: true });
+    assert.equal(team.isError, true);
+    assert.match(team.text, /share this notebook first/);
+  });
+});
+
+test('a note of a team you left: get says so, update refuses with the fix, the status line says read-only', async () => {
+  await withServer(async ({ dbPath, call, setProject }) => {
+    const ulid = '01JPR0JECTLT00000000000000';
+    withDb(dbPath, (db) => {
+      db.prepare(`INSERT INTO projects (ulid, name, code, mode, team) VALUES (?, 'Left', 'LT', 'team', 'fp')`).run(ulid);
+      addEntry(db, { type: 'decision', title: 'left one', summary: 's', project: 'LT', assigned: { ulid: '01K00000000000000000000001', id: 1 } });
+      markProjectLeft(db, 'LT');
+    });
+    const g = await call('collab_get', { id: 'LT-1' });
+    assert.equal(g.isError, false, g.text);
+    assert.match(g.text, /\[LT-1\] decision - left one \(left team, read-only\)/);
+    const u = await call('collab_update', { id: 'LT-1', title: 'x' });
+    assert.equal(u.isError, true);
+    assert.match(u.text, /LT-1 is a note of LT \(Left\), a team you left: it is read-only\. To edit it, copy it into a solo project: collab copy --from LT --to <solo code>/);
+    const s = await call('collab_search', { query: 'left', scope: 'all' });
+    assert.match(s.text, /\[LT-1\] decision - left one \(left team, read-only\)/);
+    setProject(ulid);
+    const s2 = await call('collab_search', { query: 'left' });
+    assert.match(s2.text, /^project: LT Left \(team, left team: read-only\)/);
   });
 });

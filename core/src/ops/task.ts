@@ -1,5 +1,5 @@
 import type { DB } from "../db.js";
-import { hasSeries, liveEntry } from "../schema.js";
+import { hasProjectLeft, hasSeries, liveEntry } from "../schema.js";
 import type { Agent } from "./add.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 
@@ -122,6 +122,10 @@ export function transitionTask(
     throw new Error(`illegal transition ${row.status} -> ${to} for task ${id}`);
   }
 
+  // A left team's notes are read-only (stage B2, P11): the cascade passes them by.
+  const leftOut = hasProjectLeft(db)
+    ? "\n          AND (project_ulid IS NULL OR project_ulid NOT IN (SELECT ulid FROM projects WHERE left_at IS NOT NULL))"
+    : "";
   const tx = db.transaction(() => {
     db.prepare(`UPDATE tasks SET status = ? WHERE id = ?`).run(to, id);
     // Cascade: on done, active handoffs and reviews for this task become 'resolved'.
@@ -132,7 +136,7 @@ export function transitionTask(
         SET status = 'resolved'
         WHERE task_id = ?
           AND status = 'active'
-          AND type IN ('handoff', 'review')
+          AND type IN ('handoff', 'review')${leftOut}
       `
       ).run(id);
     }

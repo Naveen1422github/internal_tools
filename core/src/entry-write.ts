@@ -45,6 +45,15 @@ export interface EntryRowInput {
   project_ulid?: string | null;
 }
 
+/**
+ * An original's link to its copy (stage B2, spec P8): ref_type 'entry',
+ * ref_value 'copied_to:<COPY_ULID>', target_ulid = the copy. ref_type has a
+ * CHECK (file/task/entry/url) on a CRR, so the marker lives in ref_value.
+ * Never sent (send-filter rule 0b): the copy is not the team's.
+ */
+export const COPIED_TO_PREFIX = "copied_to:";
+export const isCopiedToValue = (v: string | null | undefined): boolean => typeof v === "string" && v.startsWith(COPIED_TO_PREFIX);
+
 export interface RefRowInput extends RefInput {
   target_ulid?: string | null;
 }
@@ -134,7 +143,10 @@ export function insertEntryRow(db: DB, row: EntryRowInput): InsertedEntry {
  */
 function ulidTarget(db: DB, r: RefRowInput): string | null {
   if (r.ref_type !== "entry" || typeof r.ref_value !== "string") return null;
-  const v = r.ref_value.trim().toUpperCase();
+  // A copied_to link written back without its target (an edit that replaces
+  // every ref, stage B2) keeps pointing at its copy.
+  const raw = isCopiedToValue(r.ref_value) ? r.ref_value.slice(COPIED_TO_PREFIX.length) : r.ref_value;
+  const v = raw.trim().toUpperCase();
   if (!isUlid(v)) return null;
   return db.prepare(`SELECT 1 FROM entries WHERE ulid = ?`).get(v) ? v : null;
 }
