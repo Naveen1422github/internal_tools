@@ -10,6 +10,7 @@ import { newUlid, SERIES_CODE_RE } from "./ulid.js";
 import { isSyncEnabled } from "./sync/state.js";
 import { postOfficeTargetFromDb } from "./sync/http-allocator.js";
 import { requestJson, type PostOfficeTarget } from "./sync/http.js";
+import { formatEntryRef } from "./entry-ref.js";
 
 export interface Project {
   ulid: string;
@@ -65,6 +66,42 @@ function checkCode(raw: string): string {
 function nameClash(db: DB, name: string, exceptUlid?: string): Project | null {
   return (db.prepare(`SELECT ${cols(db)} FROM projects WHERE lower(name) = lower(?) AND ulid IS NOT ?`)
     .get(name, exceptUlid ?? null) as Project | undefined) ?? null;
+}
+
+/** A note of a team this laptop left (stage B2, P11): read-only; copying it into a solo project makes it editable. */
+export class ReadOnlyNoteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReadOnlyNoteError";
+  }
+}
+
+const copyFix = (code: string) => `copy it into a solo project: collab copy --from ${code} --to <solo code>`;
+
+/**
+ * THE read-only check (spec P11): every note writer calls it before writing.
+ * Throws ReadOnlyNoteError for a note of a team project this laptop left.
+ * Before 0010 nothing can be left: a no-op.
+ */
+export function assertNoteWritable(db: DB, ulid: string | null | undefined): void {
+  if (!ulid || !hasProjectLeft(db)) return;
+  const r = db.prepare(
+    `SELECT e.id, e.series, p.code, p.name FROM entries e JOIN projects p ON p.ulid = e.project_ulid
+      WHERE e.ulid = ? AND p.left_at IS NOT NULL`,
+  ).get(ulid) as { id: number | null; series: string; code: string; name: string } | undefined;
+  if (r) {
+    throw new ReadOnlyNoteError(
+      `[collab] ${formatEntryRef(r.id, r.series)} is a note of ${r.code} (${r.name}), a team you left: it is read-only. To edit it, ${copyFix(r.code)}`,
+    );
+  }
+}
+
+/** The refusal for a new note into a left project. */
+export function leftProjectError(p: Project): ReadOnlyNoteError {
+  return new ReadOnlyNoteError(
+    `[collab] ${p.code} (${p.name}) is a team you left: its notes are read-only and no note can be added to it. ` +
+      `Write into another project (collab project use <code>), or ${copyFix(p.code).replace(" it ", " its notes ")}`,
+  );
 }
 
 const FIXES = "Fix: rename one of them (`collab project rename <code> <new name>`), or use a different notebook.";

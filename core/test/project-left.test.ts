@@ -87,3 +87,83 @@ test('a left team project is never sent, never waiting, never counted pending', 
     assert.equal(pendingCounts(t.db).find((r) => r.series === 'SH'), undefined, 'a left pending note will never be numbered: not counted');
   } finally { t.cleanup(); }
 });
+
+// ---- read-only notes of a left team (Task 3) ----
+import { updateEntry, updateEntryRefs } from '../src/ops/update.js';
+import { editEntry } from '../src/ops/edit.js';
+import { supersede } from '../src/ops/supersede.js';
+import { deleteEntry } from '../src/ops/delete.js';
+import { createTask, transitionTask } from '../src/ops/task.js';
+import { getEntryByRef } from '../src/ops/get.js';
+import { doctor } from '../src/ops/doctor.js';
+import { planCopy, applyCopy } from '../src/ops/copy.js';
+import { ReadOnlyNoteError } from '../src/projects.js';
+
+function leftWorld() {
+  const t = freshDb();
+  migrate(t.db);
+  teamRow(t.db, 'SH');
+  const a = addEntry(t.db, note('sh one', { project: 'SH', assigned: assigned(1) }));
+  const b = addEntry(t.db, note('sh two', { project: 'SH', assigned: assigned(2) }));
+  addEntry(t.db, note('sh pending', { project: 'SH', pending: true } as any));
+  const e = addEntry(t.db, note('e one'));
+  return { ...t, a, b, e };
+}
+const FIX = /SH-1 is a note of SH \(team SH\), a team you left: it is read-only\. To edit it, copy it into a solo project: collab copy --from SH --to <solo code>/;
+
+test('every write path refuses a note of a left team, with the fix; delete still works', () => {
+  const t = leftWorld();
+  try {
+    const task = createTask(t.db, { title: 't' }).id;
+    t.db.prepare(`UPDATE entries SET type = 'handoff', task_id = ? WHERE ulid = ?`).run(task, t.a.ulid);
+    markProjectLeft(t.db, 'SH');
+    const snap = () => t.db.prepare(`SELECT * FROM entries WHERE ulid = ?`).get(t.a.ulid);
+    const refs = () => t.db.prepare(`SELECT * FROM refs WHERE entry_ulid = ?`).all(t.a.ulid);
+    const before = snap(), beforeRefs = refs();
+    const refuses = (fn: () => unknown) => assert.throws(fn, (e: Error) => e instanceof ReadOnlyNoteError && FIX.test(e.message));
+    refuses(() => updateEntry(t.db, { id: 1, series: 'SH', title: 'x' }));
+    refuses(() => updateEntryRefs(t.db, { id: 1, series: 'SH', add: [{ ref_type: 'file', ref_value: 'a.ts' }] }));
+    refuses(() => editEntry(t.db, { id: 1, series: 'SH', type: 'decision', title: 'x', summary: 's' }));
+    refuses(() => supersede(t.db, { ids: [{ series: 'SH', id: 1 }], by: 1 }));
+    refuses(() => supersede(t.db, { ids: [1], by: { series: 'SH', id: 1 } }));
+    assert.throws(() => addEntry(t.db, note('new', { project: 'SH' })), (e: Error) => e instanceof ReadOnlyNoteError && /SH \(team SH\) is a team you left/.test(e.message));
+    for (const s of ['assigned', 'in-progress', 'review', 'done'] as const) transitionTask(t.db, task, s);
+    assert.deepEqual(snap(), before, 'the left note is unchanged (task done cascade included)');
+    assert.deepEqual(refs(), beforeRefs);
+    deleteEntry(t.db, 2, 'SH');
+    assert.ok((t.db.prepare(`SELECT deleted_at FROM entries WHERE ulid = ?`).get(t.b.ulid) as any).deleted_at, 'delete works');
+  } finally { t.cleanup(); }
+});
+
+test('copying a left note into a solo project makes it editable; get marks left notes and copied_to links', async () => {
+  const t = leftWorld();
+  try {
+    markProjectLeft(t.db, 'SH');
+    createProject(t.db, { name: 'mine', code: 'P1' });
+    await applyCopy(t.db, planCopy(t.db, { from: 'SH', to: 'P1' }));
+    assert.equal(updateEntry(t.db, { id: 1, series: 'P1', title: 'mine now' }).id, 1);
+    const sh1 = getEntryByRef(t.db, { series: 'SH', id: 1 })!;
+    assert.equal(sh1.left_team, true);
+    const link = sh1.refs.find((r) => r.copied_to)!;
+    assert.ok(link, 'the copied_to link is marked');
+    assert.equal(link.target?.series, 'P1');
+    assert.equal(link.target?.id, 1);
+    assert.equal('left_team' in getEntryByRef(t.db, { series: 'P1', id: 1 })!, false, 'only left notes carry the mark');
+    assert.equal('left_team' in getEntryByRef(t.db, { series: 'E', id: 1 })!, false);
+  } finally { t.cleanup(); }
+});
+
+test('doctor: projects.left explains a left team; it is not "another post office"', () => {
+  const t = leftWorld();
+  try {
+    const opts = { cwd: t.path + '-nowhere', env: {} as NodeJS.ProcessEnv };
+    const check = (name: string) => doctor(t.db, opts).checks.find((c) => c.name === name)!;
+    assert.equal(check('projects.left').severity, 'ok');
+    assert.equal(check('projects.left').detail, 'no team you left');
+    markProjectLeft(t.db, 'SH');
+    const left = check('projects.left');
+    assert.equal(left.severity, 'warn');
+    assert.equal(left.detail, 'SH (team SH): you left this team; its 3 notes are read-only (1 never got a number). To edit them, copy them into a solo project: collab copy --from SH --to <solo code>');
+    assert.ok(!(check('projects.team_office').items ?? []).includes('SH'), 'a left project is not an office problem');
+  } finally { t.cleanup(); }
+});

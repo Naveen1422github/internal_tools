@@ -1,8 +1,8 @@
 import type { DB } from "../db.js";
 import { hasUlidColumns } from "../db.js";
-import { hasSeries, hasUlidPrimaryKey } from "../schema.js";
+import { hasProjectLeft, hasSeries, hasUlidPrimaryKey } from "../schema.js";
 import { isUlid, parseNoteRef, type NoteRef } from "../ulid.js";
-import { ownerOfRef, ownerOfUlid, type InsertedEntry } from "../entry-write.js";
+import { isCopiedToValue, ownerOfRef, ownerOfUlid, type InsertedEntry } from "../entry-write.js";
 
 /** How a tool names a note: by number (`760`, `SH-12`) or, for any note, by its ULID (stage C). */
 export type NoteKey = NoteRef | { ulid: string };
@@ -45,6 +45,8 @@ export interface EntryRef {
   ref_value: string;
   /** ref_type 'entry', 0005+: the linked note, followed by ULID (J17). null = unresolved or pre-0005. */
   target?: LinkTarget | null;
+  /** This original's link to its copy (stage B2, P8): `target` is the copy. */
+  copied_to?: true;
 }
 
 export interface EntryFull {
@@ -71,6 +73,8 @@ export interface EntryFull {
   /** 0005+: the note at superseded_by_ulid, followed by ULID (J17). null = not superseded or pre-0005. */
   superseded_target?: LinkTarget | null;
   refs: EntryRef[];
+  /** A note of a team this laptop left (stage B2, P11): read-only. Absent otherwise. */
+  left_team?: true;
 }
 
 type EntryRow = Omit<EntryFull, "refs" | "modules" | "superseded_target"> & { ulid: string; superseded_by_ulid?: string | null };
@@ -120,6 +124,7 @@ function assemble(db: DB, row: EntryRow): EntryFull {
     refs = rows.map((r) => {
       const ref: EntryRef = { ref_type: r.ref_type, ref_value: r.ref_value };
       if (r.ref_type === "entry" && r.target_ulid) ref.target = toTarget(r.target_ulid, r);
+      if (r.ref_type === "entry" && isCopiedToValue(r.ref_value)) ref.copied_to = true;
       return ref;
     });
   } else {
@@ -137,6 +142,10 @@ function assemble(db: DB, row: EntryRow): EntryFull {
   ).map((m) => m.module);
 
   const full: EntryFull = { ...row, modules, refs };
+  const project = (row as { project_ulid?: string | null }).project_ulid;
+  if (project && hasProjectLeft(db) && db.prepare(`SELECT 1 FROM projects WHERE ulid = ? AND left_at IS NOT NULL`).get(project)) {
+    full.left_team = true;
+  }
   if (byUlid) {
     const s = row.superseded_by_ulid ?? null;
     full.superseded_target = s === null ? null : toTarget(s,

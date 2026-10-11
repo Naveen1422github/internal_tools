@@ -9,6 +9,7 @@ import { formatEntryRef } from "../entry-ref.js";
 import { snapshotForRevision, finishRevision } from "../revisions.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { NeedsMergeError } from "./merge.js";
+import { assertNoteWritable } from "../projects.js";
 
 // The REST server's note writes, moved here unchanged (collab E-720): every
 // write to a synced table goes through core (revisions, checks, future rules).
@@ -65,6 +66,7 @@ export function editEntry(db: DB, args: EditEntryArgs): { id: number } {
   const series = args.series ?? "E";
   const owner = ownerOfRef(db, { series, id: Number(id) });
   if (!owner) throw new EntryNotFoundError(id, series);
+  assertNoteWritable(db, owner.ulid); // a left team's note is read-only (stage B2, P11)
   const byUlid = hasUlidPrimaryKey(db);
   const tokens = estimateTokens(description);
   const tx = db.transaction(() => {

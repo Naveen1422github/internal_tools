@@ -5,7 +5,7 @@ import { insertEntryRow, insertEntryModules, insertRefs } from "../entry-write.j
 import { isSyncEnabled } from "../sync/state.js";
 import { resolveAllocator, allocateWithRetry, SAVE_ATTEMPT } from "../sync/allocator.js";
 import { newUlid } from "../ulid.js";
-import { currentProject, findProject, isTeamProject, notFound, type Project } from "../projects.js";
+import { currentProject, findProject, isLeftProject, isTeamProject, leftProjectError, notFound, type Project } from "../projects.js";
 
 // ------------------------------------------------------------
 // Types
@@ -150,6 +150,7 @@ function resolveProjectArg(db: DB, args: AddEntryArgs): Project | null {
   if (args.project.trim().toLowerCase() === "none") return null;
   const p = findProject(db, args.project);
   if (!p) throw notFound(db, args.project);
+  if (isLeftProject(p)) throw leftProjectError(p); // read-only (stage B2, P11)
   return p;
 }
 

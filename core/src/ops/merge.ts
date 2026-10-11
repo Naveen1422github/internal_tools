@@ -5,6 +5,7 @@ import { ownerOfRef } from "../entry-write.js";
 import { headsOf, revisionsOf, snapshotForRevision, finishRevision } from "../revisions.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { formatEntryRef } from "../entry-ref.js";
+import { assertNoteWritable } from "../projects.js";
 
 // Settling a note whose edits collided (spec part 2, V4/V5). The caller says
 // which versions it showed the person (expectedHeads); if another edit arrived
@@ -36,6 +37,7 @@ function flaggedUlid(db: DB, id: number, series = "E"): string {
   if (!owner || !owner.ulid) throw new Error(`no entry found with id ${series === "E" ? id : formatEntryRef(id, series)}`);
   const r = db.prepare(`SELECT needs_merge FROM entries WHERE ulid = ?`).get(owner.ulid) as { needs_merge: number } | undefined;
   if (!r || r.needs_merge !== 1) throw new Error(`${formatEntryRef(id, series)} is not waiting for a merge`);
+  assertNoteWritable(db, owner.ulid);
   return owner.ulid as string;
 }
 

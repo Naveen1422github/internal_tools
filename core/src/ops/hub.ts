@@ -102,7 +102,8 @@ export function getHubStatus(
 
   const outLinks = db.prepare(
     `SELECT target_ulid, ref_value FROM refs
-      WHERE entry_ulid = ? AND ref_type = 'entry' AND target_ulid IS NOT NULL`,
+      WHERE entry_ulid = ? AND ref_type = 'entry' AND target_ulid IS NOT NULL
+        AND ref_value NOT LIKE 'copied_to:%'`, // a link to a copy (stage B2) is not a hub link
   );
   const idOf = db.prepare(`SELECT id FROM entries WHERE ulid = ?`);
 

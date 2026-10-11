@@ -102,6 +102,11 @@
       "detail": "no team project clashes with a local one"
     },
     {
+      "name": "projects.left",
+      "severity": "ok",
+      "detail": "no team you left"
+    },
+    {
       "name": "hub.missing",
       "severity": "ok",
       "detail": "every module with important notes has a main note"

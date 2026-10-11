@@ -6,6 +6,7 @@ import { ensureCrsqlite } from "../sync/extension.js";
 import { formatNoteRef } from "../entry-ref.js";
 import type { NoteRef } from "../ulid.js";
 import { ownerOfKey, type NoteKey } from "./get.js";
+import { assertNoteWritable } from "../projects.js";
 
 // ------------------------------------------------------------
 // Types
@@ -67,6 +68,10 @@ export function supersede(db: DB, args: SupersedeArgs): SupersedeResult {
       `the following 'ids' do not exist: ${missing.map(labelOf).join(", ")}`,
     );
   }
+
+  // A left team's note is read-only (stage B2, P11): as the replaced note, or as the replacement.
+  assertNoteWritable(db, byOwner.ulid);
+  for (const o of owners.values()) assertNoteWritable(db, o?.ulid);
 
   // Write the ULID twin ourselves; 0006's trigger only repairs legacy writers.
   // At 0006 the target row is addressed by its ulid (F3); before, by id (unique).
