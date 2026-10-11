@@ -143,7 +143,10 @@ export function insertEntryRow(db: DB, row: EntryRowInput): InsertedEntry {
  */
 function ulidTarget(db: DB, r: RefRowInput): string | null {
   if (r.ref_type !== "entry" || typeof r.ref_value !== "string") return null;
-  const v = r.ref_value.trim().toUpperCase();
+  // A copied_to link written back without its target (an edit that replaces
+  // every ref, stage B2) keeps pointing at its copy.
+  const raw = isCopiedToValue(r.ref_value) ? r.ref_value.slice(COPIED_TO_PREFIX.length) : r.ref_value;
+  const v = raw.trim().toUpperCase();
   if (!isUlid(v)) return null;
   return db.prepare(`SELECT 1 FROM entries WHERE ulid = ?`).get(v) ? v : null;
 }

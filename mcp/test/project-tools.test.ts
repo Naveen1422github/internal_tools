@@ -267,6 +267,8 @@ test('collab_copy: dry run (the default) lists exactly the CLI lines and writes 
     const again = await call('collab_copy', { from: 'demo', to: 'NV', dry_run: false });
     assert.equal(again.isError, false, again.text);
     assert.match(again.text, /already copied to NV-1/);
+    assert.equal(again.structured.dry_run, false);
+    assert.deepEqual(again.structured.copied, []);
     assert.equal(count(), before + 1, 'nothing left to copy: nothing written');
   });
 });

@@ -90,7 +90,8 @@ test('a left team project is never sent, never waiting, never counted pending', 
 
 // ---- read-only notes of a left team (Task 3) ----
 import { updateEntry, updateEntryRefs } from '../src/ops/update.js';
-import { editEntry } from '../src/ops/edit.js';
+import { editEntry, reassignModule } from '../src/ops/edit.js';
+import { initModule } from '../src/ops/module.js';
 import { supersede } from '../src/ops/supersede.js';
 import { deleteEntry } from '../src/ops/delete.js';
 import { createTask, transitionTask } from '../src/ops/task.js';
@@ -126,6 +127,9 @@ test('every write path refuses a note of a left team, with the fix; delete still
     refuses(() => editEntry(t.db, { id: 1, series: 'SH', type: 'decision', title: 'x', summary: 's' }));
     refuses(() => supersede(t.db, { ids: [{ series: 'SH', id: 1 }], by: 1 }));
     refuses(() => supersede(t.db, { ids: [1], by: { series: 'SH', id: 1 } }));
+    initModule(t.db, { slug: 'elsewhere' });
+    refuses(() => reassignModule(t.db, [1, { series: 'SH', id: 1 }], 'elsewhere'));
+    assert.equal((t.db.prepare(`SELECT module FROM entries WHERE ulid = ?`).get(t.e.ulid) as any).module, null, 'the whole batch is refused');
     assert.throws(() => addEntry(t.db, note('new', { project: 'SH' })), (e: Error) => e instanceof ReadOnlyNoteError && /SH \(team SH\) is a team you left/.test(e.message));
     for (const s of ['assigned', 'in-progress', 'review', 'done'] as const) transitionTask(t.db, task, s);
     assert.deepEqual(snap(), before, 'the left note is unchanged (task done cascade included)');

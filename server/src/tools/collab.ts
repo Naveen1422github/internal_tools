@@ -3,7 +3,7 @@ import {
   getDb, SLUG_REGEX, validateEntryInput, buildFtsMatch,
   addEntry, addEntryAsync, deleteEntry, supersede, doctor,
   editEntry, EntryNotFoundError, reassignModule, upsertModule, deleteModule,
-  liveEntry, ftsJoin, readSyncOverview, NeedsMergeError, formatEntryRef,
+  liveEntry, ftsJoin, readSyncOverview, NeedsMergeError, formatEntryRef, ReadOnlyNoteError,
   getEntryByUlid, isUlid, getEntryByRef, parseNoteRef, hasSeries, type NoteRef,
 } from '@collab-mcp/core';
 
@@ -256,6 +256,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     } catch (err: any) {
       if (err instanceof EntryNotFoundError) return send(404, { error: err.message });
       if (err instanceof NeedsMergeError) return send(409, { error: err.message }); // V9: settle it on /merge/:id
+      if (err instanceof ReadOnlyNoteError) return send(403, { error: err.message }); // a team you left (stage B2, P11)
       send(500, { error: err.message });
     }
   },
@@ -297,7 +298,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       send(200, { ok: true, superseded: r.superseded, by: r.by });
     } catch (err: any) {
       // Core: "'by' entry E-… does not exist" / "the following 'ids' do not exist: …".
-      const status = /does not exist|do not exist|cannot be one of/.test(err.message) ? 400 : 500;
+      const status = err instanceof ReadOnlyNoteError ? 403 : /does not exist|do not exist|cannot be one of/.test(err.message) ? 400 : 500;
       send(status, { error: err.message });
     }
   },
@@ -317,7 +318,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       const { updated } = reassignModule(db, refs, module);
       send(200, { ok: true, updated, module });
     } catch (err: any) {
-      send(/does not exist/.test(err.message) ? 400 : 500, { error: err.message });
+      send(err instanceof ReadOnlyNoteError ? 403 : /does not exist/.test(err.message) ? 400 : 500, { error: err.message });
     }
   },
 

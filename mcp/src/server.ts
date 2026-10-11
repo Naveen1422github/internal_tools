@@ -1405,7 +1405,9 @@ server.registerTool(
       if (args.dry_run !== false || plan.items.length === 0) {
         const lines = copyPlanLines(plan);
         if (plan.items.length) lines.push("Nothing copied yet: call collab_copy again with dry_run: false to copy these notes.");
-        return { content: [{ type: "text", text: [status, ...lines].join("\n") }], structuredContent: structured({ dry_run: true, plan }) };
+        // dry_run false with nothing to copy: the same answer as the CLI (the list), and it says nothing was copied.
+        const what = args.dry_run === false ? { dry_run: false, copied: [], plan } : { dry_run: true, plan };
+        return { content: [{ type: "text", text: [status, ...lines].join("\n") }], structuredContent: structured(what) };
       }
       const result = await applyCopy(db, plan);
       return {

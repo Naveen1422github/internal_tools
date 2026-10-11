@@ -103,6 +103,8 @@ export function reassignModule(db: DB, ids: Array<number | NoteRef>, module: str
   // A bare number means E (stage B1); a NoteRef can name a project note.
   const refs = ids.map((v): NoteRef => (typeof v === "object" && v !== null ? v : { series: "E", id: Number(v) }));
   const uniqueRefs = [...new Map(refs.map((r) => [`${r.series}:${r.id}`, r])).values()];
+  // A left team's note is read-only (stage B2, P11): refuse the whole batch before writing.
+  for (const ref of uniqueRefs) assertNoteWritable(db, ownerOfRef(db, ref)?.ulid);
   let updated = 0;
   const tx = db.transaction(() => {
     for (const ref of uniqueRefs) {

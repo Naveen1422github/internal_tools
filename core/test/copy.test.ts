@@ -14,6 +14,8 @@ import { setAllocator } from '../src/sync/allocator.js';
 import { readOwnChanges } from '../src/sync/changes.js';
 import { sendContext, sendVerdictOf, SHARED_KEY, type NotePlace } from '../src/sync/send-filter.js';
 import { planCopy, applyCopy, copyPlanLines, copyResultLines, COPIED_TO_PREFIX } from '../src/ops/copy.js';
+import { getEntryByRef } from '../src/ops/get.js';
+import { editEntry } from '../src/ops/edit.js';
 
 const note = (title: string, extra: Record<string, unknown> = {}) => ({ type: 'decision' as const, title, summary: 's', ...extra });
 let n = 0;
@@ -255,5 +257,21 @@ test('the list and the result read the same whatever prints them', async () => {
       'Skipped 1:',
       '  E-00001    one: already copied to NV-1',
     ]);
+  } finally { t.cleanup(); }
+});
+
+test('editing an original (refs written back without targets) keeps its copied_to link and the skip', async () => {
+  const t = world();
+  try {
+    addEntry(t.db, note('one', { module: 'm', refs: [{ ref_type: 'file', ref_value: 'a.ts' }] }));
+    await applyCopy(t.db, planCopy(t.db, { from: 'm', to: 'NV' }));
+    const e1 = getEntryByRef(t.db, { series: 'E', id: 1 })!;
+    editEntry(t.db, { id: 1, type: 'decision', title: 'one, edited', summary: 's', module: 'm',
+      refs: e1.refs.map((r) => ({ ref_type: r.ref_type, ref_value: r.ref_value })) });
+    const after = getEntryByRef(t.db, { series: 'E', id: 1 })!;
+    const link = after.refs.find((r) => r.copied_to)!;
+    assert.equal(link.target?.series, 'NV');
+    assert.equal(link.target?.id, 1);
+    assert.deepEqual(planCopy(t.db, { from: 'm', to: 'NV' }).skipped.map((s) => s.reason), ['already copied to NV-1']);
   } finally { t.cleanup(); }
 });
