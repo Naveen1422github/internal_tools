@@ -126,13 +126,13 @@ function intParam(url: URL, name: string, dflt: number): number {
 export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice> {
   const log = o.log ?? (() => {});
   const maxBody = o.maxBodyBytes ?? 64 * 1024 * 1024;
-  const streams = new Set<{ device: string; res: ServerResponse }>();
+  const streams = new Set<{ device: string; res: ServerResponse; stop: () => void }>();
   // Read once at start: `serve` migrated the store before it got here.
   const officeSchemaValue = officeSchema(o.store);
 
   function ring(event: string, data: unknown, except?: string): void {
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-    for (const s of streams) if (s.device !== except) s.res.write(msg);
+    for (const s of streams) if (s.device !== except && !s.res.writableEnded) s.res.write(msg);
   }
 
   function fail(res: ServerResponse, e: unknown): void {
@@ -146,18 +146,18 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
   function openStream(res: ServerResponse, me: Member): void {
     res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive" });
     res.write(`: collab post office\n\nevent: ready\ndata: ${JSON.stringify({ last_seq: lastSeq(o.store) })}\n\n`);
-    const s = { device: me.device_id, res };
-    streams.add(s);
-    const ping = setInterval(() => res.write(": ping\n\n"), o.heartbeatMs ?? 25_000);
+    const ping = setInterval(() => { if (!res.writableEnded) res.write(": ping\n\n"); }, o.heartbeatMs ?? 25_000);
     const watch = setInterval(() => {
+      if (!o.store.open || res.writableEnded) return; // closing: the store may already be shut
       if (isRevoked(o.store, me.device_id)) {
         res.write("event: revoked\ndata: {}\n\n");
         res.end();
       }
     }, o.revokeCheckMs ?? 2_000);
+    const s = { device: me.device_id, res, stop: () => { clearInterval(ping); clearInterval(watch); } };
+    streams.add(s);
     res.on("close", () => {
-      clearInterval(ping);
-      clearInterval(watch);
+      s.stop();
       streams.delete(s);
     });
   }
@@ -318,7 +318,8 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
     listeners: () => [...streams].map((s) => s.device),
     close: () =>
       new Promise<void>((resolve) => {
-        for (const s of streams) s.res.end();
+        // Timers first: 'close' fires later, after the caller may have shut the store.
+        for (const s of streams) { s.stop(); s.res.end(); }
         server.closeAllConnections();
         server.close(() => resolve());
       }),
