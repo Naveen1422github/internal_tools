@@ -57,15 +57,37 @@ export function firstTextCell(pk: Buffer): string | null {
   return pk.length < at + len ? null : pk.toString("utf8", at, at + len);
 }
 
+/**
+ * Every cell of a packed pk when all are text (refs: entry_ulid, ref_type,
+ * ref_value), else null. Same layout as firstTextCell.
+ */
+export function textCells(pk: Buffer): string[] | null {
+  if (pk.length < 1) return null;
+  const out: string[] = [];
+  let at = 1;
+  for (let c = 0; c < pk[0]; c++) {
+    if (at >= pk.length) return null;
+    const tag = pk[at], n = tag >> 3;
+    if ((tag & 7) !== 3 || n < 1 || n > 4 || pk.length < at + 1 + n) return null;
+    let len = 0;
+    for (let i = 0; i < n; i++) len = len * 256 + pk[at + 1 + i];
+    at += 1 + n;
+    if (pk.length < at + len) return null;
+    out.push(pk.toString("utf8", at, at + len));
+    at += len;
+  }
+  return out;
+}
+
 /** A delivery to stamp. `stamp` = what its project_ulid holds now (undefined = NULL); `key` = firstTextCell(pk) when known. */
 export interface DeliveryRow { seq: number; tbl: string; pk: Buffer; origin: string; held: number; stamp?: string | null; key?: string | null }
 /** What a batch says about itself before it is applied: revision -> entry, entry -> project. */
-interface Hints { rev: Map<string, string>; project: Map<string, string | null> }
+export interface Hints { rev: Map<string, string>; project: Map<string, string | null> }
 interface Resolved { seq: number; tbl: string; origin: string; held: number; key: string | null; ulid: string | null; stamp: string | null }
 
 // Prepared once per store: compiling the same SQL on every batch costs a share of the 5 ms budget.
 const STMTS = new WeakMap<Store, Map<string, Database.Statement>>();
-function prep(db: Store, sql: string): Database.Statement {
+export function prep(db: Store, sql: string): Database.Statement {
   let m = STMTS.get(db);
   if (!m) STMTS.set(db, (m = new Map()));
   let st = m.get(sql);
@@ -80,6 +102,15 @@ SELECT e.ulid, e.project_ulid,
   FROM entries e JOIN entries__crsql_pks p ON p.ulid = e.ulid
  WHERE e.ulid IN (SELECT value FROM json_each(?))`;
 
+/** revision id -> its entry, as the office holds it: one query for any number. */
+export function revisionEntries(db: Store, revIds: string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!revIds.length) return out;
+  for (const x of prep(db, `SELECT rev_id, entry_ulid FROM entry_revisions WHERE rev_id IN (SELECT value FROM json_each(?))`)
+    .all(JSON.stringify(revIds)) as Array<{ rev_id: string; entry_ulid: string }>) out.set(x.rev_id, x.entry_ulid);
+  return out;
+}
+
 /** Each row's owning entry and stamp: two queries for any number of rows. `hints` overlay the store (pre-apply guess). */
 function resolve(db: Store, rows: DeliveryRow[], hints?: Hints): Resolved[] {
   // A batch carries each pk once per cell: decode a pk only when it differs from the previous one.
@@ -93,12 +124,7 @@ function resolve(db: Store, rows: DeliveryRow[], hints?: Hints): Resolved[] {
   // With hints (the pre-apply guess) the store is asked only what the batch doesn't say.
   const revSet = new Set<string>();
   rows.forEach((r, i) => { const k = keys[i]; if (r.tbl === "entry_revisions" && k && !hints?.rev.has(k)) revSet.add(k); });
-  const revIds = [...revSet];
-  const revEntry = new Map<string, string>();
-  if (revIds.length) {
-    for (const x of prep(db, `SELECT rev_id, entry_ulid FROM entry_revisions WHERE rev_id IN (SELECT value FROM json_each(?))`)
-      .all(JSON.stringify(revIds)) as Array<{ rev_id: string; entry_ulid: string }>) revEntry.set(x.rev_id, x.entry_ulid);
-  }
+  const revEntry = revisionEntries(db, [...revSet]);
   if (hints) for (const [r, u] of hints.rev) revEntry.set(r, u);
   const ulids = rows.map((r, i) => {
     const k = keys[i];
@@ -147,6 +173,11 @@ function writeStamps(db: Store, rows: Resolved[]): void {
  * never a leak.
  */
 function guessStamps(db: Store, raws: RawChange[]): Resolved[] {
+  return resolve(db, raws.map((r) => ({ seq: 0, tbl: r.table, pk: r.pk, origin: "", held: 0 })), batchHints(raws));
+}
+
+/** The batch's own revision -> entry and entry -> project cells (the last project cell wins). */
+export function batchHints(raws: RawChange[]): Hints {
   const hints: Hints = { rev: new Map(), project: new Map() };
   for (const r of raws) {
     if (r.table === "entry_revisions" && r.cid === "entry_ulid" && typeof r.val === "string") {
@@ -157,7 +188,7 @@ function guessStamps(db: Store, raws: RawChange[]): Resolved[] {
       if (k) hints.project.set(k, typeof r.val === "string" && r.val !== "" ? r.val : null);
     }
   }
-  return resolve(db, raws.map((r) => ({ seq: 0, tbl: r.table, pk: r.pk, origin: "", held: 0 })), hints);
+  return hints;
 }
 
 /**

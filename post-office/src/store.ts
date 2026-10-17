@@ -108,6 +108,13 @@ CREATE TABLE IF NOT EXISTS po_note_owners (
   ulid      TEXT NOT NULL PRIMARY KEY,
   device_id TEXT NOT NULL
 );
+-- R7: a note whose creation was refused; its later changes are refused too.
+CREATE TABLE IF NOT EXISTS po_refused_notes (
+  ulid      TEXT NOT NULL PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  key       TEXT,
+  at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS po_office_roles (
   ulid       TEXT    NOT NULL PRIMARY KEY,
   name       TEXT    NOT NULL UNIQUE,
