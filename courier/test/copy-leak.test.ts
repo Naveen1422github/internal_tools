@@ -7,7 +7,7 @@ import {
   addEntryAsync, createProject, deleteEntry, newUlid, markProjectLeft, planCopy, applyCopy,
   setAllocator, setAllocationRetry,
 } from '@collab-mcp/core';
-import { registerProject } from '@collab-mcp/post-office';
+import { registerProject, setProjectMember } from '@collab-mcp/post-office';
 import { tempDir, startOffice, joinedDb, openWriter, closeWriter, type Office } from './world.js';
 import { Courier } from '../src/engine.js';
 
@@ -19,7 +19,8 @@ async function world() {
   const ca = new Courier({ dbPath: ja.path, watch: false, retryMs: 60_000 });
   const cb = new Courier({ dbPath: jb.path, watch: false, retryMs: 60_000 });
   setAllocationRetry({ delaysMs: [0, 0], timeoutMs: 1500 });
-  registerProject(office.store, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 }, ja.device); // RnR: a creates it
+  const sh = registerProject(office.store, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 }, ja.device); // RnR: a creates it
+  setProjectMember(office.store, ja.device, sh.ulid, jb.device, 'Editor'); // RnR R7a: b is added explicitly
   await ca.syncNow();
   await cb.syncNow();
   return {

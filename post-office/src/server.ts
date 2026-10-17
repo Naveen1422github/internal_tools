@@ -4,9 +4,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
   StoreError, allocate, authenticate, redeemJoin, isRevoked, sharedModules, setModuleShared, teamStatus, officeSchema,
-  registerProject, listOfficeProjects,
+  registerProject, addMember, revokeMember,
   type Member, type Store,
 } from "./store.js";
+import { officeKeys, projectKeys, memberProjects, requireOfficeKey, requireProjectKey, setProjectMember, setOfficeRole } from "./access.js";
+import { sanitizeKeys, type AccessPayload } from "@collab-mcp/core";
 import { acceptChanges, fetchDeliveries, lastSeq } from "./deliveries.js";
 
 // The post office's HTTPS + SSE API (spec Components 3, D12, D13). Plain Node
@@ -63,6 +65,40 @@ function readJson(req: IncomingMessage, limit: number): Promise<any> {
     });
     req.on("error", reject);
   });
+}
+
+// RnR: what `device` may do, in the shape the laptop caches (R3).
+function accessFor(db: Store, device: string): AccessPayload {
+  const office = db.prepare(`SELECT r.name FROM po_office_members x JOIN po_office_roles r ON r.ulid = x.role_ulid WHERE x.device_id = ?`).get(device) as { name: string } | undefined;
+  const projects = (db
+    .prepare(
+      `SELECT p.ulid, p.code, r.name AS role FROM po_project_members x
+         JOIN po_projects p ON p.ulid = x.project_ulid JOIN po_roles r ON r.ulid = x.role_ulid
+        WHERE x.device_id = ? ORDER BY p.code`,
+    )
+    .all(device) as Array<{ ulid: string; code: string; role: string }>).map((p) => {
+    const ai: Record<string, "allow" | "ask" | "deny"> = {};
+    for (const a of db.prepare(`SELECT key, state FROM po_project_ai WHERE project_ulid = ?`).all(p.ulid) as Array<{ key: string; state: "allow" | "ask" | "deny" }>) ai[a.key] = a.state;
+    return { ...p, keys: [...projectKeys(db, device, p.ulid)], ai };
+  });
+  const replays = db.prepare(`SELECT project_ulid, upto_seq FROM po_replays WHERE device_id = ?`).all(device) as AccessPayload["replays"];
+  return { office: office ? { role: office.name, keys: [...officeKeys(db, device)] } : null, projects, replays };
+}
+
+function membersOf(db: Store, projectUlid: string) {
+  const members = db
+    .prepare(
+      `SELECT m.device_id, m.name, r.name AS role, m.last_seen_at FROM po_project_members x
+         JOIN po_members m ON m.device_id = x.device_id AND m.revoked_at IS NULL
+         JOIN po_roles r ON r.ulid = x.role_ulid WHERE x.project_ulid = ? ORDER BY m.name, m.device_id`,
+    )
+    .all(projectUlid);
+  const roles = (db.prepare(`SELECT ulid, name, keys FROM po_roles WHERE project_ulid = ? ORDER BY name`).all(projectUlid) as Array<{ ulid: string; name: string; keys: string }>).map((r) => {
+    let parsed: unknown = [];
+    try { parsed = JSON.parse(r.keys); } catch { /* grants nothing */ }
+    return { ulid: r.ulid, name: r.name, keys: sanitizeKeys("project", parsed) };
+  });
+  return { members, roles };
 }
 
 function intParam(url: URL, name: string, dflt: number): number {
@@ -146,12 +182,20 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         if (o.testHooks?.dropAllocateAnswer?.(String(b?.ulid))) { req.socket.destroy(); return; }
         return send(res, 200, { id, series });
       }
-      case "GET /v1/projects":
-        return send(res, 200, { projects: listOfficeProjects(o.store) });
+      case "GET /v1/access":
+        return send(res, 200, accessFor(o.store, me.device_id));
+      case "GET /v1/projects": {
+        // R7a: a project you are not in does not exist for you.
+        const mine = new Set(memberProjects(o.store, me.device_id));
+        const all = o.store.prepare(`SELECT ulid, name, code, created_at FROM po_projects ORDER BY code`).all() as Array<{ ulid: string }>;
+        return send(res, 200, { projects: all.filter((p) => mine.has(p.ulid)) });
+      }
       case "POST /v1/projects": {
         const b = await readJson(req, maxBody);
+        requireOfficeKey(o.store, me.device_id, "office.project.create");
         const project = registerProject(o.store, b ?? {}, me.device_id);
         ring("projects", { code: project.code });
+        ring("access", { project: project.code });
         log(`${me.name}: team project ${project.code} (${project.name}) registered`);
         return send(res, 200, { project });
       }
@@ -174,6 +218,7 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         return send(res, 200, { shared: sharedModules(o.store) });
       case "POST /v1/modules": {
         const b = await readJson(req, maxBody);
+        requireOfficeKey(o.store, me.device_id, "office.module.share");
         const shared = setModuleShared(o.store, b?.slug, b?.shared !== false);
         ring("modules", { shared });
         return send(res, 200, { shared });
@@ -182,10 +227,46 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         return send(res, 200, { members: teamStatus(o.store), last_seq: lastSeq(o.store) });
       case "GET /v1/events":
         return openStream(res, me);
-      default:
-        req.resume();
-        return send(res, 404, { error: `no such endpoint: ${route}` });
+      case "POST /v1/office/members": {
+        const b = await readJson(req, maxBody);
+        requireOfficeKey(o.store, me.device_id, "office.member.add");
+        const { deviceId, secret } = addMember(o.store, String(b?.name ?? ""));
+        ring("access", { office: true });
+        log(`${me.name}: added member ${deviceId}`);
+        return send(res, 200, { device_id: deviceId, secret });
+      }
     }
+    // Parameterised routes (one small matcher; the switch keeps the fixed ones).
+    let m: RegExpExecArray | null;
+    if ((m = /^GET \/v1\/projects\/([^/]+)\/members$/.exec(route))) {
+      requireProjectKey(o.store, me.device_id, m[1], "note.view");
+      return send(res, 200, membersOf(o.store, m[1]));
+    }
+    if ((m = /^(PUT|DELETE) \/v1\/projects\/([^/]+)\/members\/([^/]+)$/.exec(route))) {
+      const b = m[1] === "PUT" ? await readJson(req, maxBody) : (req.resume(), {});
+      const role = m[1] === "PUT" ? String(b?.role ?? "") : null;
+      if (m[1] === "PUT" && !role) throw new StoreError("a role name is needed");
+      setProjectMember(o.store, me.device_id, m[2], decodeURIComponent(m[3]), role);
+      ring("access", { project: m[2] });
+      return send(res, 200, { ok: true });
+    }
+    if ((m = /^PUT \/v1\/office\/members\/([^/]+)$/.exec(route))) {
+      const b = await readJson(req, maxBody);
+      setOfficeRole(o.store, me.device_id, decodeURIComponent(m[1]), String(b?.role ?? ""));
+      ring("access", { office: true });
+      return send(res, 200, { ok: true });
+    }
+    if ((m = /^DELETE \/v1\/office\/members\/([^/]+)$/.exec(route))) {
+      req.resume();
+      requireOfficeKey(o.store, me.device_id, "office.member.revoke");
+      const who = decodeURIComponent(m[1]);
+      if (!o.store.prepare(`SELECT 1 FROM po_members WHERE device_id = ?`).get(who)) throw new StoreError(`no member called ${who}`, 404);
+      revokeMember(o.store, who);
+      ring("access", { office: true });
+      return send(res, 200, { ok: true });
+    }
+    req.resume();
+    return send(res, 404, { error: `no such endpoint: ${route}` });
   }
 
   const server = https.createServer({ cert: o.certPem, key: o.keyPem }, (req, res) => {

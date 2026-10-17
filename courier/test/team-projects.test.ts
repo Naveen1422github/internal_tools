@@ -8,7 +8,7 @@ import {
   addEntry, addEntryAsync, createProject, updateEntry, getEntryByUlid, ownerOfRef, newUlid, getSyncValue,
   setAllocator, setAllocationRetry, type Allocator,
 } from '@collab-mcp/core';
-import { setModuleShared, registerProject, allocate } from '@collab-mcp/post-office';
+import { setModuleShared, registerProject, setProjectMember, allocate } from '@collab-mcp/post-office';
 import { tempDir, startOffice, joinedDb, openWriter, closeWriter, type Office } from './world.js';
 import { Courier } from '../src/engine.js';
 import { COURIER_KEYS as K } from '../src/keys.js';
@@ -41,7 +41,13 @@ const note = (title: string, extra: Record<string, unknown> = {}) =>
 /** RnR: a project needs a creator; these pre-RnR tests register as the office's first member. */
 const creator = (o: Office) => (o.store.prepare(`SELECT device_id FROM po_members ORDER BY rowid LIMIT 1`).get() as { device_id: string }).device_id;
 function team(office: Office, code = 'SH', name = 'Support hub', seed = 0) {
-  return registerProject(office.store, { ulid: newUlid(), name, code, seed }, creator(office));
+  const c = creator(office);
+  const p = registerProject(office.store, { ulid: newUlid(), name, code, seed }, c);
+  // RnR R7a: a teammate sees a team project only once added; these tests expect both laptops to.
+  for (const m of office.store.prepare(`SELECT device_id FROM po_members WHERE revoked_at IS NULL AND device_id <> ?`).all(c) as Array<{ device_id: string }>) {
+    setProjectMember(office.store, c, p.ulid, m.device_id, 'Editor');
+  }
+  return p;
 }
 const atOffice = (o: Office, ulid: string) =>
   o.store.prepare(`SELECT id, series, title, summary, description FROM entries WHERE ulid = ?`).get(ulid) as any;

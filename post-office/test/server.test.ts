@@ -125,6 +125,8 @@ test('stage C: allocate echoes its series; team projects are listed and rung', a
     assert.equal(created.status, 200);
     assert.equal(created.body.project.code, 'SH');
     await until(() => lb.events.some(([n, d]) => n === 'projects' && d.code === 'SH'));
+    // RnR R7a: a teammate sees a team project only once added to it.
+    assert.equal((await requestJson(o.target(a), 'PUT', `/v1/projects/${u}/members/${b.device}`, { role: 'Reader' })).status, 200);
     const list = await requestJson(o.target(b), 'GET', '/v1/projects');
     assert.deepEqual(list.body.projects.map((p: any) => [p.ulid, p.code]), [[u, 'SH']]);
     const clash = await requestJson(o.target(b), 'POST', '/v1/projects', { ulid: newUlid(), name: 'Other', code: 'SH', seed: 0 });
