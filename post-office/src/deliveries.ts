@@ -288,19 +288,57 @@ export interface FetchResult { changes: WireChange[]; lastSeq: number; more: boo
  * held ('?') rows go to nobody. `after` = what the caller has applied (its
  * bookmark); `lastSeq` still moves past filtered rows.
  */
+const DELIVERY_COLS = `seq, origin, tbl AS "table", pk, cid, val, col_version, db_version, site_id, cl, ch_seq AS ch`;
+type DeliveryWire = RawChange & { seq: number; origin: string; ch: number };
+const toWire = ({ seq: _s, origin: _o, ...r }: DeliveryWire): WireChange => encodeChange({ ...r, seq: r.ch });
+
 export function fetchDeliveries(db: Store, deviceId: string, after: number, limit = 2000): FetchResult {
   if (!Number.isInteger(after) || after < 0) throw new StoreError("after must be a whole number >= 0");
   if (!Number.isInteger(limit) || limit < 1 || limit > 5000) throw new StoreError("limit must be 1..5000");
   const rows = db
     .prepare(
-      `SELECT seq, origin, tbl AS "table", pk, cid, val, col_version, db_version, site_id, cl, ch_seq AS ch, project_ulid
+      `SELECT ${DELIVERY_COLS}, project_ulid
          FROM po_deliveries WHERE seq > ? ORDER BY seq LIMIT ?`,
     )
-    .all(after, limit) as Array<RawChange & { seq: number; origin: string; ch: number; project_ulid: string | null }>;
+    .all(after, limit) as Array<DeliveryWire & { project_ulid: string | null }>;
   const mine = new Set(memberProjects(db, deviceId));
   db.prepare(`UPDATE po_members SET receive_bookmark = MAX(receive_bookmark, ?) WHERE device_id = ?`).run(after, deviceId);
   const changes = rows
     .filter((r) => r.origin !== deviceId && (r.project_ulid === null || mine.has(r.project_ulid)))
-    .map(({ project_ulid: _p, ...r }) => encodeChange({ ...r, seq: r.ch }));
+    .map(({ project_ulid: _p, ...r }) => toWire(r));
   return { changes, lastSeq: rows.length ? rows[rows.length - 1].seq : after, more: rows.length === limit };
+}
+
+export interface ReplayResult { changes: WireChange[]; last_seq: number; more: boolean; done: boolean }
+
+/**
+ * R14: the project's past changes, once, for a device newly given note.view (the
+ * normal bookmark already passed them). Only rows stamped with this project, up
+ * to the seq the grant happened at; NULL rows already went to everyone and held
+ * ('?') rows are released at a new seq. The po_replays row goes only on the
+ * confirming call (after >= upto_seq), so a crash mid-replay just resumes.
+ */
+export function fetchReplay(db: Store, deviceId: string, projectUlid: string, after: number, limit = 2000): ReplayResult {
+  if (!Number.isInteger(after) || after < 0) throw new StoreError("after must be a whole number >= 0");
+  if (!Number.isInteger(limit) || limit < 1 || limit > 5000) throw new StoreError("limit must be 1..5000");
+  const finish = (): ReplayResult => ({ changes: [], last_seq: after, more: false, done: true });
+  return db.transaction(() => {
+    const rep = db.prepare(`SELECT upto_seq FROM po_replays WHERE device_id = ? AND project_ulid = ?`).get(deviceId, projectUlid) as { upto_seq: number } | undefined;
+    if (!rep) return finish();
+    const member = db.prepare(`SELECT 1 FROM po_project_members WHERE device_id = ? AND project_ulid = ?`).get(deviceId, projectUlid);
+    if (!member || after >= rep.upto_seq) {
+      db.prepare(`DELETE FROM po_replays WHERE device_id = ? AND project_ulid = ?`).run(deviceId, projectUlid);
+      return finish();
+    }
+    const rows = db
+      .prepare(`SELECT ${DELIVERY_COLS} FROM po_deliveries WHERE project_ulid = ? AND seq > ? AND seq <= ? ORDER BY seq LIMIT ?`)
+      .all(projectUlid, after, rep.upto_seq, limit) as DeliveryWire[];
+    const more = rows.length === limit;
+    return {
+      changes: rows.filter((r) => r.origin !== deviceId).map(toWire),
+      last_seq: more ? rows[rows.length - 1].seq : rep.upto_seq,
+      more,
+      done: false,
+    };
+  }).immediate();
 }

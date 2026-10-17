@@ -7,9 +7,9 @@ import {
   registerProject, addMember, revokeMember,
   type Member, type Store,
 } from "./store.js";
-import { officeKeys, projectKeys, requireOfficeKey, setProjectMember, setOfficeRole } from "./access.js";
+import { officeKeys, projectKeys, requireOfficeKey, requireProjectKey, setProjectMember, setOfficeRole } from "./access.js";
 import { sanitizeKeys, type AccessPayload } from "@collab-mcp/core";
-import { acceptChanges, fetchDeliveries, lastSeq } from "./deliveries.js";
+import { acceptChanges, fetchDeliveries, fetchReplay, lastSeq } from "./deliveries.js";
 
 // The post office's HTTPS + SSE API (spec Components 3, D12, D13). Plain Node
 // https: no framework. Every route but /v1/join authenticates against the
@@ -206,7 +206,7 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         const b = await readJson(req, maxBody);
         requireOfficeKey(o.store, me.device_id, "office.project.create");
         const project = registerProject(o.store, b ?? {}, me.device_id);
-        ring("projects", { code: project.code });
+        ring("projects", {}); // no code: non-members must not learn it (R7a); couriers refetch GET /v1/projects
         ring("access", {});
         log(`${me.name}: team project ${project.code} (${project.name}) registered`);
         return send(res, 200, { project });
@@ -225,6 +225,14 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
       case "GET /v1/changes": {
         const r = fetchDeliveries(o.store, me.device_id, intParam(url, "after", 0), intParam(url, "limit", 2000));
         return send(res, 200, { changes: r.changes, last_seq: r.lastSeq, more: r.more });
+      }
+      case "GET /v1/replay": {
+        // R14: a missing or foreign project is a 404 (R7a); a member without note.view gets the 403.
+        const ulid = url.searchParams.get("project");
+        if (!ulid) throw new StoreError("project is needed");
+        requireMembership(o.store, me.device_id, ulid);
+        requireProjectKey(o.store, me.device_id, ulid, "note.view");
+        return send(res, 200, fetchReplay(o.store, me.device_id, ulid, intParam(url, "after", 0), intParam(url, "limit", 2000)));
       }
       case "GET /v1/modules":
         return send(res, 200, { shared: sharedModules(o.store) });
