@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { migrate, latestMigration, enableSync, loadCrsqlite, isCrsqliteLoaded, SLUG_REGEX } from "@collab-mcp/core";
+import { seedAccess, seedNewProject, assignNewMemberOfficeRole, assertRevocable } from "./access.js";
 
 // The post office's ONE SQLite file (D14). The notes schema (0007 + CRRs) is a
 // replica of every shared row; the po_* tables are the office's own and never
@@ -80,6 +81,49 @@ CREATE TABLE IF NOT EXISTS po_series_allocations (
   created_at TEXT    NOT NULL DEFAULT (datetime('now')),
   UNIQUE (series, id)
 );
+-- RnR (R1, R13): who may do what. The office owns these; they never sync.
+CREATE TABLE IF NOT EXISTS po_roles (
+  ulid        TEXT    NOT NULL PRIMARY KEY,
+  project_ulid TEXT   NOT NULL,
+  name        TEXT    NOT NULL,
+  keys        TEXT    NOT NULL,
+  is_starter  INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (project_ulid, name)
+);
+CREATE TABLE IF NOT EXISTS po_project_members (
+  project_ulid TEXT NOT NULL,
+  device_id    TEXT NOT NULL,
+  role_ulid    TEXT NOT NULL,
+  PRIMARY KEY (project_ulid, device_id)
+);
+CREATE TABLE IF NOT EXISTS po_project_ai (
+  project_ulid TEXT NOT NULL,
+  key          TEXT NOT NULL,
+  state        TEXT NOT NULL CHECK (state IN ('allow','ask','deny')),
+  PRIMARY KEY (project_ulid, key)
+);
+CREATE TABLE IF NOT EXISTS po_note_owners (
+  ulid      TEXT NOT NULL PRIMARY KEY,
+  device_id TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS po_office_roles (
+  ulid       TEXT    NOT NULL PRIMARY KEY,
+  name       TEXT    NOT NULL UNIQUE,
+  keys       TEXT    NOT NULL,
+  is_starter INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS po_office_members (
+  device_id TEXT NOT NULL PRIMARY KEY,
+  role_ulid TEXT NOT NULL
+);
+-- R14: a device that gains note.view gets the project's history up to this seq once.
+CREATE TABLE IF NOT EXISTS po_replays (
+  device_id    TEXT    NOT NULL,
+  project_ulid TEXT    NOT NULL,
+  upto_seq     INTEGER NOT NULL,
+  PRIMARY KEY (device_id, project_ulid)
+);
 `;
 
 function tune(db: Store): void {
@@ -113,6 +157,8 @@ export function createStore(path: string, opts: { seedMaxId: number }): Store {
   // the migrations created are not news to anyone.
   setMeta(db, "self_db_version", String(v));
   setMeta(db, "created_at", new Date().toISOString());
+  // A new office is born seeded: the upgrade path (R11) never runs on it later.
+  seedAccess(db);
   return db;
 }
 
@@ -125,6 +171,7 @@ export function openStore(path: string): Store {
   // laptop does (core backs the file up first).
   migrate(db);
   db.exec(PO_SCHEMA);
+  seedAccess(db);
   return db;
 }
 
@@ -198,9 +245,9 @@ export function allocate(db: Store, ulid: unknown, deviceId: string | null, seri
  * Register a team project (spec P1, P9). Idempotent for the same ulid + code;
  * another project with the same code or name (case-insensitive) is refused
  * (P10). `seed` = the highest number already used in that series (promote);
- * a new project sends 0.
+ * a new project sends 0. `creatorDevice` becomes its only member, as Owner (R7a).
  */
-export function registerProject(db: Store, p: { ulid: unknown; name: unknown; code: unknown; seed?: unknown }): OfficeProject {
+export function registerProject(db: Store, p: { ulid: unknown; name: unknown; code: unknown; seed?: unknown }, creatorDevice: string): OfficeProject {
   const ulid = String(p.ulid ?? ""), name = String(p.name ?? "").trim(), code = String(p.code ?? "").trim().toUpperCase();
   const seed = p.seed === undefined ? 0 : Number(p.seed);
   if (!ULID_RE.test(ulid)) throw new StoreError("a project needs a ULID");
@@ -208,6 +255,9 @@ export function registerProject(db: Store, p: { ulid: unknown; name: unknown; co
   if (code === "E" || code === "NONE" || !CODE_RE.test(code)) throw new StoreError(`project code "${code}" is not valid`);
   if (!Number.isInteger(seed) || seed < 0) throw new StoreError("seed must be a whole number >= 0");
   return db.transaction(() => {
+    if (!db.prepare(`SELECT 1 FROM po_members WHERE device_id = ? AND revoked_at IS NULL`).get(String(creatorDevice))) {
+      throw new StoreError("a project needs a creator who is a member of this office");
+    }
     const same = db.prepare(`SELECT ulid, name, code, created_at FROM po_projects WHERE ulid = ?`).get(ulid) as OfficeProject | undefined;
     if (same) {
       if (same.code !== code) throw new StoreError(`project ${ulid} is already registered with code ${same.code}`, 409);
@@ -219,6 +269,7 @@ export function registerProject(db: Store, p: { ulid: unknown; name: unknown; co
     if (byName) throw new StoreError(`this team already has a project named "${name}" (${byName.code})`, 409);
     db.prepare(`INSERT INTO po_projects (ulid, name, code) VALUES (?, ?, ?)`).run(ulid, name, code);
     db.prepare(`INSERT INTO po_series_counters (series, value) VALUES (?, ?)`).run(code, seed);
+    seedNewProject(db, ulid, creatorDevice);
     return db.prepare(`SELECT ulid, name, code, created_at FROM po_projects WHERE ulid = ?`).get(ulid) as OfficeProject;
   }).immediate();
 }
@@ -253,9 +304,12 @@ export function addMember(db: Store, name: string, opts: { ttlHours?: number } =
   const deviceId = "d-" + randomBytes(5).toString("hex");
   const secret = randomBytes(24).toString("base64url");
   const ttl = opts.ttlHours ?? JOIN_TTL_HOURS;
-  db.prepare(
-    `INSERT INTO po_members (device_id, name, join_hash, join_expires_at) VALUES (?, ?, ?, datetime('now', ?))`,
-  ).run(deviceId, n, sha256(secret), `${ttl >= 0 ? "+" : ""}${ttl} hours`);
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO po_members (device_id, name, join_hash, join_expires_at) VALUES (?, ?, ?, datetime('now', ?))`,
+    ).run(deviceId, n, sha256(secret), `${ttl >= 0 ? "+" : ""}${ttl} hours`);
+    assignNewMemberOfficeRole(db, deviceId);
+  }).immediate();
   return { deviceId, secret };
 }
 
@@ -305,6 +359,7 @@ export function revokeMember(db: Store, who: string): Member {
   const rows = db.prepare(`SELECT ${MEMBER_COLS} FROM po_members WHERE device_id = ? OR name = ?`).all(who, who) as Member[];
   if (rows.length === 0) throw new StoreError(`no member called ${who}`, 404);
   if (rows.length > 1) throw new StoreError(`${rows.length} members are called ${who}; revoke by device id: ${rows.map((r) => r.device_id).join(", ")}`);
+  if (!rows[0].revoked_at) assertRevocable(db, rows[0].device_id);
   db.prepare(`UPDATE po_members SET revoked_at = COALESCE(revoked_at, datetime('now')), join_hash = NULL WHERE device_id = ?`).run(rows[0].device_id);
   return { ...rows[0], revoked_at: rows[0].revoked_at ?? "now" };
 }

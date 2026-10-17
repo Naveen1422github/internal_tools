@@ -73,6 +73,7 @@ test('push rings everyone but the sender; the others pull it', async () => {
 test('revoke: the next request is refused and the open doorbell is closed', async () => {
   const o = await office();
   try {
+    await o.join('main'); // RnR: the first member is the Office admin; revoke the second
     const m = await o.join('lost laptop');
     const l = listen(o.target(m));
     await l.isReady;

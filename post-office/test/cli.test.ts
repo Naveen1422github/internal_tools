@@ -52,6 +52,8 @@ test('add-member prints a join code; status, revoke, share', async () => {
   try {
     const data = join(t.dir, 'office');
     await runCli(['init', '--data', data, '--seed-max-id', '0', '--url', 'https://10.0.0.9:7443'], io().io);
+    // RnR: the first member is Office admin and cannot be revoked; revoke the second.
+    assert.equal((await runCli(['add-member', 'main', '--data', data], io().io)).code, 0);
     const c = io();
     assert.equal((await runCli(['add-member', 'second laptop', '--data', data], c.io)).code, 0);
     const code = c.out.find((l) => l.startsWith('collab1-'))!;

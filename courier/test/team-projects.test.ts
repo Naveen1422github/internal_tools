@@ -38,8 +38,10 @@ type World = Awaited<ReturnType<typeof world>>;
 
 const note = (title: string, extra: Record<string, unknown> = {}) =>
   ({ type: 'decision' as const, title, summary: `${title} summary`, description: `${title} body`, ...extra });
+/** RnR: a project needs a creator; these pre-RnR tests register as the office's first member. */
+const creator = (o: Office) => (o.store.prepare(`SELECT device_id FROM po_members ORDER BY rowid LIMIT 1`).get() as { device_id: string }).device_id;
 function team(office: Office, code = 'SH', name = 'Support hub', seed = 0) {
-  return registerProject(office.store, { ulid: newUlid(), name, code, seed });
+  return registerProject(office.store, { ulid: newUlid(), name, code, seed }, creator(office));
 }
 const atOffice = (o: Office, ulid: string) =>
   o.store.prepare(`SELECT id, series, title, summary, description FROM entries WHERE ulid = ?`).get(ulid) as any;
@@ -156,7 +158,7 @@ test('promote: a solo project made team sends its older notes whole and continue
     await w.ca.syncNow();
     assert.equal(deliveriesOf(w.office, n1.ulid), 0, 'solo until promoted');
     w.wa.prepare(`UPDATE projects SET mode = 'team', team = ? WHERE ulid = ?`).run(w.office.fingerprint, nv.ulid);
-    registerProject(w.office.store, { ulid: nv.ulid, name: 'Navi', code: 'NV', seed: 2 });
+    registerProject(w.office.store, { ulid: nv.ulid, name: 'Navi', code: 'NV', seed: 2 }, creator(w.office));
     await w.ca.syncNow();
     assert.equal(atOffice(w.office, n1.ulid)?.title, 'nv one');
     assert.equal(atOffice(w.office, n2.ulid)?.title, 'nv two');

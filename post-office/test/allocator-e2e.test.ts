@@ -74,6 +74,7 @@ test('revoked: answered at once, saved pending; post office down: saved pending,
   const pending = () => (lap.db.prepare('SELECT COUNT(*) c FROM entries WHERE id IS NULL').get() as { c: number }).c;
   try {
     setAllocator(null);
+    await o.join('a'); // RnR: the first member is the Office admin; revoke the second
     configure(lap.db, o.po.url, o.cert.fingerprint, await o.join('b'));
     revokeMember(o.store, 'b');
     const t0 = Date.now();

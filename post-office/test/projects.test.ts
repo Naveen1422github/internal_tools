@@ -4,7 +4,13 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { newUlid } from '@collab-mcp/core';
 import { tempStore } from './helpers.js';
-import { allocate, registerProject, listOfficeProjects, StoreError } from '../src/store.js';
+import { allocate, registerProject, listOfficeProjects, addMember, StoreError, type Store } from '../src/store.js';
+
+/** RnR: a project needs a creator; pre-RnR tests register as the office's first member. */
+function main(db: Store): string {
+  const r = db.prepare(`SELECT device_id FROM po_members ORDER BY rowid LIMIT 1`).get() as { device_id: string } | undefined;
+  return r ? r.device_id : addMember(db, 'main').deviceId;
+}
 
 const storeError = (status: number, re?: RegExp) => (e: unknown) =>
   e instanceof StoreError && e.status === status && (!re || re.test(e.message));
@@ -12,7 +18,7 @@ const storeError = (status: number, re?: RegExp) => (e: unknown) =>
 test('series counters are independent of each other and of E', () => {
   const t = tempStore(100);
   try {
-    registerProject(t.store, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 });
+    registerProject(t.store, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 }, main(t.store));
     const [u1, u2, u3] = [newUlid(), newUlid(), newUlid()];
     assert.equal(allocate(t.store, u1, 'd', 'SH'), 1);
     assert.equal(allocate(t.store, u2, 'd', 'SH'), 2);
@@ -24,7 +30,7 @@ test('series counters are independent of each other and of E', () => {
 test('same ulid in the same series: same number, counter moves once', () => {
   const t = tempStore();
   try {
-    registerProject(t.store, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 });
+    registerProject(t.store, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 }, main(t.store));
     const u = newUlid();
     assert.equal(allocate(t.store, u, 'd', 'SH'), 1);
     assert.equal(allocate(t.store, u, 'd', 'SH'), 1);
@@ -35,8 +41,8 @@ test('same ulid in the same series: same number, counter moves once', () => {
 test('one ulid never gets numbers in two series', () => {
   const t = tempStore();
   try {
-    registerProject(t.store, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 });
-    registerProject(t.store, { ulid: newUlid(), name: 'Navi', code: 'NV', seed: 0 });
+    registerProject(t.store, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 }, main(t.store));
+    registerProject(t.store, { ulid: newUlid(), name: 'Navi', code: 'NV', seed: 0 }, main(t.store));
     const u = newUlid();
     allocate(t.store, u, 'd', 'SH');
     assert.throws(() => allocate(t.store, u, 'd', 'NV'), storeError(409, /already numbered SH-1/));
@@ -57,7 +63,7 @@ test('unknown series: 404', () => {
 test('seed: a promoted project continues after its highest number', () => {
   const t = tempStore();
   try {
-    registerProject(t.store, { ulid: newUlid(), name: 'Navi', code: 'NV', seed: 7 });
+    registerProject(t.store, { ulid: newUlid(), name: 'Navi', code: 'NV', seed: 7 }, main(t.store));
     assert.equal(allocate(t.store, newUlid(), 'd', 'NV'), 8);
   } finally { t.cleanup(); }
 });
@@ -66,26 +72,26 @@ test('register: clashes refused, the same project again is idempotent, bad input
   const t = tempStore();
   try {
     const u = newUlid();
-    const first = registerProject(t.store, { ulid: u, name: 'Support hub', code: 'sh', seed: 0 });
+    const first = registerProject(t.store, { ulid: u, name: 'Support hub', code: 'sh', seed: 0 }, main(t.store));
     assert.equal(first.code, 'SH');
-    assert.throws(() => registerProject(t.store, { ulid: newUlid(), name: 'Other', code: 'SH', seed: 0 }), storeError(409));
-    assert.throws(() => registerProject(t.store, { ulid: newUlid(), name: 'SUPPORT HUB', code: 'SX', seed: 0 }), storeError(409));
-    assert.throws(() => registerProject(t.store, { ulid: u, name: 'Support hub', code: 'SX', seed: 0 }), storeError(409));
-    const again = registerProject(t.store, { ulid: u, name: 'Support hub', code: 'SH', seed: 0 });
+    assert.throws(() => registerProject(t.store, { ulid: newUlid(), name: 'Other', code: 'SH', seed: 0 }, main(t.store)), storeError(409));
+    assert.throws(() => registerProject(t.store, { ulid: newUlid(), name: 'SUPPORT HUB', code: 'SX', seed: 0 }, main(t.store)), storeError(409));
+    assert.throws(() => registerProject(t.store, { ulid: u, name: 'Support hub', code: 'SX', seed: 0 }, main(t.store)), storeError(409));
+    const again = registerProject(t.store, { ulid: u, name: 'Support hub', code: 'SH', seed: 0 }, main(t.store));
     assert.deepEqual(again, first);
-    assert.throws(() => registerProject(t.store, { ulid: newUlid(), name: 'x', code: 'E', seed: 0 }), storeError(400));
-    assert.throws(() => registerProject(t.store, { ulid: newUlid(), name: 'x', code: 'S', seed: 0 }), storeError(400));
-    assert.throws(() => registerProject(t.store, { ulid: 'junk', name: 'x', code: 'XY', seed: 0 }), storeError(400));
-    assert.throws(() => registerProject(t.store, { ulid: newUlid(), name: 'x', code: 'XY', seed: -1 }), storeError(400));
-    assert.throws(() => registerProject(t.store, { ulid: newUlid(), name: ' ', code: 'XY', seed: 0 }), storeError(400));
+    assert.throws(() => registerProject(t.store, { ulid: newUlid(), name: 'x', code: 'E', seed: 0 }, main(t.store)), storeError(400));
+    assert.throws(() => registerProject(t.store, { ulid: newUlid(), name: 'x', code: 'S', seed: 0 }, main(t.store)), storeError(400));
+    assert.throws(() => registerProject(t.store, { ulid: 'junk', name: 'x', code: 'XY', seed: 0 }, main(t.store)), storeError(400));
+    assert.throws(() => registerProject(t.store, { ulid: newUlid(), name: 'x', code: 'XY', seed: -1 }, main(t.store)), storeError(400));
+    assert.throws(() => registerProject(t.store, { ulid: newUlid(), name: ' ', code: 'XY', seed: 0 }, main(t.store)), storeError(400));
   } finally { t.cleanup(); }
 });
 
 test('listOfficeProjects: ordered by code', () => {
   const t = tempStore();
   try {
-    registerProject(t.store, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 });
-    registerProject(t.store, { ulid: newUlid(), name: 'Navi', code: 'NV', seed: 3 });
+    registerProject(t.store, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 }, main(t.store));
+    registerProject(t.store, { ulid: newUlid(), name: 'Navi', code: 'NV', seed: 3 }, main(t.store));
     const list = listOfficeProjects(t.store);
     assert.deepEqual(list.map((p) => [p.code, p.name]), [['NV', 'Navi'], ['SH', 'Support hub']]);
     assert.ok(list.every((p) => typeof p.ulid === 'string' && typeof p.created_at === 'string'));

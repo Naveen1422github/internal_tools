@@ -150,7 +150,7 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         return send(res, 200, { projects: listOfficeProjects(o.store) });
       case "POST /v1/projects": {
         const b = await readJson(req, maxBody);
-        const project = registerProject(o.store, b ?? {});
+        const project = registerProject(o.store, b ?? {}, me.device_id);
         ring("projects", { code: project.code });
         log(`${me.name}: team project ${project.code} (${project.name}) registered`);
         return send(res, 200, { project });

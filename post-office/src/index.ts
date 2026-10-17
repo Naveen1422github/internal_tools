@@ -1,4 +1,5 @@
 export * from "./store.js";
+export * from "./access.js";
 export * from "./deliveries.js";
 export * from "./merge.js";
 export * from "./server.js";

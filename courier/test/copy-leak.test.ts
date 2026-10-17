@@ -19,7 +19,7 @@ async function world() {
   const ca = new Courier({ dbPath: ja.path, watch: false, retryMs: 60_000 });
   const cb = new Courier({ dbPath: jb.path, watch: false, retryMs: 60_000 });
   setAllocationRetry({ delaysMs: [0, 0], timeoutMs: 1500 });
-  registerProject(office.store, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 });
+  registerProject(office.store, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 }, ja.device); // RnR: a creates it
   await ca.syncNow();
   await cb.syncNow();
   return {

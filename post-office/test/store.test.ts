@@ -55,6 +55,7 @@ test('reopening keeps the counter and loads cr-sqlite', () => {
 test('join codes are one-time; keys authenticate until revoked', () => {
   const { store, cleanup } = tempStore();
   try {
+    addMember(store, 'main'); // RnR: the first member is the Office admin; revoke the second
     const { deviceId, secret } = addMember(store, 'second laptop');
     assert.throws(() => redeemJoin(store, deviceId, 'wrong'), (e: any) => e instanceof StoreError && e.status === 403);
     const { key } = redeemJoin(store, deviceId, secret);
