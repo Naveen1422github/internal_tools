@@ -195,3 +195,17 @@ test('DELETE /v1/office/members revokes exactly that device, even if another mem
     assert.equal(rows.find((x) => x.device_id === victim.device)!.revoked_at, null);
   } finally { await o.stop(); }
 });
+
+test('DELETE /v1/office/members refuses the only Owner of a project, naming it and the fix', async () => {
+  const o = await office();
+  try {
+    const n = await o.join('N');
+    const r = await o.join('R');
+    const p = mkProject('SOLO');
+    assert.equal((await requestJson(o.target(r), 'POST', '/v1/projects', p)).status, 200);
+    const res = await requestJson(o.target(n), 'DELETE', `/v1/office/members/${r.device}`);
+    assert.equal(res.status, 409);
+    assert.match(res.body.error, /only Owner of SOLO; make someone else Owner first/);
+    assert.match(res.body.error, /collab office set-project-role <new owner> SOLO Owner/);
+  } finally { await o.stop(); }
+});

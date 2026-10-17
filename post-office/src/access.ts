@@ -172,25 +172,26 @@ export function seedNewProject(db: Store, projectUlid: string, creatorDevice: st
  * needs member.revoke; the role given may not hold a key the actor lacks.
  * A project always keeps one Owner. R14: gaining
  * note.view queues a replay of the history so far; losing it drops it.
+ * `actor = null` = the office machine's CLI: no keys checked, the Owner rule still holds.
  */
-export function setProjectMember(db: Store, actor: string, projectUlid: string, deviceId: string, roleName: string | null): boolean {
+export function setProjectMember(db: Store, actor: string | null, projectUlid: string, deviceId: string, roleName: string | null): boolean {
   return db.transaction(() => {
     if (!db.prepare(`SELECT 1 FROM po_projects WHERE ulid = ?`).get(projectUlid)) throw new StoreError(`no team project ${projectUlid} on this post office`, 404);
     const cur = db
       .prepare(`SELECT r.name FROM po_project_members x JOIN po_roles r ON r.ulid = x.role_ulid WHERE x.project_ulid = ? AND x.device_id = ?`)
       .get(projectUlid, deviceId) as { name: string } | undefined;
     if (roleName === null) {
-      requireProjectKey(db, actor, projectUlid, "member.revoke");
+      if (actor !== null) requireProjectKey(db, actor, projectUlid, "member.revoke");
       if (!cur) return false;
     } else {
-      requireProjectKey(db, actor, projectUlid, cur ? "role.manage" : "member.invite");
+      if (actor !== null) requireProjectKey(db, actor, projectUlid, cur ? "role.manage" : "member.invite");
       if (cur?.name === roleName) return false;
       if (!liveMember(db, deviceId)) throw new StoreError(`${deviceId} is not a member of this office`, 404);
     }
     const role = roleName === null ? undefined : db.prepare(`SELECT ulid, keys FROM po_roles WHERE project_ulid = ? AND name = ?`).get(projectUlid, roleName) as { ulid: string; keys: string } | undefined;
     if (roleName !== null && !role) throw new StoreError(`${codeOf(db, projectUlid)} has no role called "${roleName}"`, 404);
-    // No one hands out a role above their own keys (ruling 4).
-    if (role) for (const k of grant("project", role.keys)) requireProjectKey(db, actor, projectUlid, k);
+    // No one hands out a role above their own keys (ruling 4); the office CLI is exempt.
+    if (role && actor !== null) for (const k of grant("project", role.keys)) requireProjectKey(db, actor, projectUlid, k);
     if (cur?.name === OWNER && soleOwnerOf(db, deviceId).includes(projectUlid)) {
       throw new StoreError(`${codeOf(db, projectUlid)} needs at least one Owner; make someone else Owner first`, 409);
     }
@@ -230,6 +231,11 @@ export function assertRevocable(db: Store, deviceId: string): void {
   }
   const sole = soleOwnerOf(db, deviceId);
   if (sole.length) {
-    throw new StoreError(`this is the only Owner of ${sole.map((p) => codeOf(db, p)).join(", ")}; make someone else Owner first`, 409);
+    const codes = sole.map((p) => codeOf(db, p));
+    throw new StoreError(
+      `this is the only Owner of ${codes.join(", ")}; make someone else Owner first. On the office machine: ` +
+        codes.map((c) => `collab office set-project-role <new owner> ${c} Owner`).join("; "),
+      409,
+    );
   }
 }
