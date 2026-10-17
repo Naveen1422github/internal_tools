@@ -7,6 +7,7 @@ import {
   createStore, openStore, closeStore, addMember, revokeMember, teamStatus, setModuleShared, sharedModules,
   nextNumber, JOIN_TTL_HOURS, StoreError, type Store,
 } from "./store.js";
+import { setOfficeRole } from "./access.js";
 import { lastSeq } from "./deliveries.js";
 import { startPostOffice, type PostOffice } from "./server.js";
 import { defaultDataDir, officeFiles } from "./paths.js";
@@ -22,6 +23,7 @@ export const USAGE = `collab-post-office: the sync v1 post office
   serve [--host 0.0.0.0]
   add-member <name>            prints a ONE-TIME join code (valid ${JOIN_TTL_HOURS / 24} days)
   revoke <device-id | name>
+  set-office-role <device-id | name> <role>   e.g. "Office admin" (no login needed: you are on this machine)
   status
   share <module> | unshare <module> | modules
 
@@ -144,6 +146,20 @@ export async function runCli(argv: string[], io: Io): Promise<{ code: number; of
         if (!who) throw new StoreError("revoke needs a device id or a member name");
         const m = withStore(dir, (s) => revokeMember(s, who));
         io.out(`revoked ${m.name} (${m.device_id}): every request from it is now refused`);
+        return { code: 0 };
+      }
+      case "set-office-role": {
+        const who = pos[1], role = pos.slice(2).join(" ").trim();
+        if (!who || !role) throw new StoreError("set-office-role needs a member and a role, e.g. set-office-role main \"Office admin\"");
+        // The office machine is unguarded (R13): actor = null.
+        const m = withStore(dir, (s) => {
+          const rows = s.prepare(`SELECT device_id, name FROM po_members WHERE revoked_at IS NULL AND (device_id = ? OR name = ?)`).all(who, who) as Array<{ device_id: string; name: string }>;
+          if (rows.length === 0) throw new StoreError(`no member called ${who}`, 404);
+          if (rows.length > 1) throw new StoreError(`${rows.length} members are called ${who}; use the device id: ${rows.map((r) => r.device_id).join(", ")}`);
+          setOfficeRole(s, null, rows[0].device_id, role);
+          return rows[0];
+        });
+        io.out(`${m.name} (${m.device_id}) is now ${role}`);
         return { code: 0 };
       }
       case "status": {

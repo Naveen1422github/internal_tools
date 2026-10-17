@@ -97,3 +97,35 @@ test('unknown command: usage, exit code 2', async () => {
   assert.equal((await runCli(['frobnicate'], c.io)).code, 2);
   assert.match(c.err.join('\n'), /add-member/);
 });
+
+test('set-office-role (office machine, unguarded) changes who is Office admin', async () => {
+  const t = tempDir();
+  try {
+    const data = join(t.dir, 'office');
+    await runCli(['init', '--data', data, '--seed-max-id', '0', '--url', 'https://10.0.0.9:7443'], io().io);
+    await runCli(['add-member', 'main', '--data', data], io().io); // seeded as Office admin
+    await runCli(['add-member', 'second', '--data', data], io().io); // Office member
+    const roleOf = (name: string) => {
+      const db = new Database(join(data, 'store.db'), { readonly: true });
+      try {
+        return (db.prepare(`SELECT r.name n FROM po_members m JOIN po_office_members om ON om.device_id = m.device_id JOIN po_office_roles r ON r.ulid = om.role_ulid WHERE m.name = ?`).get(name) as { n: string }).n;
+      } finally { db.close(); }
+    };
+    assert.equal(roleOf('main'), 'Office admin');
+    // The only admin cannot be demoted, with a plain message.
+    const bad = io();
+    assert.equal((await runCli(['set-office-role', 'main', 'Office member', '--data', data], bad.io)).code, 1);
+    assert.match(bad.err.join('\n'), /at least one Office admin/);
+    const ok = io();
+    assert.equal((await runCli(['set-office-role', 'second', 'Office admin', '--data', data], ok.io)).code, 0, ok.err.join('\n'));
+    assert.equal(roleOf('second'), 'Office admin');
+    assert.equal((await runCli(['set-office-role', 'main', 'Office member', '--data', data], io().io)).code, 0);
+    assert.equal(roleOf('main'), 'Office member');
+    const nobody = io();
+    assert.equal((await runCli(['set-office-role', 'ghost', 'Office admin', '--data', data], nobody.io)).code, 1);
+    assert.match(nobody.err.join('\n'), /no member called ghost/);
+    const norole = io();
+    assert.equal((await runCli(['set-office-role', 'main', 'Wizard', '--data', data], norole.io)).code, 1);
+    assert.match(norole.err.join('\n'), /no role called "Wizard"/);
+  } finally { t.cleanup(); }
+});
