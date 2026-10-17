@@ -73,6 +73,13 @@ function prep(db: Store, sql: string): Database.Statement {
   return st;
 }
 
+const ENTRY_PROJECTS = `
+SELECT e.ulid, e.project_ulid,
+       EXISTS (SELECT 1 FROM entries__crsql_clock c WHERE c.key = p.__crsql_key AND c.col_name = 'project_ulid') AS hp,
+       EXISTS (SELECT 1 FROM entries__crsql_clock c WHERE c.key = p.__crsql_key AND c.col_name = 'series') AS hs
+  FROM entries e JOIN entries__crsql_pks p ON p.ulid = e.ulid
+ WHERE e.ulid IN (SELECT value FROM json_each(?))`;
+
 /** Each row's owning entry and stamp: two queries for any number of rows. `hints` overlay the store (pre-apply guess). */
 function resolve(db: Store, rows: DeliveryRow[], hints?: Hints): Resolved[] {
   // A batch carries each pk once per cell: decode a pk only when it differs from the previous one.
@@ -83,7 +90,10 @@ function resolve(db: Store, rows: DeliveryRow[], hints?: Hints): Resolved[] {
     if (!lastPk || !lastPk.equals(r.pk)) { lastPk = r.pk; lastKey = firstTextCell(r.pk); }
     return lastKey;
   });
-  const revIds = [...new Set(rows.flatMap((r, i) => (r.tbl === "entry_revisions" && keys[i] ? [keys[i]!] : [])))];
+  // With hints (the pre-apply guess) the store is asked only what the batch doesn't say.
+  const revSet = new Set<string>();
+  rows.forEach((r, i) => { const k = keys[i]; if (r.tbl === "entry_revisions" && k && !hints?.rev.has(k)) revSet.add(k); });
+  const revIds = [...revSet];
   const revEntry = new Map<string, string>();
   if (revIds.length) {
     for (const x of prep(db, `SELECT rev_id, entry_ulid FROM entry_revisions WHERE rev_id IN (SELECT value FROM json_each(?))`)
@@ -99,16 +109,22 @@ function resolve(db: Store, rows: DeliveryRow[], hints?: Hints): Resolved[] {
       default: return null; // an unknown table is held, never sent to everyone
     }
   });
+  // An entry's project is known only once the office holds its project_ulid cell (clock row).
+  // No project cell but a series cell = a note whose cells are still arriving: held ('?').
+  // Neither cell = a note written before 0009 (crsql_commit_alter gives old rows no clock
+  // for new columns): it has no project (rule 2). The courier sends all of one note's
+  // entries cells in one POST, so a fresh insert cut before `series` does not reach here.
   const project = new Map<string, string | null>();
-  const wanted = [...new Set(ulids.filter((u): u is string => u !== null))];
+  const wanted = [...new Set(ulids.filter((u): u is string => u !== null && !hints?.project.has(u)))];
   if (wanted.length) {
-    for (const e of prep(db, `SELECT ulid, project_ulid FROM entries WHERE ulid IN (SELECT value FROM json_each(?))`)
-      .all(JSON.stringify(wanted)) as Array<{ ulid: string; project_ulid: string | null }>) project.set(e.ulid, e.project_ulid);
+    for (const e of prep(db, ENTRY_PROJECTS).all(JSON.stringify(wanted)) as Array<{ ulid: string; project_ulid: string | null; hp: number; hs: number }>) {
+      project.set(e.ulid, e.hp ? e.project_ulid : e.hs ? "?" : null);
+    }
   }
   if (hints) for (const [u, p] of hints.project) project.set(u, p);
   return rows.map((r, i) => {
     const u = ulids[i];
-    const stamp = r.tbl === "modules" ? null : u === null || !project.has(u) ? "?" : project.get(u) ?? null;
+    const stamp = r.tbl === "modules" ? null : u === null || !project.has(u) ? "?" : (project.get(u) as string | null);
     return { seq: r.seq, tbl: r.tbl, origin: r.origin, held: r.held, key: keys[i], ulid: u, stamp };
   });
 }
@@ -183,9 +199,9 @@ export function stampProjects(db: Store, seqs: number[], inHand?: DeliveryRow[])
 
   const released = rows.filter((r) => r.held && r.stamp !== "?");
   if (!released.length) return;
-  const get = db.prepare(`SELECT * FROM po_deliveries WHERE seq = ?`);
-  const del = db.prepare(`DELETE FROM po_deliveries WHERE seq = ?`);
-  const ins = db.prepare(
+  const get = prep(db, `SELECT * FROM po_deliveries WHERE seq = ?`);
+  const del = prep(db, `DELETE FROM po_deliveries WHERE seq = ?`);
+  const ins = prep(db, 
     `INSERT INTO po_deliveries (origin, tbl, pk, cid, val, col_version, db_version, site_id, cl, ch_seq, received_at, project_ulid)
      VALUES (@origin, @tbl, @pk, @cid, @val, @col_version, @db_version, @site_id, @cl, @ch_seq, @received_at, @project_ulid)`,
   );

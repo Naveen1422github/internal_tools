@@ -51,6 +51,28 @@ type Timer = ReturnType<typeof setTimeout>;
 const now = () => new Date().toISOString();
 const changeKey = (w: WireChange) => `${w.site_id}|${w.db_version}|${w.seq}|${w.table}|${w.pk}|${w.cid}`;
 
+/**
+ * Requests of about `size` changes, in order, except that every `entries` cell
+ * of one note rides in the request of that note's first one. The office (R3)
+ * holds a note's rows until it has the note's project cell; a note cut before
+ * that cell would look like a pre-0009 note with no project, and go to everyone.
+ */
+export function pagesOf(batch: WireChange[], noteOf: (w: WireChange) => string | null, size: number): WireChange[][] {
+  const pages: WireChange[][] = [];
+  const pageOfNote = new Map<string, number>();
+  let fill = size;
+  for (const w of batch) {
+    const u = w.table === "entries" ? noteOf(w) : null;
+    const at = u === null ? undefined : pageOfNote.get(u);
+    if (at !== undefined) { pages[at].push(w); continue; }
+    if (fill >= size) { pages.push([]); fill = 0; }
+    pages[pages.length - 1].push(w);
+    fill++;
+    if (u !== null) pageOfNote.set(u, pages.length - 1);
+  }
+  return pages;
+}
+
 export class Courier {
   readonly db: Database.Database;
   /** The address as of start; used only if the notes DB loses it (never expected). */
@@ -361,6 +383,7 @@ export class Courier {
     const projectBackfill = new Set([...ctx.teamProjects].filter((p) => !doneProjects.has(p)));
     const memo = new Map<string, NotePlace>();
     const out = new Map<string, WireChange>();
+    const noteOf = new Map<string, string>(); // changeKey -> note, entries cells only
     const moved = new Set<string>();
     const createdNow = new Set<string>();
     const numberedNow = new Set<string>();
@@ -370,6 +393,7 @@ export class Courier {
       const { ulid, verdict } = sendVerdictOf(this.db, w, ctx, memo);
       if (verdict !== "send") continue; // hold = waiting (status only); the bookmark still passes it
       out.set(changeKey(w), w);
+      if (w.table === "entries" && ulid) noteOf.set(changeKey(w), ulid);
       if (w.table === "entries" && ulid) {
         if (w.cid === "created_at") createdNow.add(ulid);
         if (w.cid === "module") moved.add(ulid);
@@ -388,12 +412,15 @@ export class Courier {
           (place.project === null && place.module && backfill.has(place.module)) ||
           (place.project !== null && projectBackfill.has(place.project)) ||
           (ulid && (moved.has(ulid) || numberedNow.has(ulid)))
-        ) out.set(changeKey(w), w);
+        ) {
+          if (w.table === "entries" && ulid) noteOf.set(changeKey(w), ulid);
+          out.set(changeKey(w), w);
+        }
       }
     }
     const batch = [...out.values()];
-    for (let i = 0; i < batch.length; i += this.opt.batchSize) {
-      const r = await requestJson(this.target, "POST", "/v1/changes", { changes: batch.slice(i, i + this.opt.batchSize) });
+    for (const page of pagesOf(batch, (w) => noteOf.get(changeKey(w)) ?? null, this.opt.batchSize)) {
+      const r = await requestJson(this.target, "POST", "/v1/changes", { changes: page });
       if (r.status !== 200) throw new Error(`the post office refused the changes (${r.status}${r.body?.error ? `: ${r.body.error}` : ""})`);
     }
     // Only now is everything up to `top` acknowledged. A crash before this line

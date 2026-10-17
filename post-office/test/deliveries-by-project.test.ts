@@ -1,9 +1,8 @@
 // RnR R3: a team project's changes reach only devices holding note.view in it.
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { performance } from 'node:perf_hooks';
-import type Database from 'better-sqlite3';
-import { addEntryAsync, updateEntry, initModule, setAllocator, readOwnChanges, applyChanges, decodeChange, newUlid, type WireChange } from '@collab-mcp/core';
+import Database from 'better-sqlite3';
+import { addEntryAsync, updateEntry, initModule, migrate, migrateTo, enableSync, isCrsqliteLoaded, setAllocator, readOwnChanges, applyChanges, decodeChange, newUlid, type WireChange } from '@collab-mcp/core';
 import { tempStore, laptop } from './helpers.js';
 import { acceptChanges, fetchDeliveries, lastSeq } from '../src/deliveries.js';
 import { registerProject, openStore, closeStore, getMeta, type Store } from '../src/store.js';
@@ -191,45 +190,31 @@ test('backfill stamps pre-upgrade rows once', async () => {
 });
 
 test('stamping 2000 changes adds < 5 ms', async () => {
+  // One long-lived store fed consecutive 2000-change requests, as in production
+  // (prepared statements warm). Requests cut through notes, so held rows and
+  // releases are exercised: the worst case.
+  const RUNS = 9, WARM = 3;
   const la = laptop();
+  const { store, cleanup } = tempStore();
   try {
     const A = newUlid();
     let wire: WireChange[] = [];
-    for (let i = 0; wire.length < 2000; i++) {
+    for (let i = 0; wire.length < 2000 * (RUNS + WARM); i++) {
       await note(la.db, `perf ${i}`, i % 2 ? A : null);
-      wire = readOwnChanges(la.db, 0);
+      if (i % 20 === 19) wire = readOwnChanges(la.db, 0);
     }
-    wire = wire.slice(0, 2000);
-    const median = (xs: number[]) => [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 2)];
-    // Whole acceptChanges, with vs without stamping: logged only, disk noise here is tens of ms.
-    const accept = (stamp: boolean): number => {
-      const { store, cleanup } = tempStore();
-      try {
-        const t0 = performance.now();
-        acceptChanges(store, 'd-a', wire, { stamp });
-        return performance.now() - t0;
-      } finally { cleanup(); }
-    };
-    // The extra itself, timed inside acceptChanges: the pre-apply guess + stampProjects.
-    // (The extra RECORD column is one more bound value per insert, inside the logged totals.)
-    const extraOnce = (): number => {
-      const { store, cleanup } = tempStore();
-      try {
-        const timing = { stampMs: -1 };
-        acceptChanges(store, 'd-a', wire, { timing });
-        assert.ok((store.prepare(`SELECT COUNT(*) n FROM po_deliveries WHERE project_ulid = ?`).get(A) as { n: number }).n > 0, 'it did real work');
-        return timing.stampMs;
-      } finally { cleanup(); }
-    };
-    for (let i = 0; i < 3; i++) { accept(true); accept(false); extraOnce(); } // warm up (JIT)
-    const withS: number[] = [], without: number[] = [], extra: number[] = [];
-    for (let i = 0; i < 5; i++) {
-      if (i % 2) { without.push(accept(false)); withS.push(accept(true)); } else { withS.push(accept(true)); without.push(accept(false)); }
-      extra.push(extraOnce());
+    const ms: number[] = [];
+    for (let k = 0; k < RUNS + WARM; k++) {
+      const timing = { stampMs: -1 };
+      const r = acceptChanges(store, 'd-a', wire.slice(k * 2000, (k + 1) * 2000), { timing });
+      assert.equal(r.accepted, 2000);
+      if (k >= WARM) ms.push(timing.stampMs);
     }
-    console.log(`2000 changes: acceptChanges with ${median(withS).toFixed(2)} ms, without ${median(without).toFixed(2)} ms; R3 stamping ${median(extra).toFixed(2)} ms (runs ${extra.map((x) => x.toFixed(2)).join(', ')})`);
-    assert.ok(median(extra) < 5, `stamping added ${median(extra).toFixed(2)} ms`);
-  } finally { setAllocator(null); la.cleanup(); }
+    assert.ok((store.prepare(`SELECT COUNT(*) n FROM po_deliveries WHERE project_ulid = ?`).get(A) as { n: number }).n > 0, 'it did real work');
+    const median = [...ms].sort((x, y) => x - y)[Math.floor(ms.length / 2)];
+    console.log(`2000 changes x ${RUNS}: R3 stamping median ${median.toFixed(2)} ms (runs ${ms.map((x) => x.toFixed(2)).join(', ')})`);
+    assert.ok(median < 5, `stamping added ${median.toFixed(2)} ms`);
+  } finally { setAllocator(null); la.cleanup(); cleanup(); }
 });
 
 test("the office's own merge rows of a team note are stamped too", async () => {
@@ -255,4 +240,79 @@ test("the office's own merge rows of a team note are stamped too", async () => {
     assert.deepEqual(fetchAll(store, 'd-x', x0).changes, [], 'a non-member gets none of it');
     assert.ok(fetchAll(store, 'd-b', got.lastSeq).changes.length > 0, 'the member gets the merge');
   } finally { setAllocator(null); la.cleanup(); lb.cleanup(); cleanup(); }
+});
+
+// Fix round 1: a note's project cell can reach the office in a later request than its other cells.
+const cellAt = (ws: WireChange[], table: string, cid: string) => ws.findIndex((w) => { const c = decodeChange(w); return c.table === table && c.cid === cid; });
+
+test('a team note split just before its project cell is held until that cell arrives', async () => {
+  const { store, cleanup } = tempStore();
+  const la = laptop();
+  try {
+    for (const d of ['d-a', 'd-c', 'd-x']) member(store, d);
+    const A = project(store, 'AA', 'd-a');
+    setProjectMember(store, 'd-a', A, 'd-c', 'Reader');
+    const u = await note(la.db, 'SECRET', A);
+    const w = readOwnChanges(la.db, 0);
+    const cut = cellAt(w, 'entries', 'project_ulid');
+    assert.ok(cut > 0);
+    acceptChanges(store, 'd-a', w.slice(0, cut));
+    const x1 = fetchAll(store, 'd-x'), c1 = fetchAll(store, 'd-c');
+    assert.ok(!x1.changes.some((c) => ownerOf(store, c) === u), 'a non-member gets nothing of the first half');
+    assert.ok(!c1.changes.some((c) => ownerOf(store, c) === u), 'nor does a member, until the project is known');
+    acceptChanges(store, 'd-a', w.slice(cut));
+    assert.ok(!fetchAll(store, 'd-x', x1.lastSeq).changes.some((c) => ownerOf(store, c) === u), 'still nothing for a non-member');
+    const c2 = fetchAll(store, 'd-c', c1.lastSeq);
+    const want = w.filter((c) => decodeChange(c).table !== 'modules').length;
+    assert.equal(c2.changes.filter((c) => ownerOf(store, c) === u).length, want, 'the member gets every row, from its old bookmark');
+  } finally { setAllocator(null); la.cleanup(); cleanup(); }
+});
+
+test('a legacy note split the same way reaches everyone once its project_ulid = NULL cell arrives', async () => {
+  const { store, cleanup } = tempStore();
+  const la = laptop();
+  try {
+    member(store, 'd-x');
+    const u = await note(la.db, 'legacy split', null);
+    const w = readOwnChanges(la.db, 0);
+    const cut = cellAt(w, 'entries', 'project_ulid');
+    assert.ok(cut > 0);
+    assert.equal(decodeChange(w[cut]).val, null, 'a post-0009 legacy insert sends project_ulid = NULL');
+    acceptChanges(store, 'd-a', w.slice(0, cut));
+    const x1 = fetchAll(store, 'd-x');
+    assert.ok(!x1.changes.some((c) => ownerOf(store, c) === u), 'held while its project is unknown');
+    acceptChanges(store, 'd-a', w.slice(cut));
+    const x2 = fetchAll(store, 'd-x', x1.lastSeq);
+    assert.equal(x2.changes.filter((c) => ownerOf(store, c) === u).length, w.filter((c) => decodeChange(c).table !== 'modules').length);
+  } finally { setAllocator(null); la.cleanup(); cleanup(); }
+});
+
+test('a note written before 0009 (no project cell anywhere) still reaches everyone, and so do its edits (rule 2)', async () => {
+  const { store, cleanup } = tempStore();
+  const t = laptop(); // only for a temp dir; the old laptop is built by hand below
+  const old = new Database(t.path.replace(/collab\.db$/, 'old.db'));
+  try {
+    member(store, 'd-x');
+    migrateTo(old, '0008_revision_author');
+    enableSync(old);
+    setAllocator({ allocate: async () => ++n });
+    const r = await addEntryAsync(old, { type: 'decision', title: 'pre 0009', summary: 's', module: 'm', refs: [{ ref_type: 'file', ref_value: 'old.ts' }] });
+    migrate(old);
+    const w = readOwnChanges(old, 0);
+    assert.equal(cellAt(w, 'entries', 'project_ulid'), -1, 'an old note has no project cell');
+    assert.equal(cellAt(w, 'entries', 'series'), -1);
+    acceptChanges(store, 'd-a', w);
+    const x1 = fetchAll(store, 'd-x');
+    assert.equal(x1.changes.length, w.length, 'every row reaches a non-project member');
+    const top = (old.prepare(`SELECT COALESCE(MAX(db_version), 0) v FROM crsql_changes`).get() as { v: number }).v;
+    updateEntry(old, { ulid: r.ulid, title: 'pre 0009, edited' });
+    const edit = readOwnChanges(old, top);
+    acceptChanges(store, 'd-a', edit);
+    assert.equal(fetchAll(store, 'd-x', x1.lastSeq).changes.length, edit.length, 'and so does a later edit');
+    assert.equal((store.prepare(`SELECT COUNT(*) n FROM po_deliveries WHERE project_ulid IS NOT NULL`).get() as { n: number }).n, 0);
+  } finally {
+    setAllocator(null);
+    try { if (isCrsqliteLoaded(old)) old.prepare('SELECT crsql_finalize()').get(); old.close(); } catch { /* closed */ }
+    t.cleanup(); cleanup();
+  }
 });
