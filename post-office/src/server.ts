@@ -32,6 +32,8 @@ export interface PostOfficeOptions {
     dropChangesAnswer?: (device: string) => boolean;
     /** Every request, with the device id it CLAIMS (before authentication), so tests also count refused ones. */
     onRequest?: (route: string, device: string) => void;
+    /** Answer GET /v1/access with this status instead (404 = an older office, 500 = a broken one). */
+    accessStatus?: (device: string) => number | null;
   };
 }
 
@@ -194,8 +196,11 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         if (o.testHooks?.dropAllocateAnswer?.(String(b?.ulid))) { req.socket.destroy(); return; }
         return send(res, 200, { id, series });
       }
-      case "GET /v1/access":
+      case "GET /v1/access": {
+        const forced = o.testHooks?.accessStatus?.(me.device_id);
+        if (forced) return send(res, forced, { error: forced === 404 ? `no such endpoint: ${route}` : "broken" });
         return send(res, 200, accessFor(o.store, me.device_id));
+      }
       case "GET /v1/projects": {
         // R7a: a project you are not in does not exist for you.
         const mine = new Set((o.store.prepare(`SELECT project_ulid FROM po_project_members WHERE device_id = ?`).all(me.device_id) as Array<{ project_ulid: string }>).map((r) => r.project_ulid));

@@ -187,3 +187,74 @@ test('access_cache mirrors the office after an access event', async () => {
     assert.equal(cache.get('office')!.role, office.office.role);
   } finally { await w.cleanup(); }
 });
+
+// ---- the office's membership decides (fix round 1) ----
+
+test('removed before this laptop ever cached its access: still marked left', async () => {
+  const w = await world();
+  try {
+    const sh = await project(w);
+    await write(w, 'SH', 'one');
+    setProjectMember(w.office.store, w.n, sh.ulid, w.r, 'Reader');
+    await w.cr.syncNow();
+    assert.deepEqual(titlesIn(w.wr, 'SH'), ['one']);
+    w.wr.prepare(`DELETE FROM access_cache`).run(); // as if this laptop never filled it (just upgraded)
+    setProjectMember(w.office.store, w.n, sh.ulid, w.r, null);
+    await w.cr.syncNow();
+    assert.ok(findProject(w.wr, 'SH')!.left_at, 'not a member at the office: read-only');
+    assert.deepEqual(titlesIn(w.wr, 'SH'), ['one']);
+  } finally { await w.cleanup(); }
+});
+
+test('an older office (404 on /v1/access): nothing marked left, the sync still completes', async () => {
+  const w = await world();
+  try {
+    const sh = await project(w);
+    setProjectMember(w.office.store, w.n, sh.ulid, w.r, 'Reader');
+    await w.cr.syncNow();
+    const cached = readAccessCache(w.wr).get(sh.ulid)?.role;
+    w.office.hooks.accessStatus = (d) => (d === w.r ? 404 : null);
+    setProjectMember(w.office.store, w.n, sh.ulid, w.r, null);
+    await w.cr.syncNow();
+    assert.equal(findProject(w.wr, 'SH')!.left_at, null, 'no roles known: nothing is marked left');
+    assert.equal(w.cr.status.state, 'connected');
+    assert.equal(w.cr.status.lastError, null);
+    assert.equal(readAccessCache(w.wr).get(sh.ulid)?.role, cached, 'the cache is left as it was');
+  } finally { await w.cleanup(); }
+});
+
+test('a broken office (500 on /v1/access): the cache is unchanged and nothing is marked left', async () => {
+  const w = await world();
+  try {
+    const sh = await project(w);
+    setProjectMember(w.office.store, w.n, sh.ulid, w.r, 'Reader');
+    await w.cr.syncNow();
+    const before = w.wr.prepare(`SELECT * FROM access_cache ORDER BY scope_key`).all();
+    assert.ok(before.length >= 2);
+    w.office.hooks.accessStatus = (d) => (d === w.r ? 500 : null);
+    setProjectMember(w.office.store, w.n, sh.ulid, w.r, null);
+    await w.cr.syncNow();
+    assert.deepEqual(w.wr.prepare(`SELECT * FROM access_cache ORDER BY scope_key`).all(), before);
+    assert.equal(findProject(w.wr, 'SH')!.left_at, null);
+    assert.equal(w.cr.status.state, 'offline', 'a failed step retries later');
+    assert.match(w.cr.status.lastError ?? '', /did not say what this laptop may do \(500\)/);
+  } finally { await w.cleanup(); }
+});
+
+test('a team project created here while /v1/access is answering is not marked left', async () => {
+  const w = await world();
+  try {
+    await w.cr.syncNow();
+    const ulid = newUlid();
+    // Another program on R's laptop finishes creating a team project while the
+    // office is computing R's access (so the answer does not list it yet).
+    w.office.hooks.accessStatus = (d) => {
+      if (d === w.r && !findProject(w.wr, 'NW')) {
+        w.wr.prepare(`INSERT INTO projects (ulid, name, code, mode, team) VALUES (?, 'New one', 'NW', 'team', ?)`).run(ulid, w.office.fingerprint);
+      }
+      return null;
+    };
+    await w.cr.syncNow();
+    assert.equal(findProject(w.wr, 'NW')!.left_at, null);
+  } finally { await w.cleanup(); }
+});

@@ -6,7 +6,7 @@ import {
   readOwnChanges, decodeChange, applyChanges, reindexFts, requestJson, openEventStream, hasSeries, hasProjectLeft,
   sendContext, sendVerdictOf, resolveAllocator, allocateWithRetry, formatEntryRef,
   upsertTeamProjectFromOffice, localClashOf, projectClashText, assignPendingNumber,
-  writeAccessCache, findProject, markProjectLeft, clearProjectLeft,
+  writeAccessCache, markProjectLeft, clearProjectLeft,
   AccessRevokedError, SchemaMismatchError, PinMismatchError, COURIER_PORT_KEY,
   type PostOfficeTarget, type WireChange, type EventStream, type NotePlace, type ProjectClash, type AccessPayload,
 } from "@collab-mcp/core";
@@ -317,13 +317,19 @@ export class Courier {
 
   /**
    * What this laptop may do, as the office says (R2): cached locally, never
-   * synced. A team project of this office no longer listed is marked left
-   * (R15: its notes stay, read-only); one listed again after that is writable
-   * again. Then any replay the office owes us (R14). An older office (404)
-   * keeps no roles: nothing changes.
+   * synced. The office's membership decides (R15): a team project of this
+   * office it doesn't list is marked left (its notes stay, read-only); a left
+   * one it lists is writable again. Then any replay the office owes us (R14).
+   * An older office (404) keeps no roles: nothing changes.
    */
   private async refreshAccess(): Promise<void> {
     if (!hasSeries(this.db)) return;
+    const fingerprint = this.target.fingerprint;
+    // Only projects that were team projects here BEFORE asking: a project is
+    // team locally only after the office registered it with us as Owner, but
+    // one created by another program while the answer is on its way would be
+    // missing from it, and must not be marked left.
+    const known = new Set(this.teamProjectsOfOffice(fingerprint).map((x) => x.ulid));
     const r = await requestJson(this.target, "GET", "/v1/access");
     if (r.status === 404) {
       if (!this.noAccessLogged) this.log("this post office keeps no roles (an older version): update it to use roles");
@@ -335,29 +341,27 @@ export class Courier {
     if (r.status !== 200 || !p || !Array.isArray(p.projects) || !Array.isArray(p.replays)) {
       throw new Error(`the post office did not say what this laptop may do (${r.status})`);
     }
-    const fingerprint = this.target.fingerprint;
-    const ours = (ulid: string) => {
-      const x = findProject(this.db, ulid);
-      return x && x.ulid === ulid && x.mode === "team" && x.team === fingerprint ? x : null;
-    };
+    const member = new Set(p.projects.map((x) => x.ulid));
     this.db.transaction(() => {
-      const before = new Set(
-        (this.db.prepare(`SELECT project_ulid FROM access_cache WHERE project_ulid IS NOT NULL`).all() as Array<{ project_ulid: string }>)
-          .map((x) => x.project_ulid),
-      );
-      const { dropped } = writeAccessCache(this.db, p);
-      for (const u of dropped) {
-        const x = ours(u);
-        if (x && !x.left_at && hasProjectLeft(this.db)) {
-          markProjectLeft(this.db, u);
+      writeAccessCache(this.db, p);
+      if (!hasProjectLeft(this.db)) return;
+      for (const x of this.teamProjectsOfOffice(fingerprint)) {
+        if (!member.has(x.ulid) && !x.left_at && known.has(x.ulid)) {
+          markProjectLeft(this.db, x.ulid);
           this.log(`removed from team project ${x.code}: its notes stay here, read-only`);
+        } else if (member.has(x.ulid) && x.left_at && clearProjectLeft(this.db, x.ulid, fingerprint)) {
+          this.log(`added back to team project ${x.code}: it is writable again`);
         }
-      }
-      for (const pr of p.projects) {
-        if (!before.has(pr.ulid) && clearProjectLeft(this.db, pr.ulid, fingerprint)) this.log(`added back to team project ${pr.code}: it is writable again`);
       }
     })();
     await this.runReplays(p.replays);
+  }
+
+  /** This notebook's team projects of the office `fingerprint`, left or not. */
+  private teamProjectsOfOffice(fingerprint: string): Array<{ ulid: string; code: string; left_at: string | null }> {
+    const left = hasProjectLeft(this.db) ? "left_at" : "NULL AS left_at";
+    return this.db.prepare(`SELECT ulid, code, ${left} FROM projects WHERE mode = 'team' AND team = ?`).all(fingerprint) as
+      Array<{ ulid: string; code: string; left_at: string | null }>;
   }
 
   /**

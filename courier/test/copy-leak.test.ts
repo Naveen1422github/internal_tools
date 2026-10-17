@@ -101,6 +101,11 @@ test('a team this laptop left: a delete is not sent, a pending note is never num
     assert.equal(waiting.pending, true);
     setAllocator(null);
     markProjectLeft(w.wa, 'SH');
+    // RnR R15: the office's membership decides; a leave is real only once the office agrees.
+    const sh = w.office.store.prepare(`SELECT ulid FROM po_projects WHERE code = 'SH'`).get() as { ulid: string };
+    const [a, b] = (w.office.store.prepare(`SELECT device_id FROM po_members ORDER BY rowid`).all() as Array<{ device_id: string }>).map((m) => m.device_id);
+    setProjectMember(w.office.store, a, sh.ulid, b, 'Owner');
+    setProjectMember(w.office.store, b, sh.ulid, a, null);
     const before = deliveriesOf(w.office, kept.ulid);
     deleteEntry(w.wa, kept.id!, 'SH');
     await w.ca.syncNow();
