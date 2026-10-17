@@ -33,6 +33,7 @@ export function groupKey(r: RawChange): string {
 
 const REFUSED_BEFORE = "this note was refused when it was created";
 const MOVED = "A note can't move between projects: copy it instead"; // S2-1
+const REV_MOVED = "A note's history can't move to another note";
 const NOTE_TABLES = new Set(["entries", "refs", "entry_modules", "entry_revisions"]);
 
 // One lookup for every note of the batch: the office's row (if any), its owner,
@@ -88,10 +89,13 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     groupOf[i] = g;
     if (!lastPk || !lastPk.equals(r.pk)) { lastPk = r.pk; lastKey = firstTextCell(r.pk); }
     keys[i] = lastKey;
-    if (r.table === "entry_revisions" && lastKey && !hints.rev.has(lastKey)) revSet.add(lastKey);
+    if (r.table === "entry_revisions" && lastKey) revSet.add(lastKey);
   });
-  const revEntry = revisionEntries(db, [...revSet]);
-  for (const [r, u] of hints.rev) revEntry.set(r, u);
+  // A held revision belongs to the office's note, never to the batch's entry_ulid
+  // cell (a forgery like the author cell); the batch says only for new revisions.
+  const officeRev = revisionEntries(db, [...revSet]);
+  const revEntry = new Map(officeRev);
+  for (const [r, u] of hints.rev) if (!officeRev.has(r)) revEntry.set(r, u);
 
   // Each raw's note, as resolve() finds it (R3).
   const ulids = raws.map((r, i) => {
@@ -212,6 +216,9 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     if (n.refused) { why[i] = REFUSED_BEFORE; return; }
     if (n.movable && r.table === "entries" && r.cid === "project_ulid" && norm(r.val) !== norm(n.existing!.hp ? n.existing!.project_ulid : null)) {
       why[i] = MOVED; return;
+    }
+    if (r.table === "entry_revisions" && r.cid === "entry_ulid" && keys[i] && officeRev.has(keys[i]!) && r.val !== u) {
+      why[i] = REV_MOVED; return;
     }
     const a = act[i];
     if (a === "") return;

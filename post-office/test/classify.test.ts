@@ -2,9 +2,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { performance } from 'node:perf_hooks';
-import type Database from 'better-sqlite3';
+import Database from 'better-sqlite3';
 import {
   addEntryAsync, updateEntry, supersede, initModule, upsertModule, setAllocator, readOwnChanges, decodeChange,
+  migrate, migrateTo, enableSync, isCrsqliteLoaded, rootRevId,
   newUlid, encodeChange, COPIED_TO_PREFIX, type RawChange,
 } from '@collab-mcp/core';
 import { tempStore, laptop } from './helpers.js';
@@ -292,30 +293,96 @@ test("not judged: children of a note the office doesn't hold, and a lone number 
   } finally { w.done(); }
 });
 
+test("forged revision owner: a held revision's entry_ulid is the office's, and moving it is refused", async () => {
+  const w = await world();
+  try {
+    const t = await w.held('team', 'd-own');
+    acceptChanges(w.store, 'd-own', (await cells(w.la.db, () => updateEntry(w.la.db, { ulid: t, title: 'team, edited' }))).map(enc));
+    const e = await w.held('e note', 'd-own', null);
+    const rev = rootRevId(t);
+    assert.ok(w.store.prepare(`SELECT 1 FROM entry_revisions WHERE rev_id = ? AND entry_ulid = ?`).get(rev, t), 'the office holds the revision under the team note');
+    // Only the text, with no entry_ulid cell: judged on the team note (the office's owner), not the E note.
+    const text = await cells(w.la.db, () => w.la.db.prepare(`UPDATE entry_revisions SET title = 'rewritten' WHERE rev_id = ?`).run(rev));
+    assert.deepEqual(refused(classify(w.store, 'd-rd', text)).map((r) => [r.key, r.ulid]), [['note.edit.any', t]]);
+    // The forged entry_ulid moves team history to an E note: refused outright, the Owner too.
+    const mv = await cells(w.la.db, () => w.la.db.prepare(`UPDATE entry_revisions SET entry_ulid = ?, title = 'moved' WHERE rev_id = ?`).run(e, rev));
+    assert.ok(mv.some((c) => c.cid === 'entry_ulid' && c.val === e));
+    for (const who of ['d-rd', 'd-own']) {
+      assert.deepEqual(refused(classify(w.store, who, mv)).map((r) => [r.key, r.reason, r.ulid]), [[null, "A note's history can't move to another note", t]], who);
+    }
+  } finally { w.done(); }
+});
+
+test('a note written before 0009 is not judged, and moving it into a team project is refused', async () => {
+  const w = await world();
+  const old = new Database(w.la.path.replace(/collab\.db$/, 'old.db'));
+  try {
+    migrateTo(old, '0008_revision_author');
+    enableSync(old);
+    const r = await addEntryAsync(old, { type: 'decision', title: 'pre 0009', summary: 's', module: 'm' });
+    migrate(old);
+    const all = readOwnChanges(old, 0);
+    assert.ok(!all.some((c) => decodeChange(c).cid === 'project_ulid'), 'no project cell anywhere');
+    acceptChanges(w.store, 'd-own', all);
+    assert.ok(allowed(classify(w.store, 'd-x', await cells(old, () => updateEntry(old, { ulid: r.ulid, title: 'pre 0009, edited' })))));
+    const mv = await cells(old, () => old.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(w.A, r.ulid));
+    assert.deepEqual(refused(classify(w.store, 'd-own', mv)).map((x) => x.key), [null]);
+  } finally {
+    try { if (isCrsqliteLoaded(old)) old.prepare('SELECT crsql_finalize()').get(); old.close(); } catch { /* closed */ }
+    w.done();
+  }
+});
+
+test('a held note whose project cell is still arriving is judged as a creation when that cell comes', async () => {
+  const w = await world();
+  try {
+    let u = '';
+    const all = await cells(w.la.db, async () => {
+      const x = await addEntryAsync(w.la.db, { type: 'decision', title: 'split', summary: 's', module: 'm' });
+      u = x.ulid;
+      w.la.db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(w.A, u);
+    });
+    // The project cell is sent once, at its latest version (a later laptop transaction).
+    const cut = all.findIndex((c) => c.table === 'entries' && c.cid === 'project_ulid');
+    assert.ok(cut > 0 && all.slice(0, cut).some((c) => c.cid === 'series'));
+    const projectGroup = groupKey(all[cut]);
+    acceptChanges(w.store, 'd-rd', all.slice(0, cut).map(enc));
+    const rest = all.slice(cut);
+    const v = classify(w.store, 'd-rd', rest);
+    assert.equal(v.creations.get(u), projectGroup);
+    assert.equal(v.groups.get(projectGroup)?.key, 'note.create');
+    assert.ok(allowed(classify(w.store, 'd-con', rest)));
+    assert.ok(allowed(classify(w.store, 'd-rd', all.slice(0, cut))), "its first half alone: project unknown, held as '?'");
+  } finally { w.done(); }
+});
+
 test('classify 2000 cells within the Task 1 budget', async () => {
-  // R-2: the classifier's own < 5 ms per 2000 cells, median of 5. It runs on every
-  // batch, so it is measured warm (the JIT's first calls are not the steady state).
+  // R-2: the classifier's own < 5 ms per 2000 cells, median of 5, each on a fresh
+  // batch (as S1's stamping harness). It runs on every batch, so it is measured
+  // warm: the first calls are the JIT's, not the steady state.
   const RUNS = 5, WARM = 10;
   const w = await world();
   try {
     const old: string[] = [];
     for (let i = 0; i < 40; i++) old.push(await w.held(`perf old ${i}`, 'd-con'));
-    const batch = (await cells(w.la.db, async () => {
-      for (const u of old) { updateEntry(w.la.db, { ulid: u, title: `${u} a` }); updateEntry(w.la.db, { ulid: u, title: `${u} b` }); }
-      for (let i = 0; i < 40; i++) await note(w.la.db, `perf new ${i}`, w.A);
-    })).slice(0, 2000);
-    assert.equal(batch.length, 2000);
     const ms: number[] = [];
-    let v: Verdict | undefined;
     for (let k = 0; k < WARM + RUNS; k++) {
+      // Edits of held notes (two each; their new revisions ride on the batch's hints) and new notes.
+      const batch = await cells(w.la.db, async () => {
+        for (const u of old) { updateEntry(w.la.db, { ulid: u, title: `${u} ${k}a` }); updateEntry(w.la.db, { ulid: u, title: `${u} ${k}b` }); }
+        for (let i = 0; i < 55; i++) await note(w.la.db, `perf new ${k}.${i}`, w.A);
+      });
+      assert.ok(batch.length >= 2000, `round ${k} has ${batch.length} cells`);
+      const slice = batch.slice(0, 2000);
       const t0 = performance.now();
-      v = classify(w.store, 'd-con', batch);
-      if (k >= WARM) ms.push(performance.now() - t0);
+      const v = classify(w.store, 'd-con', slice);
+      ms.push(performance.now() - t0);
+      assert.ok(v.groups.size > 50 && v.creations.size > 0, 'it did real work');
+      assert.ok(allowed(v), 'Contributor: own edits and creations');
     }
-    assert.ok(v!.groups.size > 50 && v!.creations.size > 0, 'it did real work');
-    assert.ok(allowed(v!), 'Contributor: own edits and creations');
-    const median = [...ms].sort((x, y) => x - y)[2];
-    console.log(`2000 cells x ${RUNS}: R4 classify median ${median.toFixed(2)} ms (runs ${ms.map((x) => x.toFixed(2)).join(', ')})`);
-    assert.ok(median < 5, `classify took ${median.toFixed(2)} ms`);
+    const med = (xs: number[]) => [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 2)];
+    const cold = ms.slice(3, 3 + RUNS), warm = ms.slice(WARM);
+    console.log(`2000 cells x ${RUNS}: R4 classify median ${med(warm).toFixed(2)} ms after ${WARM} warm-ups (runs ${warm.map((x) => x.toFixed(2)).join(', ')}); after 3: ${med(cold).toFixed(2)} ms`);
+    assert.ok(med(warm) < 5, `classify took ${med(warm).toFixed(2)} ms`);
   } finally { w.done(); }
 });
