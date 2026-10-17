@@ -4,6 +4,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { migrate, latestMigration, enableSync, loadCrsqlite, isCrsqliteLoaded, SLUG_REGEX } from "@collab-mcp/core";
 import { seedAccess, seedNewProject, assignNewMemberOfficeRole, assertRevocable } from "./access.js";
+import { backfillProjectStamps } from "./deliveries.js";
 
 // The post office's ONE SQLite file (D14). The notes schema (0007 + CRRs) is a
 // replica of every shared row; the po_* tables are the office's own and never
@@ -126,6 +127,13 @@ CREATE TABLE IF NOT EXISTS po_replays (
 );
 `;
 
+/** R3: each delivery's project (NULL = every member, '?' = held). Added after PO_SCHEMA: older stores lack it. */
+function ensureDeliveryProjects(db: Store): void {
+  const has = db.prepare(`SELECT 1 FROM pragma_table_info('po_deliveries') WHERE name = 'project_ulid'`).get();
+  if (!has) db.exec(`ALTER TABLE po_deliveries ADD COLUMN project_ulid TEXT`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_po_deliveries_project ON po_deliveries (project_ulid, seq)`);
+}
+
 function tune(db: Store): void {
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
@@ -151,6 +159,7 @@ export function createStore(path: string, opts: { seedMaxId: number }): Store {
   migrate(db);
   enableSync(db);
   db.exec(PO_SCHEMA);
+  ensureDeliveryProjects(db);
   const v = (db.prepare(`SELECT crsql_db_version() v`).get() as { v: number }).v;
   setMeta(db, "counter", String(opts.seedMaxId));
   // The office's own writes (merges, flags) are delivered from here on; rows
@@ -159,6 +168,7 @@ export function createStore(path: string, opts: { seedMaxId: number }): Store {
   setMeta(db, "created_at", new Date().toISOString());
   // A new office is born seeded: the upgrade path (R11) never runs on it later.
   seedAccess(db);
+  backfillProjectStamps(db);
   return db;
 }
 
@@ -171,7 +181,9 @@ export function openStore(path: string): Store {
   // laptop does (core backs the file up first).
   migrate(db);
   db.exec(PO_SCHEMA);
+  ensureDeliveryProjects(db);
   seedAccess(db);
+  backfillProjectStamps(db);
   return db;
 }
 
