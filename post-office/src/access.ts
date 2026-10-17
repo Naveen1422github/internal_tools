@@ -169,7 +169,8 @@ export function seedNewProject(db: Store, projectUlid: string, creatorDevice: st
 /**
  * Give `deviceId` a role in a project, change it, or (`roleName = null`)
  * remove it. Adding needs member.invite, changing needs role.manage, removing
- * needs member.revoke. A project always keeps one Owner. R14: gaining
+ * needs member.revoke; the role given may not hold a key the actor lacks.
+ * A project always keeps one Owner. R14: gaining
  * note.view queues a replay of the history so far; losing it drops it.
  */
 export function setProjectMember(db: Store, actor: string, projectUlid: string, deviceId: string, roleName: string | null): void {
@@ -186,8 +187,10 @@ export function setProjectMember(db: Store, actor: string, projectUlid: string, 
       requireProjectKey(db, actor, projectUlid, cur ? "role.manage" : "member.invite");
       if (!liveMember(db, deviceId)) throw new StoreError(`${deviceId} is not a member of this office`, 404);
     }
-    const role = roleName === null ? undefined : db.prepare(`SELECT ulid FROM po_roles WHERE project_ulid = ? AND name = ?`).get(projectUlid, roleName) as { ulid: string } | undefined;
+    const role = roleName === null ? undefined : db.prepare(`SELECT ulid, keys FROM po_roles WHERE project_ulid = ? AND name = ?`).get(projectUlid, roleName) as { ulid: string; keys: string } | undefined;
     if (roleName !== null && !role) throw new StoreError(`${codeOf(db, projectUlid)} has no role called "${roleName}"`, 404);
+    // No one hands out a role above their own keys (ruling 4).
+    if (role) for (const k of grant("project", role.keys)) requireProjectKey(db, actor, projectUlid, k);
     if (cur?.name === OWNER && soleOwnerOf(db, deviceId).includes(projectUlid)) {
       throw new StoreError(`${codeOf(db, projectUlid)} needs at least one Owner; make someone else Owner first`, 409);
     }
@@ -208,8 +211,10 @@ export function setOfficeRole(db: Store, actor: string | null, deviceId: string,
   db.transaction(() => {
     if (actor !== null) requireOfficeKey(db, actor, "office.role.manage");
     if (!liveMember(db, deviceId)) throw new StoreError(`${deviceId} is not a member of this office`, 404);
-    const role = db.prepare(`SELECT ulid FROM po_office_roles WHERE name = ?`).get(roleName) as { ulid: string } | undefined;
+    const role = db.prepare(`SELECT ulid, keys FROM po_office_roles WHERE name = ?`).get(roleName) as { ulid: string; keys: string } | undefined;
     if (!role) throw new StoreError(`this office has no role called "${roleName}"`, 404);
+    // No one hands out a role above their own keys (ruling 4); the office CLI is exempt.
+    if (actor !== null) for (const k of grant("office", role.keys)) requireOfficeKey(db, actor, k);
     if (roleName !== OFFICE_ADMIN && isSoleOfficeAdmin(db, deviceId)) {
       throw new StoreError("this office needs at least one Office admin; make someone else Office admin first", 409);
     }

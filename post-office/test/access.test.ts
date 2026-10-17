@@ -1,7 +1,7 @@
 // file: post-office/test/access.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { newUlid } from '@collab-mcp/core';
+import { newUlid, labelOf } from '@collab-mcp/core';
 import { tempStore } from './helpers.js';
 import { addMember, registerProject, revokeMember, StoreError, type Store } from '../src/store.js';
 import {
@@ -197,5 +197,30 @@ test('stored bogus keys grant nothing; inactive keys grant nothing', () => {
     store.prepare(`UPDATE po_roles SET keys = 'not json' WHERE project_ulid = ? AND name = 'Reader'`).run(p);
     assert.equal(projectKeys(store, r, p).size, 0);
     assert.deepEqual(memberProjects(store, r), []);
+  } finally { cleanup(); }
+});
+
+test('no one assigns a role holding a key they lack (ruling 4)', () => {
+  const { store, cleanup, n, r, p } = office();
+  try {
+    const k = addMember(store, 'third').deviceId;
+    // project: a custom role that may invite, but holds little else
+    store.prepare(`INSERT INTO po_roles (ulid, project_ulid, name, keys) VALUES (?, ?, 'Inviter', '["note.view","member.invite","role.manage"]')`).run(newUlid(), p);
+    setProjectMember(store, n, p, r, 'Inviter');
+    assert.throws(() => setProjectMember(store, r, p, k, 'Owner'),
+      (e: unknown) => e instanceof StoreError && e.status === 403 && e.message === `You need "${labelOf('note.create')}" (note.create) in SH to do this`);
+    assert.throws(() => setProjectMember(store, r, p, r, 'Owner'), refused(403, 'note.create'), 'no self-promotion either');
+    assert.equal(projectKeys(store, k, p).size, 0);
+    setProjectMember(store, r, p, k, 'Reader');
+    assert.deepEqual([...projectKeys(store, k, p)], ['note.view']);
+    assert.throws(() => setProjectMember(store, r, p, k, 'Editor'), refused(403, 'note.create'), 'role change is checked too');
+    // office: may manage roles but not add members -> may not hand out Office admin
+    store.prepare(`INSERT INTO po_office_roles (ulid, name, keys) VALUES (?, 'Role keeper', '["office.project.create","office.module.share","office.role.manage"]')`).run(newUlid());
+    setOfficeRole(store, null, r, 'Role keeper');
+    assert.throws(() => setOfficeRole(store, r, k, 'Office admin'),
+      (e: unknown) => e instanceof StoreError && e.status === 403 && e.message === `You need "${labelOf('office.member.add')}" (office.member.add) in this office to do this`);
+    assert.deepEqual([...officeKeys(store, k)], ['office.project.create']);
+    setOfficeRole(store, null, k, 'Office admin');            // the office machine's CLI is exempt
+    assert.ok(officeKeys(store, k).has('office.member.add'));
   } finally { cleanup(); }
 });
