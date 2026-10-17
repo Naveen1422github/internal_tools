@@ -20,8 +20,12 @@ import { firstTextCell, textCells, prep, batchHints, revisionEntries } from "./d
 // R7: a new note is judged as a whole: a later group of a note whose creation
 // was refused is refused too (po_refused_notes across batches, here within one).
 //
-// The spike's op->cells table (§3) decides the side cells: supersede, archive and
-// resolve carry the note's other cells in the group (updated_at, deprecated).
+// The spike's op->cells table (§3) decides the side cells: supersede carries
+// superseded_by(_ulid), deprecated and updated_at; archive deprecated, deleted_at and
+// updated_at; any other cell of the note is an edit. merge.resolve carries the rest
+// (resolveWithText writes text). Structural refusals (key null) need no role: a hard
+// delete, a project move, a number change, a revision moved to another note, a cell
+// sent twice with two values, an unreadable pk.
 
 export interface Refusal { site_id: string /* hex */; db_version: number; ulid: string | null; key: string | null; reason: string }
 /** groups: every group of the batch, null = accepted. groupOf: each raw's group. creations: new note -> its creating group. */
@@ -34,28 +38,34 @@ export function groupKey(r: RawChange): string {
 const REFUSED_BEFORE = "this note was refused when it was created";
 const MOVED = "A note can't move between projects: copy it instead"; // S2-1
 const REV_MOVED = "A note's history can't move to another note";
+const HARD = "Notes are never hard-deleted: archive it instead";
+const TWICE = "This change was sent twice with different values: sync again";
+const NUMBER = "A note's number is given by the post office";
+const UNREADABLE = "This change's key can't be read: sync again";
 const NOTE_TABLES = new Set(["entries", "refs", "entry_modules", "entry_revisions"]);
 
 // One lookup for every note of the batch: the office's row (if any), its owner,
 // and whether its creation was refused (R7; that note is never held here).
 const NOTE_FACTS = `
-SELECT j.value AS ulid, e.ulid IS NOT NULL AS held, e.project_ulid, e.deprecated, e.deleted_at, e.needs_merge,
+SELECT j.value AS ulid, e.ulid IS NOT NULL AS held, p.ulid IS NOT NULL AS known,
+       e.id, e.series, e.project_ulid, e.deprecated, e.deleted_at, e.needs_merge,
        EXISTS (SELECT 1 FROM entries__crsql_clock c WHERE c.key = p.__crsql_key AND c.col_name = 'project_ulid') AS hp,
        EXISTS (SELECT 1 FROM entries__crsql_clock c WHERE c.key = p.__crsql_key AND c.col_name = 'series') AS hs,
        o.device_id AS owner, r.ulid IS NOT NULL AS refused
   FROM json_each(?) j
   LEFT JOIN entries e ON e.ulid = j.value
-  LEFT JOIN entries__crsql_pks p ON p.ulid = e.ulid
+  LEFT JOIN entries__crsql_pks p ON p.ulid = j.value
   LEFT JOIN po_note_owners o ON o.ulid = j.value
   LEFT JOIN po_refused_notes r ON r.ulid = j.value`;
 interface Facts {
-  ulid: string; held: number; project_ulid: string | null; deprecated: number | null; deleted_at: string | null;
+  ulid: string; held: number; known: number; id: number | null; series: string | null; project_ulid: string | null; deprecated: number | null; deleted_at: string | null;
   needs_merge: number | null; hp: number; hs: number; owner: string | null; refused: number;
 }
 
 /** How one note of the batch is judged. */
 interface Note {
   refused: boolean;          // in po_refused_notes
+  held: boolean;             // the office has its row
   project: string | null;    // judged in this team project; null = not judged (rule 2)
   existing: Facts | null;    // the office's row, for an existing note
   movable: boolean;          // S2-1 applies: the office knows its project (NULL included)
@@ -64,6 +74,10 @@ interface Note {
 }
 
 const norm = (v: unknown): unknown => (v === "" || v === undefined ? null : typeof v === "bigint" ? Number(v) : v);
+const same = (a: unknown, b: unknown): boolean => {
+  const x = norm(a), y = norm(b);
+  return Buffer.isBuffer(x) && Buffer.isBuffer(y) ? x.equals(y) : x === y;
+};
 
 /**
  * R4/R5: judge one batch from `origin`. Every raw gets a group (site_id +
@@ -78,17 +92,32 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
   const hints = batchHints(raws);
 
   // Each raw's group and first pk cell, decoded once per run of equal values.
-  let lastSite: Buffer | null = null, lastDbv = -1, g = "", lastPk: Buffer | null = null, lastKey: string | null = null;
+  let lastSite: Buffer | null = null, lastDbv = -1, g = "", lastPk: Buffer | null = null, lastKey: string | null = null, lastTable = "";
   const keys: Array<string | null> = new Array(raws.length);
   const revSet = new Set<string>();
+  // Fix 2: one (table, pk, cid) sent twice with different values is refused, not
+  // merged here (hints take the last cell; cr-sqlite keeps the highest version).
+  // Rows by (table, pk), looked up once per run of equal pks; then cid -> first raw.
+  const rows = new Map<string, Map<string, number>>();
+  const rowOf: Array<Map<string, number>> = new Array(raws.length);
+  let row: Map<string, number> | undefined, twice = false;
   raws.forEach((r, i) => {
     if (r.db_version !== lastDbv || !lastSite!.equals(r.site_id)) {
       lastSite = r.site_id; lastDbv = r.db_version; g = groupKey(r);
       if (!groups.has(g)) groups.set(g, null);
     }
     groupOf[i] = g;
-    if (!lastPk || !lastPk.equals(r.pk)) { lastPk = r.pk; lastKey = firstTextCell(r.pk); }
+    if (!lastPk || r.table !== lastTable || !lastPk.equals(r.pk)) {
+      lastPk = r.pk; lastTable = r.table; lastKey = firstTextCell(r.pk);
+      const id = r.table + "\0" + r.pk.toString("latin1");
+      row = rows.get(id);
+      if (!row) rows.set(id, (row = new Map()));
+    }
     keys[i] = lastKey;
+    rowOf[i] = row!;
+    const f = row!.get(r.cid);
+    if (f === undefined) row!.set(r.cid, i);
+    else if (f >= 0 && !same(raws[f].val, r.val)) { row!.set(r.cid, -1); twice = true; } // -1: sent with two values
     if (r.table === "entry_revisions" && lastKey) revSet.add(lastKey);
   });
   // A held revision belongs to the office's note, never to the batch's entry_ulid
@@ -129,6 +158,9 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
       // Existing: its project is the office's, never the batch's (hp = 0, hs = 0: before 0009, no project).
       existing = f; movable = true;
       project = f.hp ? f.project_ulid : null;
+    } else if (!f.held && f.known) {
+      // Fix 1: tombstoned at the office (before S2). A re-insert is an edit of its recorded owner's note.
+      project = hints.project.get(u) ?? null;
     } else if (created && hints.project.has(u)) {
       // New here, or held with its project cell still arriving: the batch says its project.
       isNew = true;
@@ -136,11 +168,14 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     } // else: S1 holds it as '?', not judged here
     if (project !== null && !team(project)) project = null; // solo or unknown project (rule 2)
     if (isNew) creations.set(u, created!);
-    notes.set(u, { refused: !!f.refused, project, existing, movable, created: isNew ? created : null, owner: isNew ? origin : f.owner });
+    // The owner is po_note_owners' whenever the office has the note (fix 6); the sender's only for a note new here.
+    const owner = isNew && !f.held ? origin : f.owner;
+    notes.set(u, { refused: !!f.refused, held: !!f.held, project, existing, movable, created: isNew ? created : null, owner });
   }
 
-  // Per (group, note): the action that carries all of the note's cells in it.
-  // act[i]: the key for every cell of the pair, null = judged per cell, "" = not judged.
+  // Per (group, note): which cells ride on supersede/archive (only their side cells,
+  // spike §3) and whether merge.resolve carries the rest (resolveWithText has text).
+  // act[i]: the cell's key, null = judged per cell (edit), "" = not judged.
   const act: Array<string | null> = new Array(raws.length).fill("");
   const pairs = new Map<string, Map<string, number[]>>();
   raws.forEach((_, i) => {
@@ -151,25 +186,35 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     const list = byNote.get(u);
     if (list) list.push(i); else byNote.set(u, [i]);
   });
-  const setAll = (idx: number[], a: string | null) => { for (const i of idx) act[i] = a; };
   for (const [g, byNote] of pairs) for (const [u, idx] of byNote) {
     const n = notes.get(u)!;
-    if (n.created === g) { setAll(idx, "note.create"); continue; }
+    if (n.created === g) { for (const i of idx) act[i] = "note.create"; continue; }
     const e = n.existing;
-    let sup = false, arch = false, res = false, onlyId = true, anyId = false;
+    const depChanged = (v: unknown) => !e || !same(v, e.deprecated);
+    const delChanged = (v: unknown) => !e || !same(v, e.deleted_at);
+    let sup = false, arch = false, res = false;
     for (const i of idx) {
       const r = raws[i];
-      if (r.table !== "entries") { onlyId = false; continue; }
-      const v = norm(r.val);
-      if (r.cid === "superseded_by" || r.cid === "superseded_by_ulid") { if (v !== null) sup = true; }
-      else if (r.cid === "deprecated") { if (!e || v !== norm(e.deprecated)) arch = true; }
-      else if (r.cid === "deleted_at") { if (!e || v !== norm(e.deleted_at)) arch = true; }
-      else if (r.cid === "needs_merge") { if (v === 0 && e?.needs_merge === 1) res = true; }
-      if (r.cid === "id") anyId = true;
-      else if (r.cid !== "updated_at") onlyId = false;
+      if (r.table !== "entries") continue;
+      if (r.cid === "superseded_by" || r.cid === "superseded_by_ulid") { if (norm(r.val) !== null) sup = true; }
+      else if (r.cid === "deprecated") { if (depChanged(r.val)) arch = true; }
+      else if (r.cid === "deleted_at") { if (delChanged(r.val)) arch = true; }
+      else if (r.cid === "needs_merge") { if (norm(r.val) === 0 && e?.needs_merge === 1) res = true; }
     }
-    setAll(idx, sup ? "note.supersede" : arch ? "note.archive" : res ? "merge.resolve"
-      : onlyId && anyId ? "" /* assignPendingNumber: judged at allocate (R7) */ : null);
+    const base = res ? "merge.resolve" : null;
+    for (const i of idx) {
+      const r = raws[i];
+      let a: string | null = base;
+      if (r.table === "entries") {
+        switch (r.cid) {
+          case "superseded_by": case "superseded_by_ulid": if (sup && norm(r.val) !== null) a = "note.supersede"; break;
+          case "deprecated": if (sup) a = "note.supersede"; else if (depChanged(r.val)) a = "note.archive"; break;
+          case "deleted_at": if (delChanged(r.val)) a = "note.archive"; break;
+          case "updated_at": if (sup) a = "note.supersede"; else if (arch) a = "note.archive"; break;
+        }
+      }
+      act[i] = a;
+    }
   }
 
   // Modules (S2-3): office keys; create = a slug the office lacks.
@@ -209,13 +254,23 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     if (x) { whyKey[i] = key; why[i] = x; }
   };
   raws.forEach((r, i) => {
-    if (r.table === "modules") { if (keys[i]) judge(i, moduleKey(keys[i]!), null); return; }
+    if (keys[i] === null) { why[i] = UNREADABLE; return; } // fix 5: fail closed
+    if (twice && rowOf[i].get(r.cid) === -1) { why[i] = TWICE; return; }
+    if (r.table === "modules") { judge(i, moduleKey(keys[i]!), null); return; }
     const u = ulids[i];
     if (!u) return;
     const n = notes.get(u)!;
     if (n.refused) { why[i] = REFUSED_BEFORE; return; }
+    if (n.held && r.table === "entries" && r.cid === "-1" && r.cl % 2 === 0) { why[i] = HARD; return; } // fix 1
     if (n.movable && r.table === "entries" && r.cid === "project_ulid" && norm(r.val) !== norm(n.existing!.hp ? n.existing!.project_ulid : null)) {
       why[i] = MOVED; return;
+    }
+    if (n.existing && r.table === "entries" && (r.cid === "id" || r.cid === "series")) {
+      // Fix 3: numbers come from the office. Only assignPendingNumber (NULL -> integer) passes, judged at allocate (R7).
+      const cur = r.cid === "id" ? n.existing.id : n.existing.series;
+      if (same(r.val, cur)) return;
+      if (r.cid === "id" && cur === null && Number.isInteger(norm(r.val))) return;
+      why[i] = NUMBER; return;
     }
     if (r.table === "entry_revisions" && r.cid === "entry_ulid" && keys[i] && officeRev.has(keys[i]!) && r.val !== u) {
       why[i] = REV_MOVED; return;

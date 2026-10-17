@@ -286,7 +286,7 @@ test("not judged: children of a note the office doesn't hold, and a lone number 
     const v = classify(w.store, 'd-x', children);
     assert.ok(allowed(v), "S1 holds them as '?'");
     assert.equal(v.creations.size, 0);
-    const held = await w.held('pending', 'd-own');
+    const held = await pendingNote(w, 'pending');
     const num = await cells(w.la.db, () => w.la.db.prepare(`UPDATE entries SET id = 4242 WHERE ulid = ?`).run(held));
     assert.deepEqual(num.map((c) => c.cid), ['id']);
     assert.ok(allowed(classify(w.store, 'd-rd', num)), 'assignPendingNumber was judged at allocate (R7)');
@@ -353,6 +353,142 @@ test('a held note whose project cell is still arriving is judged as a creation w
     assert.equal(v.groups.get(projectGroup)?.key, 'note.create');
     assert.ok(allowed(classify(w.store, 'd-con', rest)));
     assert.ok(allowed(classify(w.store, 'd-rd', all.slice(0, cut))), "its first half alone: project unknown, held as '?'");
+  } finally { w.done(); }
+});
+
+/** A note the office holds with no number yet (id NULL), as a pending note is. */
+async function pendingNote(w: Awaited<ReturnType<typeof world>>, title: string): Promise<string> {
+  let u = '';
+  const c = await cells(w.la.db, async () => {
+    u = await note(w.la.db, title, w.A);
+    w.la.db.prepare(`UPDATE entries SET id = NULL WHERE ulid = ?`).run(u);
+  });
+  acceptChanges(w.store, 'd-own', c.map(enc));
+  assert.equal((w.store.prepare(`SELECT id FROM entries WHERE ulid = ?`).get(u) as { id: number | null }).id, null);
+  return u;
+}
+const HARD = 'Notes are never hard-deleted: archive it instead';
+const TWICE = 'This change was sent twice with different values: sync again';
+const NUMBER = "A note's number is given by the post office";
+const UNREADABLE = "This change's key can't be read: sync again";
+
+test('fix 1: a hard delete of a held note is refused; a re-insert keeps its owner (edit, not create)', async () => {
+  const w = await world();
+  try {
+    for (const project of [w.A, null]) {
+      const u = await w.held(`deleted ${project}`, 'd-own', project);
+      const del = await cells(w.la.db, () => w.la.db.prepare(`DELETE FROM entries WHERE ulid = ?`).run(u));
+      assert.ok(del.some((c) => c.table === 'entries' && c.cid === '-1' && c.cl % 2 === 0), 'a row tombstone');
+      assert.deepEqual(refused(classify(w.store, 'd-own', del)).map((r) => [r.key, r.reason, r.ulid]), [[null, HARD, u]], `project ${project}: the Owner too`);
+    }
+    // A tombstone the office already holds (from before S2), then the laptop re-inserts the row.
+    const u = await w.held('tombstoned', 'd-own');
+    acceptChanges(w.store, 'd-own', (await cells(w.la.db, () => w.la.db.prepare(`DELETE FROM entries WHERE ulid = ?`).run(u))).map(enc));
+    assert.equal(w.store.prepare(`SELECT 1 FROM entries WHERE ulid = ?`).get(u), undefined, 'the office has no row now');
+    const back = await cells(w.la.db, () => w.la.db.prepare(
+      `INSERT INTO entries (ulid, type, title, summary, module, series, project_ulid) VALUES (?, 'decision', 'back', 'b', 'm', 'TM', ?)`).run(u, w.A));
+    assert.ok(back.some((c) => c.cid === '-1' && c.cl % 2 === 1), 'a re-insert (odd cl)');
+    const v = classify(w.store, 'd-con', back);
+    assert.ok(!v.creations.has(u), 'not a creation');
+    assert.deepEqual(refused(v).map((r) => r.key), ['note.edit.any'], "d-own's note, whoever re-inserts it");
+    assert.ok(allowed(classify(w.store, 'd-own', back)), 'its owner: edit own');
+  } finally { w.done(); }
+});
+
+test('fix 2: two cells for one (table, pk, cid) with different values refuse every group holding them', async () => {
+  const w = await world();
+  try {
+    const made = await cells(w.la.db, () => note(w.la.db, 'twice', w.A));
+    const p = made.find((c) => c.table === 'entries' && c.cid === 'project_ulid')!;
+    assert.equal(p.val, w.A);
+    const forged: RawChange = { ...p, val: null, col_version: p.col_version - 1, db_version: p.db_version + 50 };
+    const batch = [...made, forged]; // the low-version NULL last: "last cell wins" would say no project
+    const v = classify(w.store, 'd-rd', batch);
+    for (const c of [p, forged]) assert.deepEqual([v.groups.get(groupKey(c))?.key, v.groups.get(groupKey(c))?.reason], [null, TWICE]);
+    // The same cell sent twice with the same value is no conflict.
+    assert.ok(allowed(classify(w.store, 'd-own', [...made, { ...p, db_version: p.db_version + 50 }])));
+    // entry_revisions.entry_ulid the same way.
+    const t = await w.held('team', 'd-own'), e = await w.held('e', 'd-own', null);
+    const ed = await cells(w.la.db, () => updateEntry(w.la.db, { ulid: t, title: 'team 2' }));
+    const r = ed.find((c) => c.table === 'entry_revisions' && c.cid === 'entry_ulid' && c.val === t)!;
+    const rv = classify(w.store, 'd-own', [...ed, { ...r, val: e, col_version: r.col_version - 1, db_version: r.db_version + 50 }]);
+    assert.deepEqual([rv.groups.get(groupKey(r))?.key, rv.groups.get(groupKey(r))?.reason], [null, TWICE]);
+  } finally { w.done(); }
+});
+
+test("fix 3: only a pending note's first number passes unjudged; other id or series changes are refused", async () => {
+  const w = await world();
+  try {
+    const numbered = await w.held('numbered', 'd-own');
+    assert.notEqual((w.store.prepare(`SELECT id FROM entries WHERE ulid = ?`).get(numbered) as { id: number | null }).id, null);
+    const renum = await cells(w.la.db, () => w.la.db.prepare(`UPDATE entries SET id = 999 WHERE ulid = ?`).run(numbered));
+    assert.deepEqual(refused(classify(w.store, 'd-own', renum)).map((r) => [r.key, r.reason]), [[null, NUMBER]]);
+    const reser = await cells(w.la.db, () => w.la.db.prepare(`UPDATE entries SET series = 'XX' WHERE ulid = ?`).run(numbered));
+    assert.deepEqual(refused(classify(w.store, 'd-own', reser)).map((r) => [r.key, r.reason]), [[null, NUMBER]]);
+    const pend = await pendingNote(w, 'pending');
+    assert.ok(allowed(classify(w.store, 'd-rd', await cells(w.la.db, () => w.la.db.prepare(`UPDATE entries SET id = 7 WHERE ulid = ?`).run(pend)))));
+    const pend2 = await pendingNote(w, 'pending 2');
+    const text = await cells(w.la.db, () => w.la.db.prepare(`UPDATE entries SET id = 'seven' WHERE ulid = ?`).run(pend2));
+    assert.deepEqual(refused(classify(w.store, 'd-own', text)).map((r) => r.reason), [NUMBER], 'a number that is not an integer');
+  } finally { w.done(); }
+});
+
+test('fix 4: supersede and archive carry only their side cells; resolve still carries the text', async () => {
+  const w = await world();
+  try {
+    w.role('Superseder', ['note.view', 'note.supersede', 'note.archive', 'merge.resolve'], 'd-rd');
+    const old = await w.held('old', 'd-own'), by = await w.held('by', 'd-own');
+    const s = await cells(w.la.db, () => w.la.db.transaction(() => {
+      supersede(w.la.db, { ids: [{ ulid: old }], by: { ulid: by } });
+      w.la.db.prepare(`UPDATE entries SET title = 'smuggled' WHERE ulid = ?`).run(old);
+    })());
+    assert.deepEqual(refused(classify(w.store, 'd-rd', s)).map((r) => r.key), ['note.edit.any'], 'the title is an edit');
+    const a = await w.held('archived', 'd-own');
+    const arch = await cells(w.la.db, () => w.la.db.prepare(`UPDATE entries SET deprecated = 1, summary = 'smuggled' WHERE ulid = ?`).run(a));
+    assert.deepEqual(refused(classify(w.store, 'd-rd', arch)).map((r) => r.key), ['note.edit.any']);
+    const del = await cells(w.la.db, () => w.la.db.prepare(`UPDATE entries SET deleted_at = datetime('now') WHERE ulid = ?`).run(a));
+    assert.ok(allowed(classify(w.store, 'd-rd', del)), 'deleted_at alone is archive');
+    let m = '';
+    const c = await cells(w.la.db, async () => { m = await note(w.la.db, 'merge', w.A); w.la.db.prepare(`UPDATE entries SET needs_merge = 1 WHERE ulid = ?`).run(m); });
+    acceptChanges(w.store, 'd-own', c.map(enc));
+    const res = await cells(w.la.db, () => w.la.db.prepare(`UPDATE entries SET needs_merge = 0, title = 'merged text' WHERE ulid = ?`).run(m));
+    assert.ok(allowed(classify(w.store, 'd-rd', res)), 'resolveWithText: the text rides on merge.resolve');
+  } finally { w.done(); }
+});
+
+test("fix 5: a cell whose pk can't be decoded is refused, in any table", async () => {
+  const w = await world();
+  try {
+    const mod = await cells(w.la.db, () => initModule(w.la.db, { slug: 'mm', name: 'M' }));
+    const intPk = (w.store.prepare(`SELECT crsql_pack_columns(5) pk`).get() as { pk: Buffer }).pk;
+    setOfficeRole(w.store, null, 'd-x', 'Office admin');
+    for (const [label, pk] of [['int', intPk], ['garbage', Buffer.from([1, 3])]] as const) {
+      const bad = { ...mod[0], pk, db_version: mod[0].db_version + 50 };
+      const v = classify(w.store, 'd-x', [...mod, bad]);
+      assert.deepEqual([v.groups.get(groupKey(bad))?.key, v.groups.get(groupKey(bad))?.reason], [null, UNREADABLE], label);
+      assert.equal(v.groups.get(groupKey(mod[0])), null, 'the good module row is still accepted');
+      const ent = classify(w.store, 'd-x', [{ ...bad, table: 'entries', cid: 'title' }]);
+      assert.deepEqual(refused(ent).map((r) => r.reason), [UNREADABLE], `${label} entries pk`);
+    }
+  } finally { w.done(); }
+});
+
+test('fix 6: a held note whose project cell is still arriving keeps its recorded owner', async () => {
+  const w = await world();
+  try {
+    let u = '';
+    const all = await cells(w.la.db, async () => {
+      u = (await addEntryAsync(w.la.db, { type: 'decision', title: 'split', summary: 's', module: 'm' })).ulid;
+      w.la.db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(w.A, u);
+      updateEntry(w.la.db, { ulid: u, title: 'split, edited' });
+    });
+    const cut = all.findIndex((c) => c.table === 'entries' && c.cid === 'project_ulid');
+    acceptChanges(w.store, 'd-own', all.slice(0, cut).map(enc));
+    w.store.prepare(`INSERT INTO po_note_owners (ulid, device_id) VALUES (?, 'd-own')`).run(u);
+    const v = classify(w.store, 'd-con', all.slice(cut));
+    assert.equal(v.groups.get(v.creations.get(u)!), null, 'Contributor may create');
+    const later = refused(v);
+    assert.ok(later.length >= 1 && later.every((r) => r.key === 'note.edit.any'), "a later group is an edit of d-own's note");
   } finally { w.done(); }
 });
 
