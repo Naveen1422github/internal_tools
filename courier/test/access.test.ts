@@ -84,14 +84,36 @@ test('role granted while R is offline: history arrives after reconnect', async (
     assert.deepEqual(titlesIn(w.wr, 'SH'), []);
     await w.cr.stop(); // R goes offline
     assert.equal((await putMember(w, sh.ulid, 'Reader')).status, 200);
+    // An edit to an OLD note after the grant: its delivery (seq > the replay's
+    // upto_seq) carries one cell, not the note's project or series.
+    const oldOne = (w.wn.prepare(`SELECT ulid FROM entries WHERE title = 'old one'`).get() as { ulid: string }).ulid;
+    w.wn.prepare(`UPDATE entries SET title = 'old one, edited' WHERE ulid = ?`).run(oldOne);
     await write(w, 'SH', 'after the grant');
-    const cr = await w.restartR();
+    // The note must never be held here as a project-less E note, even when the
+    // replay stalls: numberPending would ask the office for an E number for it.
+    const ghost = () => w.wr.prepare(`SELECT 1 FROM entries WHERE ulid = ? AND (project_ulid IS NULL OR series = 'E')`).get(oldOne);
+    const allocatedFor = () => w.office.store.prepare(`SELECT 1 FROM po_allocations WHERE ulid = ?`).get(oldOne);
+    const allocCalls = () => w.office.requests.filter((q) => q.route === 'POST /v1/allocate' && q.device === w.r).length;
+    let cr = await w.restartR();
+    w.office.hooks.accessStatus = (d) => (d === w.r ? 500 : null); // the replay can't run this time
+    await cr.syncNow();
+    assert.equal(ghost(), undefined, 'no ghost E note after a sync whose replay stalled');
+    await cr.numberPendingNow();
+    assert.equal(allocatedFor(), undefined, 'no E number was asked for the old note');
+    assert.equal(allocCalls(), 0);
+    w.office.hooks.accessStatus = undefined;
+    cr = await w.restartR();
+    await cr.syncNow();
+    assert.equal(ghost(), undefined, 'right after the sync: the note is an SH note');
     cr.start();
     await until(() => titlesIn(w.wr, 'SH').length === 3, 8000, 'the history and the new note on R');
-    assert.deepEqual(titlesIn(w.wr, 'SH'), ['old one', 'old two', 'after the grant']);
+    assert.deepEqual(titlesIn(w.wr, 'SH'), ['old one, edited', 'old two', 'after the grant']);
     await cr.whenIdle();
     await until(() => replayRow(w.office, w.r, sh.ulid) === undefined, 5000, 'the replay to finish');
     assert.equal(getSyncValue(w.wr, replayKey(sh.ulid)), null);
+    assert.equal(ghost(), undefined);
+    assert.equal(allocatedFor(), undefined, 'numberPending never gave the old note an E number');
+    assert.equal(allocCalls(), 0);
   } finally { await w.cleanup(); }
 });
 

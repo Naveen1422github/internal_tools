@@ -172,15 +172,18 @@ export class Courier {
     return this.enqueue(async () => { await this.numberPending(); });
   }
   /**
-   * Modules, team projects, pull, access (+ replays), number pending notes,
+   * Modules, team projects, access (+ replays), pull, number pending notes,
    * push: what a (re)connect does. A project clash pauses the pulls only (P10).
    */
   syncNow(): Promise<void> {
     return this.enqueue(async () => {
       await this.refreshModules();
       await this.refreshProjects();
+      // Before pull (R14): a replay brings an old note's base cells first, so a
+      // later edit to it never lands as a project-less E note. A removed project
+      // is marked left before numbering and pushing (R15).
+      await this.refreshAccess();
       if (this.clashes().length === 0) await this.pull();
-      await this.refreshAccess(); // a removed project is marked left before numbering and pushing (R15)
       const numbering = await this.numberPending();
       if (numbering === "revoked") return;
       await this.push();
