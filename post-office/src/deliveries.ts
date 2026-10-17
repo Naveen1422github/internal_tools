@@ -302,16 +302,16 @@ export function acceptChanges(
 
 export interface FetchResult { changes: WireChange[]; lastSeq: number; more: boolean }
 
+const DELIVERY_COLS = `seq, origin, tbl AS "table", pk, cid, val, col_version, db_version, site_id, cl, ch_seq AS ch`;
+type DeliveryWire = RawChange & { seq: number; origin: string; ch: number };
+const toWire = ({ seq: _s, origin: _o, ...r }: DeliveryWire): WireChange => encodeChange({ ...r, seq: r.ch });
+
 /**
  * Deliveries after `after` except the caller's own and (R3) other projects':
  * a row goes out when it has no project or the caller holds note.view in it;
  * held ('?') rows go to nobody. `after` = what the caller has applied (its
  * bookmark); `lastSeq` still moves past filtered rows.
  */
-const DELIVERY_COLS = `seq, origin, tbl AS "table", pk, cid, val, col_version, db_version, site_id, cl, ch_seq AS ch`;
-type DeliveryWire = RawChange & { seq: number; origin: string; ch: number };
-const toWire = ({ seq: _s, origin: _o, ...r }: DeliveryWire): WireChange => encodeChange({ ...r, seq: r.ch });
-
 export function fetchDeliveries(db: Store, deviceId: string, after: number, limit = 2000): FetchResult {
   if (!Number.isInteger(after) || after < 0) throw new StoreError("after must be a whole number >= 0");
   if (!Number.isInteger(limit) || limit < 1 || limit > 5000) throw new StoreError("limit must be 1..5000");
