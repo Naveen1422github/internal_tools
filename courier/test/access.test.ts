@@ -280,3 +280,21 @@ test('a team project created here while /v1/access is answering is not marked le
     assert.equal(findProject(w.wr, 'NW')!.left_at, null);
   } finally { await w.cleanup(); }
 });
+
+test('stream pull while a replay is owed leaves no id-NULL note', async () => {
+  const w = await world();
+  try {
+    const sh = await project(w);
+    const [old] = await write(w, 'SH', 'old one');
+    await w.cr.syncNow(); // R's bookmark passes the history while it is not a member
+    setProjectMember(w.office.store, w.n, sh.ulid, w.r, 'Reader');
+    w.wn.prepare(`UPDATE entries SET title = 'old one, edited' WHERE ulid = ?`).run(old);
+    await w.cn.pushNow();
+    await w.cr.pullNow(); // a stream pull, before refreshAccess has run the replay
+    assert.equal(w.wr.prepare(`SELECT 1 FROM entries WHERE id IS NULL`).get(), undefined, 'no id-NULL ghost note');
+    await w.cr.syncNow();
+    assert.equal(w.wr.prepare(`SELECT 1 FROM entries WHERE id IS NULL`).get(), undefined);
+    assert.equal(getEntryByUlid(w.wr, old)?.title, 'old one, edited');
+    assert.deepEqual(titlesIn(w.wr, 'SH'), ['old one, edited']);
+  } finally { await w.cleanup(); }
+});

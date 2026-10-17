@@ -315,18 +315,34 @@ const toWire = ({ seq: _s, origin: _o, ...r }: DeliveryWire): WireChange => enco
 export function fetchDeliveries(db: Store, deviceId: string, after: number, limit = 2000): FetchResult {
   if (!Number.isInteger(after) || after < 0) throw new StoreError("after must be a whole number >= 0");
   if (!Number.isInteger(limit) || limit < 1 || limit > 5000) throw new StoreError("limit must be 1..5000");
-  const rows = db
-    .prepare(
-      `SELECT ${DELIVERY_COLS}, project_ulid
-         FROM po_deliveries WHERE seq > ? ORDER BY seq LIMIT ?`,
-    )
-    .all(after, limit) as Array<DeliveryWire & { project_ulid: string | null }>;
-  const mine = new Set(memberProjects(db, deviceId));
-  db.prepare(`UPDATE po_members SET receive_bookmark = MAX(receive_bookmark, ?) WHERE device_id = ?`).run(after, deviceId);
-  const changes = rows
-    .filter((r) => r.origin !== deviceId && (r.project_ulid === null || mine.has(r.project_ulid)))
-    .map(({ project_ulid: _p, ...r }) => toWire(r));
-  return { changes, lastSeq: rows.length ? rows[rows.length - 1].seq : after, more: rows.length === limit };
+  return db.transaction((): FetchResult => {
+    const rows = db
+      .prepare(
+        `SELECT ${DELIVERY_COLS}, project_ulid
+           FROM po_deliveries WHERE seq > ? ORDER BY seq LIMIT ?`,
+      )
+      .all(after, limit) as Array<DeliveryWire & { project_ulid: string | null }>;
+    const mine = new Set(memberProjects(db, deviceId));
+    // R14 barrier: a project owed a replay goes only through the replay, so an edit of an
+    // old note cannot reach the laptop before the note itself.
+    const owed = new Set(
+      (db.prepare(`SELECT project_ulid FROM po_replays WHERE device_id = ?`).all(deviceId) as Array<{ project_ulid: string }>).map((r) => r.project_ulid),
+    );
+    db.prepare(`UPDATE po_members SET receive_bookmark = MAX(receive_bookmark, ?) WHERE device_id = ?`).run(after, deviceId);
+    const top = rows.length ? rows[rows.length - 1].seq : after;
+    const withheld = new Set<string>();
+    const changes = rows
+      .filter((r) => {
+        if (r.origin === deviceId || (r.project_ulid !== null && !mine.has(r.project_ulid))) return false;
+        if (r.project_ulid !== null && owed.has(r.project_ulid)) { withheld.add(r.project_ulid); return false; }
+        return true;
+      })
+      .map(({ project_ulid: _p, ...r }) => toWire(r));
+    // lastSeq moves past the withheld rows, so the replay must now reach them.
+    const raise = db.prepare(`UPDATE po_replays SET upto_seq = MAX(upto_seq, ?) WHERE device_id = ? AND project_ulid = ?`);
+    for (const p of withheld) raise.run(top, deviceId, p);
+    return { changes, lastSeq: top, more: rows.length === limit };
+  }).immediate();
 }
 
 export interface ReplayResult { changes: WireChange[]; last_seq: number; more: boolean; done: boolean }

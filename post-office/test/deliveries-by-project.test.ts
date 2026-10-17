@@ -6,7 +6,7 @@ import { addEntryAsync, updateEntry, initModule, migrate, migrateTo, enableSync,
 import { tempStore, laptop } from './helpers.js';
 import { acceptChanges, fetchDeliveries, lastSeq } from '../src/deliveries.js';
 import { registerProject, openStore, closeStore, getMeta, type Store } from '../src/store.js';
-import { setProjectMember } from '../src/access.js';
+import { setProjectMember as grant } from '../src/access.js';
 
 const TABLES = ['entries', 'refs', 'entry_modules', 'entry_revisions'];
 
@@ -37,6 +37,8 @@ function ownerOf(db: Store, w: WireChange): string | null {
   return (db.prepare(`SELECT entry_ulid FROM entry_revisions WHERE rev_id = ?`).get(k) as { entry_ulid: string }).entry_ulid;
 }
 const tablesOf = (ws: WireChange[]) => new Set(ws.map((w) => decodeChange(w).table));
+/** These tests are about stamping, not replay: the new member counts as already replayed (no barrier). */
+const setProjectMember: typeof grant = (db, ...a) => { grant(db, ...a); db.prepare(`DELETE FROM po_replays`).run(); };
 const fetchAll = (s: Store, d: string, after = 0) => fetchDeliveries(s, d, after, 5000);
 
 test('member of A never receives B rows: entries, refs, entry_modules, entry_revisions', async () => {
