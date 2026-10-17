@@ -355,8 +355,10 @@ export function listMembers(db: Store): Member[] {
 }
 
 /** Revoke by device id or by name (a name must be unambiguous). Effective on the next request (D12). */
-export function revokeMember(db: Store, who: string): Member {
-  const rows = db.prepare(`SELECT ${MEMBER_COLS} FROM po_members WHERE device_id = ? OR name = ?`).all(who, who) as Member[];
+export function revokeMember(db: Store, who: string, opts: { deviceOnly?: boolean } = {}): Member {
+  const rows = (opts.deviceOnly
+    ? db.prepare(`SELECT ${MEMBER_COLS} FROM po_members WHERE device_id = ?`).all(who)
+    : db.prepare(`SELECT ${MEMBER_COLS} FROM po_members WHERE device_id = ? OR name = ?`).all(who, who)) as Member[];
   if (rows.length === 0) throw new StoreError(`no member called ${who}`, 404);
   if (rows.length > 1) throw new StoreError(`${rows.length} members are called ${who}; revoke by device id: ${rows.map((r) => r.device_id).join(", ")}`);
   if (!rows[0].revoked_at) assertRevocable(db, rows[0].device_id);

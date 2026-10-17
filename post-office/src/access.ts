@@ -173,18 +173,18 @@ export function seedNewProject(db: Store, projectUlid: string, creatorDevice: st
  * A project always keeps one Owner. R14: gaining
  * note.view queues a replay of the history so far; losing it drops it.
  */
-export function setProjectMember(db: Store, actor: string, projectUlid: string, deviceId: string, roleName: string | null): void {
-  db.transaction(() => {
+export function setProjectMember(db: Store, actor: string, projectUlid: string, deviceId: string, roleName: string | null): boolean {
+  return db.transaction(() => {
     if (!db.prepare(`SELECT 1 FROM po_projects WHERE ulid = ?`).get(projectUlid)) throw new StoreError(`no team project ${projectUlid} on this post office`, 404);
     const cur = db
       .prepare(`SELECT r.name FROM po_project_members x JOIN po_roles r ON r.ulid = x.role_ulid WHERE x.project_ulid = ? AND x.device_id = ?`)
       .get(projectUlid, deviceId) as { name: string } | undefined;
     if (roleName === null) {
-      if (!cur) return;
       requireProjectKey(db, actor, projectUlid, "member.revoke");
+      if (!cur) return false;
     } else {
-      if (cur?.name === roleName) return;
       requireProjectKey(db, actor, projectUlid, cur ? "role.manage" : "member.invite");
+      if (cur?.name === roleName) return false;
       if (!liveMember(db, deviceId)) throw new StoreError(`${deviceId} is not a member of this office`, 404);
     }
     const role = roleName === null ? undefined : db.prepare(`SELECT ulid, keys FROM po_roles WHERE project_ulid = ? AND name = ?`).get(projectUlid, roleName) as { ulid: string; keys: string } | undefined;
@@ -203,6 +203,7 @@ export function setProjectMember(db: Store, actor: string, projectUlid: string, 
     } else if (before && !after) {
       db.prepare(`DELETE FROM po_replays WHERE device_id = ? AND project_ulid = ?`).run(deviceId, projectUlid);
     }
+    return true;
   }).immediate();
 }
 

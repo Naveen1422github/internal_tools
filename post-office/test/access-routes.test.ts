@@ -40,8 +40,7 @@ test('GET /v1/projects hides projects the caller is not in', async () => {
     assert.equal((await requestJson(o.target(n), 'GET', '/v1/projects')).body.projects.length, 1);
     assert.equal((await requestJson(o.target(r), 'GET', '/v1/projects')).body.projects.length, 0);
     const m = await requestJson(o.target(r), 'GET', `/v1/projects/${p.ulid}/members`);
-    assert.equal(m.status, 403);
-    assert.match(m.body.error, /note\.view/);
+    assert.equal(m.status, 404);
   } finally { await o.stop(); }
 });
 
@@ -115,5 +114,84 @@ test('POST /v1/office/members returns a secret that /v1/join redeems', async () 
     assert.equal(rev.status, 403);
     assert.match(rev.body.error, /office\.member\.revoke/);
     assert.equal((await requestJson(o.target(n), 'DELETE', `/v1/office/members/${add.body.device_id}`)).status, 200);
+  } finally { await o.stop(); }
+});
+
+test('non-members get the same 404 for existing and missing projects; nothing is rung or leaked', async () => {
+  const o = await office();
+  try {
+    const n = await o.join('N');
+    const r = await o.join('R');
+    const x = await o.join('X');
+    const p = mkProject('SEC');
+    await requestJson(o.target(n), 'POST', '/v1/projects', p);
+    const events: Array<[string, string]> = [];
+    const stream = openEventStream(o.target(x), '/v1/events', { event: (name, d) => events.push([name, d]), close: () => {} });
+    const end = Date.now() + 3000;
+    while (!events.some(([e]) => e === 'ready') && Date.now() < end) await new Promise((q) => setTimeout(q, 10));
+    const missing = newUlid();
+    for (const [method, path, body] of [
+      ['GET', 'members', undefined], ['PUT', `members/${x.device}`, { role: 'Reader' }], ['DELETE', `members/${x.device}`, undefined],
+      ['DELETE', `members/${n.device}`, undefined],
+    ] as const) {
+      const a = await requestJson(o.target(r), method, `/v1/projects/${p.ulid}/${path}`, body);
+      const b = await requestJson(o.target(r), method, `/v1/projects/${missing}/${path}`, body);
+      assert.equal(a.status, 404, `${method} ${path}`);
+      assert.deepEqual(a.body, { error: 'no such team project' });
+      assert.deepEqual(b.body, a.body);
+    }
+    // a member lacking the key still gets the named 403; the no-op DELETE is gated too
+    await requestJson(o.target(n), 'PUT', `/v1/projects/${p.ulid}/members/${r.device}`, { role: 'Reader' });
+    const noop = await requestJson(o.target(r), 'DELETE', `/v1/projects/${p.ulid}/members/${x.device}`);
+    assert.equal(noop.status, 403);
+    assert.match(noop.body.error, /member\.revoke/);
+    // no-op by an Owner: 200 but no ring; real change rings with an empty payload
+    const before = events.filter(([e]) => e === 'access').length;
+    assert.equal((await requestJson(o.target(n), 'DELETE', `/v1/projects/${p.ulid}/members/${x.device}`)).status, 200);
+    assert.equal((await requestJson(o.target(n), 'PUT', `/v1/projects/${p.ulid}/members/${r.device}`, { role: 'Reader' })).status, 200);
+    await new Promise((q) => setTimeout(q, 150));
+    assert.equal(events.filter(([e]) => e === 'access').length, before, 'no-ops ring nothing');
+    await requestJson(o.target(n), 'PUT', `/v1/projects/${p.ulid}/members/${r.device}`, { role: 'Editor' });
+    while (events.filter(([e]) => e === 'access').length === before && Date.now() < end + 3000) await new Promise((q) => setTimeout(q, 10));
+    const rung = events.filter(([e]) => e === 'access');
+    assert.equal(rung.length, before + 1);
+    assert.equal(rung[rung.length - 1][1], '{}');
+    stream.close();
+  } finally { await o.stop(); }
+});
+
+test('GET /v1/projects lists a project for a member of any role', async () => {
+  const o = await office();
+  try {
+    const n = await o.join('N');
+    const r = await o.join('R');
+    const p = mkProject('ANY');
+    await requestJson(o.target(n), 'POST', '/v1/projects', p);
+    o.store.prepare(`INSERT INTO po_roles (ulid, project_ulid, name, keys, is_starter) VALUES (?, ?, 'Nothing', '[]', 0)`).run(newUlid(), p.ulid);
+    await requestJson(o.target(n), 'PUT', `/v1/projects/${p.ulid}/members/${r.device}`, { role: 'Nothing' });
+    assert.equal((await requestJson(o.target(r), 'GET', '/v1/projects')).body.projects.length, 1);
+    assert.equal((await requestJson(o.target(r), 'GET', `/v1/projects/${p.ulid}/members`)).status, 200);
+  } finally { await o.stop(); }
+});
+
+test('malformed percent-encoding is a 400', async () => {
+  const o = await office();
+  try {
+    const n = await o.join('N');
+    assert.equal((await requestJson(o.target(n), 'GET', '/v1/projects/%zz/members')).status, 400);
+    assert.equal((await requestJson(o.target(n), 'DELETE', '/v1/office/members/%zz')).status, 400);
+  } finally { await o.stop(); }
+});
+
+test('DELETE /v1/office/members revokes exactly that device, even if another member is named like it', async () => {
+  const o = await office();
+  try {
+    const n = await o.join('N');
+    const victim = await o.join('V');
+    const trick = await o.join(victim.device); // named like V's device id
+    assert.equal((await requestJson(o.target(n), 'DELETE', `/v1/office/members/${trick.device}`)).status, 200);
+    const rows = o.store.prepare(`SELECT device_id, revoked_at FROM po_members`).all() as Array<{ device_id: string; revoked_at: string | null }>;
+    assert.ok(rows.find((x) => x.device_id === trick.device)!.revoked_at);
+    assert.equal(rows.find((x) => x.device_id === victim.device)!.revoked_at, null);
   } finally { await o.stop(); }
 });

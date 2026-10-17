@@ -7,7 +7,7 @@ import {
   registerProject, addMember, revokeMember,
   type Member, type Store,
 } from "./store.js";
-import { officeKeys, projectKeys, memberProjects, requireOfficeKey, requireProjectKey, setProjectMember, setOfficeRole } from "./access.js";
+import { officeKeys, projectKeys, requireOfficeKey, setProjectMember, setOfficeRole } from "./access.js";
 import { sanitizeKeys, type AccessPayload } from "@collab-mcp/core";
 import { acceptChanges, fetchDeliveries, lastSeq } from "./deliveries.js";
 
@@ -83,6 +83,18 @@ function accessFor(db: Store, device: string): AccessPayload {
   });
   const replays = db.prepare(`SELECT project_ulid, upto_seq FROM po_replays WHERE device_id = ?`).all(device) as AccessPayload["replays"];
   return { office: office ? { role: office.name, keys: [...officeKeys(db, device)] } : null, projects, replays };
+}
+
+/** A path parameter, decoded; bad percent-encoding is a 400, not a crash. */
+function param(raw: string): string {
+  try { return decodeURIComponent(raw); } catch { throw new StoreError("the address contains an invalid character"); }
+}
+
+/** R7a: a project you are not in does not exist for you; same answer for a missing one (no code or ulid echoed). */
+function requireMembership(db: Store, device: string, projectUlid: string): void {
+  if (!db.prepare(`SELECT 1 FROM po_project_members WHERE project_ulid = ? AND device_id = ?`).get(projectUlid, device)) {
+    throw new StoreError("no such team project", 404);
+  }
 }
 
 function membersOf(db: Store, projectUlid: string) {
@@ -186,7 +198,7 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         return send(res, 200, accessFor(o.store, me.device_id));
       case "GET /v1/projects": {
         // R7a: a project you are not in does not exist for you.
-        const mine = new Set(memberProjects(o.store, me.device_id));
+        const mine = new Set((o.store.prepare(`SELECT project_ulid FROM po_project_members WHERE device_id = ?`).all(me.device_id) as Array<{ project_ulid: string }>).map((r) => r.project_ulid));
         const all = o.store.prepare(`SELECT ulid, name, code, created_at FROM po_projects ORDER BY code`).all() as Array<{ ulid: string }>;
         return send(res, 200, { projects: all.filter((p) => mine.has(p.ulid)) });
       }
@@ -195,7 +207,7 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         requireOfficeKey(o.store, me.device_id, "office.project.create");
         const project = registerProject(o.store, b ?? {}, me.device_id);
         ring("projects", { code: project.code });
-        ring("access", { project: project.code });
+        ring("access", {});
         log(`${me.name}: team project ${project.code} (${project.name}) registered`);
         return send(res, 200, { project });
       }
@@ -231,7 +243,7 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         const b = await readJson(req, maxBody);
         requireOfficeKey(o.store, me.device_id, "office.member.add");
         const { deviceId, secret } = addMember(o.store, String(b?.name ?? ""));
-        ring("access", { office: true });
+        ring("access", {});
         log(`${me.name}: added member ${deviceId}`);
         return send(res, 200, { device_id: deviceId, secret });
       }
@@ -239,30 +251,35 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
     // Parameterised routes (one small matcher; the switch keeps the fixed ones).
     let m: RegExpExecArray | null;
     if ((m = /^GET \/v1\/projects\/([^/]+)\/members$/.exec(route))) {
-      requireProjectKey(o.store, me.device_id, m[1], "note.view");
-      return send(res, 200, membersOf(o.store, m[1]));
+      const ulid = param(m[1]);
+      requireMembership(o.store, me.device_id, ulid);
+      return send(res, 200, membersOf(o.store, ulid));
     }
     if ((m = /^(PUT|DELETE) \/v1\/projects\/([^/]+)\/members\/([^/]+)$/.exec(route))) {
+      const ulid = param(m[2]), device = param(m[3]);
       const b = m[1] === "PUT" ? await readJson(req, maxBody) : (req.resume(), {});
+      requireMembership(o.store, me.device_id, ulid);
       const role = m[1] === "PUT" ? String(b?.role ?? "") : null;
       if (m[1] === "PUT" && !role) throw new StoreError("a role name is needed");
-      setProjectMember(o.store, me.device_id, m[2], decodeURIComponent(m[3]), role);
-      ring("access", { project: m[2] });
+      if (setProjectMember(o.store, me.device_id, ulid, device, role)) ring("access", {});
       return send(res, 200, { ok: true });
     }
     if ((m = /^PUT \/v1\/office\/members\/([^/]+)$/.exec(route))) {
       const b = await readJson(req, maxBody);
-      setOfficeRole(o.store, me.device_id, decodeURIComponent(m[1]), String(b?.role ?? ""));
-      ring("access", { office: true });
+      const device = param(m[1]);
+      const roleOf = () => (o.store.prepare(`SELECT role_ulid FROM po_office_members WHERE device_id = ?`).get(device) as { role_ulid: string } | undefined)?.role_ulid;
+      const before = roleOf();
+      setOfficeRole(o.store, me.device_id, device, String(b?.role ?? ""));
+      if (roleOf() !== before) ring("access", {});
       return send(res, 200, { ok: true });
     }
     if ((m = /^DELETE \/v1\/office\/members\/([^/]+)$/.exec(route))) {
       req.resume();
       requireOfficeKey(o.store, me.device_id, "office.member.revoke");
-      const who = decodeURIComponent(m[1]);
+      const who = param(m[1]);
       if (!o.store.prepare(`SELECT 1 FROM po_members WHERE device_id = ?`).get(who)) throw new StoreError(`no member called ${who}`, 404);
-      revokeMember(o.store, who);
-      ring("access", { office: true });
+      revokeMember(o.store, who, { deviceOnly: true });
+      ring("access", {});
       return send(res, 200, { ok: true });
     }
     req.resume();
