@@ -169,11 +169,12 @@ test('backfill stamps pre-upgrade rows once', async () => {
     acceptChanges(store, 'd-a', readOwnChanges(la.db, 0));
     // Turn the store back into a pre-upgrade one: no column, no index, no meta.
     store.exec(`DROP INDEX idx_po_deliveries_project; ALTER TABLE po_deliveries DROP COLUMN project_ulid;`);
-    store.prepare(`DELETE FROM po_meta WHERE key = 'deliveries_stamped'`).run();
+    store.prepare(`DELETE FROM po_meta WHERE key IN ('deliveries_stamped', 'deliveries_stamped_upto')`).run();
     closeStore(store);
 
     db = openStore(path);
     assert.ok(getMeta(db, 'deliveries_stamped'));
+    assert.equal(getMeta(db, 'deliveries_stamped_upto'), String(lastSeq(db)));
     assert.ok(db.prepare(`SELECT 1 FROM sqlite_master WHERE name = 'idx_po_deliveries_project'`).get());
     const count = (where: string) => (db.prepare(`SELECT COUNT(*) n FROM po_deliveries WHERE ${where}`).get() as { n: number }).n;
     assert.ok(count(`project_ulid = '${A}'`) > 0, 'team rows stamped with their project');
@@ -186,6 +187,59 @@ test('backfill stamps pre-upgrade rows once', async () => {
     closeStore(db);
     db = openStore(path);
     assert.ok(count(`project_ulid = 'ZZ'`) > 0);
+  } finally { setAllocator(null); la.cleanup(); try { closeStore(db); } catch { /* closed */ } cleanup(); }
+});
+
+test('rollback: rows an older office binary wrote after the upgrade are stamped on the next open', async () => {
+  const { store, path, cleanup } = tempStore();
+  const la = laptop();
+  let db: Store = store;
+  try {
+    for (const d of ['d-a', 'd-x']) member(store, d);
+    const A = project(store, 'AA', 'd-a');
+    await note(la.db, 'stamped team note', A);
+    acceptChanges(store, 'd-a', readOwnChanges(la.db, 0));
+    const upto = lastSeq(store);
+    assert.equal(getMeta(store, 'deliveries_stamped_upto'), String(upto), 'acceptChanges moves the watermark');
+    // A row below the watermark that was stamped NULL stays NULL: it was stamped.
+    const legit = (store.prepare(`SELECT seq FROM po_deliveries WHERE project_ulid = ? ORDER BY seq LIMIT 1`).get(A) as { seq: number }).seq;
+    store.prepare(`UPDATE po_deliveries SET project_ulid = NULL WHERE seq = ?`).run(legit);
+    // An older binary records a later team note without stamping it.
+    const top = (la.db.prepare(`SELECT COALESCE(MAX(db_version), 0) v FROM crsql_changes`).get() as { v: number }).v;
+    const u = await note(la.db, 'written under the old binary', A);
+    acceptChanges(store, 'd-a', readOwnChanges(la.db, top), { stamp: false });
+    const ofNote = (s: Store) => fetchAll(s, 'd-x', upto).changes.filter((w) => ownerOf(s, w) === u);
+    assert.ok(ofNote(store).length > 0, 'unstamped rows reach a non-member (the leak)');
+    assert.equal(getMeta(store, 'deliveries_stamped_upto'), String(upto), 'the old binary did not move the watermark');
+    closeStore(store);
+
+    db = openStore(path);
+    assert.equal(ofNote(db).length, 0, 'after reopening, a non-member gets nothing of the note');
+    const count = (where: string) => (db.prepare(`SELECT COUNT(*) n FROM po_deliveries WHERE ${where}`).get() as { n: number }).n;
+    assert.equal(count(`seq > ${upto} AND project_ulid IS NULL`), 0, 'every row past the watermark is stamped');
+    assert.ok(count(`seq > ${upto} AND project_ulid = '${A}'`) > 0);
+    assert.equal(count(`seq = ${legit} AND project_ulid IS NULL`), 1, 'rows below the watermark are left alone');
+    assert.equal(getMeta(db, 'deliveries_stamped_upto'), String(lastSeq(db)));
+    assert.ok(fetchAll(db, 'd-a', upto).changes.length === 0, 'the creator sent them: nothing echoes back');
+  } finally { setAllocator(null); la.cleanup(); try { closeStore(db); } catch { /* closed */ } cleanup(); }
+});
+
+test('a store stamped by the first RnR binary (boolean only) starts its watermark at its last seq', async () => {
+  const { store, path, cleanup } = tempStore();
+  const la = laptop();
+  let db: Store = store;
+  try {
+    for (const d of ['d-a', 'd-x']) member(store, d);
+    const A = project(store, 'AA', 'd-a');
+    await note(la.db, 'team note', A);
+    acceptChanges(store, 'd-a', readOwnChanges(la.db, 0));
+    store.prepare(`UPDATE po_deliveries SET project_ulid = NULL WHERE project_ulid = ?`).run(A); // "stamped NULL" by that binary
+    store.prepare(`DELETE FROM po_meta WHERE key = 'deliveries_stamped_upto'`).run();
+    assert.ok(getMeta(store, 'deliveries_stamped'));
+    closeStore(store);
+    db = openStore(path);
+    assert.equal(getMeta(db, 'deliveries_stamped_upto'), String(lastSeq(db)));
+    assert.equal((db.prepare(`SELECT COUNT(*) n FROM po_deliveries WHERE project_ulid = ?`).get(A) as { n: number }).n, 0, 'nothing restamped');
   } finally { setAllocator(null); la.cleanup(); try { closeStore(db); } catch { /* closed */ } cleanup(); }
 });
 

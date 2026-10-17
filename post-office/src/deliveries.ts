@@ -212,12 +212,29 @@ export function stampProjects(db: Store, seqs: number[], inHand?: DeliveryRow[])
   }
 }
 
-/** R3 upgrade, once per store: stamp the deliveries recorded before RnR (openStore, after seedAccess). */
+/** R3: every delivery up to this seq was stamped by an RnR office (acceptChanges moves it). */
+const STAMPED_UPTO = "deliveries_stamped_upto";
+const SET_STAMPED_UPTO = `INSERT INTO po_meta (key, value) VALUES ('${STAMPED_UPTO}', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
+
+/**
+ * R3 upgrade, on every open (after seedAccess): stamp the deliveries past the
+ * watermark. They were recorded before RnR, or by an older office binary run
+ * after it (a rollback), so their NULL means "never stamped", not "no project".
+ * A store stamped by the first RnR binary (boolean meta only) counts as
+ * stamped up to its last seq.
+ */
 export function backfillProjectStamps(db: Store): void {
-  if (getMeta(db, "deliveries_stamped")) return;
   db.transaction(() => {
-    writeStamps(db, resolve(db, db.prepare(`SELECT seq, tbl, pk, origin, 0 AS held FROM po_deliveries`).all() as DeliveryRow[]).filter((r) => r.stamp !== null));
-    setMeta(db, "deliveries_stamped", new Date().toISOString());
+    const top = lastSeq(db);
+    const upto = getMeta(db, STAMPED_UPTO);
+    const from = upto !== null ? Number(upto) : getMeta(db, "deliveries_stamped") ? top : 0;
+    if (from < top) {
+      const rows = db.prepare(`SELECT seq, tbl, pk, origin, 0 AS held FROM po_deliveries WHERE seq > ? AND project_ulid IS NULL`).all(from) as DeliveryRow[];
+      writeStamps(db, resolve(db, rows).filter((r) => r.stamp !== null));
+    }
+    if (upto === null || Number(upto) !== top) prep(db, SET_STAMPED_UPTO).run(String(top));
+    // Kept for an older RnR binary, which checks only this.
+    if (!getMeta(db, "deliveries_stamped")) setMeta(db, "deliveries_stamped", new Date().toISOString());
   }).immediate();
 }
 
@@ -272,11 +289,14 @@ export function acceptChanges(
     for (const u of diverged) flagNeedsMerge(db, u);
     const own = recordOwnChanges(db);
     t0 = performance.now();
-    if (stamp) { const all = [...stamped, ...own]; stampProjects(db, all.map((r) => r.seq), all); }
+    const all = [...stamped, ...own];
+    if (stamp) stampProjects(db, all.map((r) => r.seq), all);
+    const seq = lastSeq(db);
+    if (stamp && all.length) prep(db, SET_STAMPED_UPTO).run(String(seq)); // R3 watermark: stamped up to here
     stampMs += performance.now() - t0;
     if (opts.timing) opts.timing.stampMs = stampMs;
     const officeWrote = own.length > 0;
-    return { accepted: fresh.length, duplicates: raws.length - fresh.length, lastSeq: lastSeq(db), officeWrote };
+    return { accepted: fresh.length, duplicates: raws.length - fresh.length, lastSeq: seq, officeWrote };
   }).immediate();
 }
 
