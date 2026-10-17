@@ -69,7 +69,7 @@ function headers(target: PostOfficeTarget, extra: Record<string, string>): Recor
 
 export async function requestJson(
   target: PostOfficeTarget,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
   body?: unknown,
   opts: { timeoutMs?: number } = {},

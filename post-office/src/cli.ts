@@ -7,6 +7,7 @@ import {
   createStore, openStore, closeStore, addMember, revokeMember, teamStatus, setModuleShared, sharedModules,
   nextNumber, JOIN_TTL_HOURS, StoreError, type Store,
 } from "./store.js";
+import { setOfficeRole, setProjectMember } from "./access.js";
 import { lastSeq } from "./deliveries.js";
 import { startPostOffice, type PostOffice } from "./server.js";
 import { defaultDataDir, officeFiles } from "./paths.js";
@@ -22,6 +23,8 @@ export const USAGE = `collab-post-office: the sync v1 post office
   serve [--host 0.0.0.0]
   add-member <name>            prints a ONE-TIME join code (valid ${JOIN_TTL_HOURS / 24} days)
   revoke <device-id | name>
+  set-office-role <device-id | name> <role>   e.g. "Office admin" (no login needed: you are on this machine)
+  set-project-role <device-id | name> <CODE> <role>   e.g. a new Owner before revoking the only one
   status
   share <module> | unshare <module> | modules
 
@@ -66,6 +69,14 @@ function readConfig(dir: string): OfficeConfig {
   const f = officeFiles(dir);
   if (!existsSync(f.config)) throw new StoreError(`no post office in ${dir}; run \`collab-post-office init\` first`);
   return JSON.parse(readFileSync(f.config, "utf8")) as OfficeConfig;
+}
+
+/** A live member by device id or unambiguous name (the office CLI's role commands). */
+function liveMemberNamed(s: Store, who: string): { device_id: string; name: string } {
+  const rows = s.prepare(`SELECT device_id, name FROM po_members WHERE revoked_at IS NULL AND (device_id = ? OR name = ?)`).all(who, who) as Array<{ device_id: string; name: string }>;
+  if (rows.length === 0) throw new StoreError(`no member called ${who}`, 404);
+  if (rows.length > 1) throw new StoreError(`${rows.length} members are called ${who}; use the device id: ${rows.map((r) => r.device_id).join(", ")}`);
+  return rows[0];
 }
 
 function withStore<T>(dir: string, fn: (s: Store) => T): T {
@@ -144,6 +155,32 @@ export async function runCli(argv: string[], io: Io): Promise<{ code: number; of
         if (!who) throw new StoreError("revoke needs a device id or a member name");
         const m = withStore(dir, (s) => revokeMember(s, who));
         io.out(`revoked ${m.name} (${m.device_id}): every request from it is now refused`);
+        return { code: 0 };
+      }
+      case "set-office-role": {
+        const who = pos[1], role = pos.slice(2).join(" ").trim();
+        if (!who || !role) throw new StoreError("set-office-role needs a member and a role, e.g. set-office-role main \"Office admin\"");
+        // The office machine is unguarded (R13): actor = null.
+        const m = withStore(dir, (s) => {
+          const m = liveMemberNamed(s, who);
+          setOfficeRole(s, null, m.device_id, role);
+          return m;
+        });
+        io.out(`${m.name} (${m.device_id}) is now ${role}`);
+        return { code: 0 };
+      }
+      case "set-project-role": {
+        const who = pos[1], code = (pos[2] ?? "").toUpperCase(), role = pos.slice(3).join(" ").trim();
+        if (!who || !code || !role) throw new StoreError("set-project-role needs a member, a project code and a role, e.g. set-project-role second SH Owner");
+        // The office machine is unguarded: actor = null; a project still keeps one Owner.
+        const m = withStore(dir, (s) => {
+          const m = liveMemberNamed(s, who);
+          const p = s.prepare(`SELECT ulid FROM po_projects WHERE code = ?`).get(code) as { ulid: string } | undefined;
+          if (!p) throw new StoreError(`no team project with code ${code} on this post office`, 404);
+          setProjectMember(s, null, p.ulid, m.device_id, role);
+          return m;
+        });
+        io.out(`${m.name} (${m.device_id}) is now ${role} in ${code}; laptops learn it on their next sync`);
         return { code: 0 };
       }
       case "status": {

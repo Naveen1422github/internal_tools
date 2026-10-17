@@ -4,7 +4,8 @@ import assert from 'node:assert';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import { migrateTo, addEntry, parseJoinCode, requestJson, AccessRevokedError } from '@collab-mcp/core';
+import { migrateTo, addEntry, parseJoinCode, requestJson, AccessRevokedError, newUlid } from '@collab-mcp/core';
+import { openStore, closeStore, registerProject } from '../src/store.js';
 import { tempDir } from './helpers.js';
 import { runCli } from '../src/cli.js';
 import { defaultDataDir } from '../src/paths.js';
@@ -52,6 +53,8 @@ test('add-member prints a join code; status, revoke, share', async () => {
   try {
     const data = join(t.dir, 'office');
     await runCli(['init', '--data', data, '--seed-max-id', '0', '--url', 'https://10.0.0.9:7443'], io().io);
+    // RnR: the first member is Office admin and cannot be revoked; revoke the second.
+    assert.equal((await runCli(['add-member', 'main', '--data', data], io().io)).code, 0);
     const c = io();
     assert.equal((await runCli(['add-member', 'second laptop', '--data', data], c.io)).code, 0);
     const code = c.out.find((l) => l.startsWith('collab1-'))!;
@@ -94,4 +97,92 @@ test('unknown command: usage, exit code 2', async () => {
   const c = io();
   assert.equal((await runCli(['frobnicate'], c.io)).code, 2);
   assert.match(c.err.join('\n'), /add-member/);
+});
+
+test('set-office-role (office machine, unguarded) changes who is Office admin', async () => {
+  const t = tempDir();
+  try {
+    const data = join(t.dir, 'office');
+    await runCli(['init', '--data', data, '--seed-max-id', '0', '--url', 'https://10.0.0.9:7443'], io().io);
+    await runCli(['add-member', 'main', '--data', data], io().io); // seeded as Office admin
+    await runCli(['add-member', 'second', '--data', data], io().io); // Office member
+    const roleOf = (name: string) => {
+      const db = new Database(join(data, 'store.db'), { readonly: true });
+      try {
+        return (db.prepare(`SELECT r.name n FROM po_members m JOIN po_office_members om ON om.device_id = m.device_id JOIN po_office_roles r ON r.ulid = om.role_ulid WHERE m.name = ?`).get(name) as { n: string }).n;
+      } finally { db.close(); }
+    };
+    assert.equal(roleOf('main'), 'Office admin');
+    // The only admin cannot be demoted, with a plain message.
+    const bad = io();
+    assert.equal((await runCli(['set-office-role', 'main', 'Office member', '--data', data], bad.io)).code, 1);
+    assert.match(bad.err.join('\n'), /at least one Office admin/);
+    const ok = io();
+    assert.equal((await runCli(['set-office-role', 'second', 'Office admin', '--data', data], ok.io)).code, 0, ok.err.join('\n'));
+    assert.equal(roleOf('second'), 'Office admin');
+    assert.equal((await runCli(['set-office-role', 'main', 'Office member', '--data', data], io().io)).code, 0);
+    assert.equal(roleOf('main'), 'Office member');
+    const nobody = io();
+    assert.equal((await runCli(['set-office-role', 'ghost', 'Office admin', '--data', data], nobody.io)).code, 1);
+    assert.match(nobody.err.join('\n'), /no member called ghost/);
+    const norole = io();
+    assert.equal((await runCli(['set-office-role', 'main', 'Wizard', '--data', data], norole.io)).code, 1);
+    assert.match(norole.err.join('\n'), /no role called "Wizard"/);
+  } finally { t.cleanup(); }
+});
+
+test('set-project-role (office machine, unguarded) lets the only Owner of a project be revoked', async () => {
+  const t = tempDir();
+  try {
+    const data = join(t.dir, 'office');
+    await runCli(['init', '--data', data, '--seed-max-id', '0', '--url', 'https://10.0.0.9:7443'], io().io);
+    await runCli(['add-member', 'main', '--data', data], io().io);
+    await runCli(['add-member', 'second', '--data', data], io().io);
+    const s = openStore(join(data, 'store.db'));
+    let ulid: string;
+    try {
+      const main = (s.prepare(`SELECT device_id FROM po_members WHERE name = 'main'`).get() as { device_id: string }).device_id;
+      ulid = registerProject(s, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 }, main).ulid;
+      s.prepare(`UPDATE po_office_members SET role_ulid = (SELECT ulid FROM po_office_roles WHERE name = 'Office admin')`).run();
+    } finally { closeStore(s); }
+    const roleIn = (name: string) => {
+      const db = new Database(join(data, 'store.db'), { readonly: true });
+      try {
+        return (db.prepare(`SELECT r.name n FROM po_members m JOIN po_project_members x ON x.device_id = m.device_id JOIN po_roles r ON r.ulid = x.role_ulid WHERE m.name = ? AND x.project_ulid = ?`).get(name, ulid) as { n: string } | undefined)?.n;
+      } finally { db.close(); }
+    };
+    // The only Owner: refused, and the message says how to fix it.
+    const bad = io();
+    assert.equal((await runCli(['revoke', 'main', '--data', data], bad.io)).code, 1);
+    assert.match(bad.err.join('\n'), /only Owner of SH; make someone else Owner first/);
+    assert.match(bad.err.join('\n'), /collab office set-project-role <new owner> SH Owner/);
+    // second is not in SH at all: the office CLI may still give it Owner (no keys checked).
+    const ok = io();
+    assert.equal((await runCli(['set-project-role', 'second', 'sh', 'Owner', '--data', data], ok.io)).code, 0, ok.err.join('\n'));
+    assert.match(ok.out.join('\n'), /second .* is now Owner in SH/);
+    assert.equal(roleIn('second'), 'Owner');
+    // A project still keeps one Owner, even from the office machine.
+    const last = io();
+    assert.equal((await runCli(['set-project-role', 'second', 'SH', 'Reader', '--data', data], last.io)).code, 0);
+    assert.equal(roleIn('second'), 'Reader');
+    assert.equal((await runCli(['set-project-role', 'main', 'SH', 'Reader', '--data', data], last.io)).code, 1);
+    assert.match(last.err.join('\n'), /SH needs at least one Owner/);
+    assert.equal((await runCli(['set-project-role', 'second', 'SH', 'Owner', '--data', data], io().io)).code, 0);
+    const rev = io();
+    assert.equal((await runCli(['revoke', 'main', '--data', data], rev.io)).code, 0, rev.err.join('\n'));
+    assert.match(rev.out.join('\n'), /revoked main/);
+    // Plain errors for the wrong member, project or role.
+    const nobody = io();
+    assert.equal((await runCli(['set-project-role', 'ghost', 'SH', 'Owner', '--data', data], nobody.io)).code, 1);
+    assert.match(nobody.err.join('\n'), /no member called ghost/);
+    const noproj = io();
+    assert.equal((await runCli(['set-project-role', 'second', 'ZZ', 'Owner', '--data', data], noproj.io)).code, 1);
+    assert.match(noproj.err.join('\n'), /no team project with code ZZ/);
+    const norole = io();
+    assert.equal((await runCli(['set-project-role', 'second', 'SH', 'Wizard', '--data', data], norole.io)).code, 1);
+    assert.match(norole.err.join('\n'), /SH has no role called "Wizard"/);
+    const usage = io();
+    assert.equal((await runCli(['set-project-role', 'second', '--data', data], usage.io)).code, 1);
+    assert.match(usage.err.join('\n'), /set-project-role needs a member, a project code and a role/);
+  } finally { t.cleanup(); }
 });

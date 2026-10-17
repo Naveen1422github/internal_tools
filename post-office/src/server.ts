@@ -4,10 +4,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
   StoreError, allocate, authenticate, redeemJoin, isRevoked, sharedModules, setModuleShared, teamStatus, officeSchema,
-  registerProject, listOfficeProjects,
+  registerProject, addMember, revokeMember,
   type Member, type Store,
 } from "./store.js";
-import { acceptChanges, fetchDeliveries, lastSeq } from "./deliveries.js";
+import { officeKeys, projectKeys, requireOfficeKey, requireProjectKey, setProjectMember, setOfficeRole } from "./access.js";
+import { sanitizeKeys, type AccessPayload } from "@collab-mcp/core";
+import { acceptChanges, fetchDeliveries, fetchReplay, lastSeq } from "./deliveries.js";
 
 // The post office's HTTPS + SSE API (spec Components 3, D12, D13). Plain Node
 // https: no framework. Every route but /v1/join authenticates against the
@@ -30,6 +32,8 @@ export interface PostOfficeOptions {
     dropChangesAnswer?: (device: string) => boolean;
     /** Every request, with the device id it CLAIMS (before authentication), so tests also count refused ones. */
     onRequest?: (route: string, device: string) => void;
+    /** Answer GET /v1/access with this status instead (404 = an older office, 500 = a broken one). */
+    accessStatus?: (device: string) => number | null;
   };
 }
 
@@ -65,6 +69,52 @@ function readJson(req: IncomingMessage, limit: number): Promise<any> {
   });
 }
 
+// RnR: what `device` may do, in the shape the laptop caches (R3).
+function accessFor(db: Store, device: string): AccessPayload {
+  const office = db.prepare(`SELECT r.name FROM po_office_members x JOIN po_office_roles r ON r.ulid = x.role_ulid WHERE x.device_id = ?`).get(device) as { name: string } | undefined;
+  const projects = (db
+    .prepare(
+      `SELECT p.ulid, p.code, r.name AS role FROM po_project_members x
+         JOIN po_projects p ON p.ulid = x.project_ulid JOIN po_roles r ON r.ulid = x.role_ulid
+        WHERE x.device_id = ? ORDER BY p.code`,
+    )
+    .all(device) as Array<{ ulid: string; code: string; role: string }>).map((p) => {
+    const ai: Record<string, "allow" | "ask" | "deny"> = {};
+    for (const a of db.prepare(`SELECT key, state FROM po_project_ai WHERE project_ulid = ?`).all(p.ulid) as Array<{ key: string; state: "allow" | "ask" | "deny" }>) ai[a.key] = a.state;
+    return { ...p, keys: [...projectKeys(db, device, p.ulid)], ai };
+  });
+  const replays = db.prepare(`SELECT project_ulid, upto_seq FROM po_replays WHERE device_id = ?`).all(device) as AccessPayload["replays"];
+  return { office: office ? { role: office.name, keys: [...officeKeys(db, device)] } : null, projects, replays };
+}
+
+/** A path parameter, decoded; bad percent-encoding is a 400, not a crash. */
+function param(raw: string): string {
+  try { return decodeURIComponent(raw); } catch { throw new StoreError("the address contains an invalid character"); }
+}
+
+/** R7a: a project you are not in does not exist for you; same answer for a missing one (no code or ulid echoed). */
+function requireMembership(db: Store, device: string, projectUlid: string): void {
+  if (!db.prepare(`SELECT 1 FROM po_project_members WHERE project_ulid = ? AND device_id = ?`).get(projectUlid, device)) {
+    throw new StoreError("no such team project", 404);
+  }
+}
+
+function membersOf(db: Store, projectUlid: string) {
+  const members = db
+    .prepare(
+      `SELECT m.device_id, m.name, r.name AS role, m.last_seen_at FROM po_project_members x
+         JOIN po_members m ON m.device_id = x.device_id AND m.revoked_at IS NULL
+         JOIN po_roles r ON r.ulid = x.role_ulid WHERE x.project_ulid = ? ORDER BY m.name, m.device_id`,
+    )
+    .all(projectUlid);
+  const roles = (db.prepare(`SELECT ulid, name, keys FROM po_roles WHERE project_ulid = ? ORDER BY name`).all(projectUlid) as Array<{ ulid: string; name: string; keys: string }>).map((r) => {
+    let parsed: unknown = [];
+    try { parsed = JSON.parse(r.keys); } catch { /* grants nothing */ }
+    return { ulid: r.ulid, name: r.name, keys: sanitizeKeys("project", parsed) };
+  });
+  return { members, roles };
+}
+
 function intParam(url: URL, name: string, dflt: number): number {
   const v = url.searchParams.get(name);
   if (v === null) return dflt;
@@ -76,13 +126,13 @@ function intParam(url: URL, name: string, dflt: number): number {
 export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice> {
   const log = o.log ?? (() => {});
   const maxBody = o.maxBodyBytes ?? 64 * 1024 * 1024;
-  const streams = new Set<{ device: string; res: ServerResponse }>();
+  const streams = new Set<{ device: string; res: ServerResponse; stop: () => void }>();
   // Read once at start: `serve` migrated the store before it got here.
   const officeSchemaValue = officeSchema(o.store);
 
   function ring(event: string, data: unknown, except?: string): void {
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-    for (const s of streams) if (s.device !== except) s.res.write(msg);
+    for (const s of streams) if (s.device !== except && !s.res.writableEnded) s.res.write(msg);
   }
 
   function fail(res: ServerResponse, e: unknown): void {
@@ -96,18 +146,18 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
   function openStream(res: ServerResponse, me: Member): void {
     res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive" });
     res.write(`: collab post office\n\nevent: ready\ndata: ${JSON.stringify({ last_seq: lastSeq(o.store) })}\n\n`);
-    const s = { device: me.device_id, res };
-    streams.add(s);
-    const ping = setInterval(() => res.write(": ping\n\n"), o.heartbeatMs ?? 25_000);
+    const ping = setInterval(() => { if (!res.writableEnded) res.write(": ping\n\n"); }, o.heartbeatMs ?? 25_000);
     const watch = setInterval(() => {
+      if (!o.store.open || res.writableEnded) return; // closing: the store may already be shut
       if (isRevoked(o.store, me.device_id)) {
         res.write("event: revoked\ndata: {}\n\n");
         res.end();
       }
     }, o.revokeCheckMs ?? 2_000);
+    const s = { device: me.device_id, res, stop: () => { clearInterval(ping); clearInterval(watch); } };
+    streams.add(s);
     res.on("close", () => {
-      clearInterval(ping);
-      clearInterval(watch);
+      s.stop();
       streams.delete(s);
     });
   }
@@ -146,12 +196,23 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         if (o.testHooks?.dropAllocateAnswer?.(String(b?.ulid))) { req.socket.destroy(); return; }
         return send(res, 200, { id, series });
       }
-      case "GET /v1/projects":
-        return send(res, 200, { projects: listOfficeProjects(o.store) });
+      case "GET /v1/access": {
+        const forced = o.testHooks?.accessStatus?.(me.device_id);
+        if (forced) return send(res, forced, { error: forced === 404 ? `no such endpoint: ${route}` : "broken" });
+        return send(res, 200, accessFor(o.store, me.device_id));
+      }
+      case "GET /v1/projects": {
+        // R7a: a project you are not in does not exist for you.
+        const mine = new Set((o.store.prepare(`SELECT project_ulid FROM po_project_members WHERE device_id = ?`).all(me.device_id) as Array<{ project_ulid: string }>).map((r) => r.project_ulid));
+        const all = o.store.prepare(`SELECT ulid, name, code, created_at FROM po_projects ORDER BY code`).all() as Array<{ ulid: string }>;
+        return send(res, 200, { projects: all.filter((p) => mine.has(p.ulid)) });
+      }
       case "POST /v1/projects": {
         const b = await readJson(req, maxBody);
-        const project = registerProject(o.store, b ?? {});
-        ring("projects", { code: project.code });
+        requireOfficeKey(o.store, me.device_id, "office.project.create");
+        const project = registerProject(o.store, b ?? {}, me.device_id);
+        ring("projects", {}); // no code: non-members must not learn it (R7a); couriers refetch GET /v1/projects
+        ring("access", {});
         log(`${me.name}: team project ${project.code} (${project.name}) registered`);
         return send(res, 200, { project });
       }
@@ -170,10 +231,19 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         const r = fetchDeliveries(o.store, me.device_id, intParam(url, "after", 0), intParam(url, "limit", 2000));
         return send(res, 200, { changes: r.changes, last_seq: r.lastSeq, more: r.more });
       }
+      case "GET /v1/replay": {
+        // R14: a missing or foreign project is a 404 (R7a); a member without note.view gets the 403.
+        const ulid = url.searchParams.get("project");
+        if (!ulid) throw new StoreError("project is needed");
+        requireMembership(o.store, me.device_id, ulid);
+        requireProjectKey(o.store, me.device_id, ulid, "note.view");
+        return send(res, 200, fetchReplay(o.store, me.device_id, ulid, intParam(url, "after", 0), intParam(url, "limit", 2000)));
+      }
       case "GET /v1/modules":
         return send(res, 200, { shared: sharedModules(o.store) });
       case "POST /v1/modules": {
         const b = await readJson(req, maxBody);
+        requireOfficeKey(o.store, me.device_id, "office.module.share");
         const shared = setModuleShared(o.store, b?.slug, b?.shared !== false);
         ring("modules", { shared });
         return send(res, 200, { shared });
@@ -182,10 +252,51 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         return send(res, 200, { members: teamStatus(o.store), last_seq: lastSeq(o.store) });
       case "GET /v1/events":
         return openStream(res, me);
-      default:
-        req.resume();
-        return send(res, 404, { error: `no such endpoint: ${route}` });
+      case "POST /v1/office/members": {
+        const b = await readJson(req, maxBody);
+        requireOfficeKey(o.store, me.device_id, "office.member.add");
+        const { deviceId, secret } = addMember(o.store, String(b?.name ?? ""));
+        ring("access", {});
+        log(`${me.name}: added member ${deviceId}`);
+        return send(res, 200, { device_id: deviceId, secret });
+      }
     }
+    // Parameterised routes (one small matcher; the switch keeps the fixed ones).
+    let m: RegExpExecArray | null;
+    if ((m = /^GET \/v1\/projects\/([^/]+)\/members$/.exec(route))) {
+      const ulid = param(m[1]);
+      requireMembership(o.store, me.device_id, ulid);
+      return send(res, 200, membersOf(o.store, ulid));
+    }
+    if ((m = /^(PUT|DELETE) \/v1\/projects\/([^/]+)\/members\/([^/]+)$/.exec(route))) {
+      const ulid = param(m[2]), device = param(m[3]);
+      const b = m[1] === "PUT" ? await readJson(req, maxBody) : (req.resume(), {});
+      requireMembership(o.store, me.device_id, ulid);
+      const role = m[1] === "PUT" ? String(b?.role ?? "") : null;
+      if (m[1] === "PUT" && !role) throw new StoreError("a role name is needed");
+      if (setProjectMember(o.store, me.device_id, ulid, device, role)) ring("access", {});
+      return send(res, 200, { ok: true });
+    }
+    if ((m = /^PUT \/v1\/office\/members\/([^/]+)$/.exec(route))) {
+      const b = await readJson(req, maxBody);
+      const device = param(m[1]);
+      const roleOf = () => (o.store.prepare(`SELECT role_ulid FROM po_office_members WHERE device_id = ?`).get(device) as { role_ulid: string } | undefined)?.role_ulid;
+      const before = roleOf();
+      setOfficeRole(o.store, me.device_id, device, String(b?.role ?? ""));
+      if (roleOf() !== before) ring("access", {});
+      return send(res, 200, { ok: true });
+    }
+    if ((m = /^DELETE \/v1\/office\/members\/([^/]+)$/.exec(route))) {
+      req.resume();
+      requireOfficeKey(o.store, me.device_id, "office.member.revoke");
+      const who = param(m[1]);
+      if (!o.store.prepare(`SELECT 1 FROM po_members WHERE device_id = ?`).get(who)) throw new StoreError(`no member called ${who}`, 404);
+      revokeMember(o.store, who, { deviceOnly: true });
+      ring("access", {});
+      return send(res, 200, { ok: true });
+    }
+    req.resume();
+    return send(res, 404, { error: `no such endpoint: ${route}` });
   }
 
   const server = https.createServer({ cert: o.certPem, key: o.keyPem }, (req, res) => {
@@ -207,7 +318,8 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
     listeners: () => [...streams].map((s) => s.device),
     close: () =>
       new Promise<void>((resolve) => {
-        for (const s of streams) s.res.end();
+        // Timers first: 'close' fires later, after the caller may have shut the store.
+        for (const s of streams) { s.stop(); s.res.end(); }
         server.closeAllConnections();
         server.close(() => resolve());
       }),

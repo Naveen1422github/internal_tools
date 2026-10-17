@@ -8,7 +8,7 @@ import {
   addEntry, addEntryAsync, createProject, updateEntry, getEntryByUlid, ownerOfRef, newUlid, getSyncValue,
   setAllocator, setAllocationRetry, type Allocator,
 } from '@collab-mcp/core';
-import { setModuleShared, registerProject, allocate } from '@collab-mcp/post-office';
+import { setModuleShared, registerProject, setProjectMember, allocate } from '@collab-mcp/post-office';
 import { tempDir, startOffice, joinedDb, openWriter, closeWriter, type Office } from './world.js';
 import { Courier } from '../src/engine.js';
 import { COURIER_KEYS as K } from '../src/keys.js';
@@ -38,8 +38,16 @@ type World = Awaited<ReturnType<typeof world>>;
 
 const note = (title: string, extra: Record<string, unknown> = {}) =>
   ({ type: 'decision' as const, title, summary: `${title} summary`, description: `${title} body`, ...extra });
+/** RnR: a project needs a creator; these pre-RnR tests register as the office's first member. */
+const creator = (o: Office) => (o.store.prepare(`SELECT device_id FROM po_members ORDER BY rowid LIMIT 1`).get() as { device_id: string }).device_id;
 function team(office: Office, code = 'SH', name = 'Support hub', seed = 0) {
-  return registerProject(office.store, { ulid: newUlid(), name, code, seed });
+  const c = creator(office);
+  const p = registerProject(office.store, { ulid: newUlid(), name, code, seed }, c);
+  // RnR R7a: a teammate sees a team project only once added; these tests expect both laptops to.
+  for (const m of office.store.prepare(`SELECT device_id FROM po_members WHERE revoked_at IS NULL AND device_id <> ?`).all(c) as Array<{ device_id: string }>) {
+    setProjectMember(office.store, c, p.ulid, m.device_id, 'Editor');
+  }
+  return p;
 }
 const atOffice = (o: Office, ulid: string) =>
   o.store.prepare(`SELECT id, series, title, summary, description FROM entries WHERE ulid = ?`).get(ulid) as any;
@@ -156,7 +164,12 @@ test('promote: a solo project made team sends its older notes whole and continue
     await w.ca.syncNow();
     assert.equal(deliveriesOf(w.office, n1.ulid), 0, 'solo until promoted');
     w.wa.prepare(`UPDATE projects SET mode = 'team', team = ? WHERE ulid = ?`).run(w.office.fingerprint, nv.ulid);
-    registerProject(w.office.store, { ulid: nv.ulid, name: 'Navi', code: 'NV', seed: 2 });
+    const c = creator(w.office);
+    registerProject(w.office.store, { ulid: nv.ulid, name: 'Navi', code: 'NV', seed: 2 }, c);
+    // RnR R7a (ruling 3): b receives NV only once added.
+    for (const m of w.office.store.prepare(`SELECT device_id FROM po_members WHERE revoked_at IS NULL AND device_id <> ?`).all(c) as Array<{ device_id: string }>) {
+      setProjectMember(w.office.store, c, nv.ulid, m.device_id, 'Editor');
+    }
     await w.ca.syncNow();
     assert.equal(atOffice(w.office, n1.ulid)?.title, 'nv one');
     assert.equal(atOffice(w.office, n2.ulid)?.title, 'nv two');

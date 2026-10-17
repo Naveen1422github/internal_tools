@@ -47,7 +47,7 @@ export interface Office {
   readonly url: string;
   fingerprint: string;
   requests: Array<{ route: string; device: string }>;
-  hooks: { dropChangesAnswer?: (device: string) => boolean };
+  hooks: { dropChangesAnswer?: (device: string) => boolean; accessStatus?: (device: string) => number | null };
   /** One-time join code for a new member. */
   code(name: string): { code: string; device: string };
   down(): Promise<void>;
@@ -66,6 +66,7 @@ export async function startOffice(dir: string, seedMaxId: number): Promise<Offic
     testHooks: {
       onRequest: (route: string, device: string) => { requests.push({ route, device }); },
       dropChangesAnswer: (device: string) => hooks.dropChangesAnswer?.(device) ?? false,
+      accessStatus: (device: string) => hooks.accessStatus?.(device) ?? null,
     },
   };
   let po = await startPostOffice({ ...opts, port: 0 });

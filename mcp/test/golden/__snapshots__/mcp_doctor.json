@@ -4,7 +4,7 @@
     {
       "name": "schema.tables",
       "severity": "ok",
-      "detail": "19 expected tables present"
+      "detail": "20 expected tables present"
     },
     {
       "name": "schema.indexes",

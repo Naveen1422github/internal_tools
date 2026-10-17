@@ -5,6 +5,7 @@ import { runNotebook } from "./notebook.js";
 import { runDoctor } from "./doctor.js";
 import { runProject } from "./project.js";
 import { runCopy } from "./copy.js";
+import { runTeam } from "./team.js";
 
 export type { CliResult, Deps, Io } from "./io.js";
 
@@ -32,6 +33,12 @@ const USAGE = `usage: collab [--notebook <name>] <command>
                                           (beats this folder's .collab; an explicit project beats it; local to this laptop)
   collab project unbind <module>          remove that binding
   collab project use <code>               make it this folder's project (writes .collab)
+  collab team list <CODE>                 who is in a team project, and their roles
+  collab team set <member> <CODE> <role>  give a member a role in a team project
+  collab team remove <member> <CODE>      take a member out of a team project
+  collab team office-role <member> <role> a member's role in the whole office
+  collab team invite <name>               add a member to the office: prints their join code
+  collab team revoke <member>             cut a member off from the office
   collab copy --from <module|project> --to <project> [--author me] [--since <date>] [--yes]
                                           copy notes into a project: lists them, asks, then copies
   collab doctor [--json] [--fix]          check the whole setup and print the fix for each problem
@@ -84,6 +91,8 @@ export async function main(argv: string[], io: Io, deps: Deps = {}): Promise<Cli
       return runNotebook(rest, io);
     case "project":
       return runProject(rest, io);
+    case "team":
+      return runTeam(rest, io);
     case "copy":
       return runCopy(rest, io);
     case "doctor":

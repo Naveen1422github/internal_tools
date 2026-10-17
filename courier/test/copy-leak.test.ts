@@ -7,7 +7,7 @@ import {
   addEntryAsync, createProject, deleteEntry, newUlid, markProjectLeft, planCopy, applyCopy,
   setAllocator, setAllocationRetry,
 } from '@collab-mcp/core';
-import { registerProject } from '@collab-mcp/post-office';
+import { registerProject, setProjectMember } from '@collab-mcp/post-office';
 import { tempDir, startOffice, joinedDb, openWriter, closeWriter, type Office } from './world.js';
 import { Courier } from '../src/engine.js';
 
@@ -19,7 +19,8 @@ async function world() {
   const ca = new Courier({ dbPath: ja.path, watch: false, retryMs: 60_000 });
   const cb = new Courier({ dbPath: jb.path, watch: false, retryMs: 60_000 });
   setAllocationRetry({ delaysMs: [0, 0], timeoutMs: 1500 });
-  registerProject(office.store, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 });
+  const sh = registerProject(office.store, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 }, ja.device); // RnR: a creates it
+  setProjectMember(office.store, ja.device, sh.ulid, jb.device, 'Editor'); // RnR R7a: b is added explicitly
   await ca.syncNow();
   await cb.syncNow();
   return {
@@ -100,6 +101,11 @@ test('a team this laptop left: a delete is not sent, a pending note is never num
     assert.equal(waiting.pending, true);
     setAllocator(null);
     markProjectLeft(w.wa, 'SH');
+    // RnR R15: the office's membership decides; a leave is real only once the office agrees.
+    const sh = w.office.store.prepare(`SELECT ulid FROM po_projects WHERE code = 'SH'`).get() as { ulid: string };
+    const [a, b] = (w.office.store.prepare(`SELECT device_id FROM po_members ORDER BY rowid`).all() as Array<{ device_id: string }>).map((m) => m.device_id);
+    setProjectMember(w.office.store, a, sh.ulid, b, 'Owner');
+    setProjectMember(w.office.store, b, sh.ulid, a, null);
     const before = deliveriesOf(w.office, kept.ulid);
     deleteEntry(w.wa, kept.id!, 'SH');
     await w.ca.syncNow();

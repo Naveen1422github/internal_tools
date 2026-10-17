@@ -73,6 +73,7 @@ test('push rings everyone but the sender; the others pull it', async () => {
 test('revoke: the next request is refused and the open doorbell is closed', async () => {
   const o = await office();
   try {
+    await o.join('main'); // RnR: the first member is the Office admin; revoke the second
     const m = await o.join('lost laptop');
     const l = listen(o.target(m));
     await l.isReady;
@@ -123,7 +124,9 @@ test('stage C: allocate echoes its series; team projects are listed and rung', a
     const created = await requestJson(o.target(a), 'POST', '/v1/projects', { ulid: u, name: 'Support hub', code: 'SH', seed: 0 });
     assert.equal(created.status, 200);
     assert.equal(created.body.project.code, 'SH');
-    await until(() => lb.events.some(([n, d]) => n === 'projects' && d.code === 'SH'));
+    await until(() => lb.events.some(([n, d]) => n === 'projects'));
+    // RnR R7a: a teammate sees a team project only once added to it.
+    assert.equal((await requestJson(o.target(a), 'PUT', `/v1/projects/${u}/members/${b.device}`, { role: 'Reader' })).status, 200);
     const list = await requestJson(o.target(b), 'GET', '/v1/projects');
     assert.deepEqual(list.body.projects.map((p: any) => [p.ulid, p.code]), [[u, 'SH']]);
     const clash = await requestJson(o.target(b), 'POST', '/v1/projects', { ulid: newUlid(), name: 'Other', code: 'SH', seed: 0 });
