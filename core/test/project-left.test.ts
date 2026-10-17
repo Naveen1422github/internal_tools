@@ -171,3 +171,25 @@ test('doctor: projects.left explains a left team; it is not "another post office
     assert.ok(!(check('projects.team_office').items ?? []).includes('SH'), 'a left project is not an office problem');
   } finally { t.cleanup(); }
 });
+
+test('clearProjectLeft: only a left team project of this office becomes writable again (R14 re-add)', async () => {
+  const { clearProjectLeft } = await import('../src/projects.js');
+  const t = freshDb();
+  try {
+    migrate(t.db);
+    const solo = createProject(t.db, { name: 'mine', code: 'P1' });
+    teamRow(t.db, 'SH');
+    teamRow(t.db, 'OT', 'other-fp');
+    const sh = findProject(t.db, 'SH')!, ot = findProject(t.db, 'OT')!;
+    assert.equal(clearProjectLeft(t.db, sh.ulid, 'fp'), false, 'not left: nothing to clear');
+    markProjectLeft(t.db, 'SH');
+    markProjectLeft(t.db, 'OT');
+    assert.equal(clearProjectLeft(t.db, ot.ulid, 'fp'), false, 'another office: left alone');
+    assert.ok(findProject(t.db, 'OT')!.left_at);
+    assert.equal(clearProjectLeft(t.db, solo.ulid, 'fp'), false);
+    assert.equal(clearProjectLeft(t.db, '01JNOSUCHPR0JECT0000000000', 'fp'), false);
+    assert.equal(clearProjectLeft(t.db, sh.ulid, 'fp'), true);
+    assert.equal(findProject(t.db, 'SH')!.left_at, null);
+    assert.equal(addEntry(t.db, note('writable again', { project: 'SH', assigned: assigned(1) })).series, 'SH');
+  } finally { t.cleanup(); }
+});

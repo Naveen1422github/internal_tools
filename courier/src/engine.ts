@@ -6,8 +6,9 @@ import {
   readOwnChanges, decodeChange, applyChanges, reindexFts, requestJson, openEventStream, hasSeries, hasProjectLeft,
   sendContext, sendVerdictOf, resolveAllocator, allocateWithRetry, formatEntryRef,
   upsertTeamProjectFromOffice, localClashOf, projectClashText, assignPendingNumber,
+  writeAccessCache, findProject, markProjectLeft, clearProjectLeft,
   AccessRevokedError, SchemaMismatchError, PinMismatchError, COURIER_PORT_KEY,
-  type PostOfficeTarget, type WireChange, type EventStream, type NotePlace, type ProjectClash,
+  type PostOfficeTarget, type WireChange, type EventStream, type NotePlace, type ProjectClash, type AccessPayload,
 } from "@collab-mcp/core";
 import { COURIER_KEYS as K } from "./keys.js";
 
@@ -49,6 +50,8 @@ export interface CourierOptions {
 
 type Timer = ReturnType<typeof setTimeout>;
 const now = () => new Date().toISOString();
+/** sync_state key of a replay's bookmark (R14); deleted once the office confirms the replay done. */
+const replayKey = (projectUlid: string) => `replay:${projectUlid}`;
 const changeKey = (w: WireChange) => `${w.site_id}|${w.db_version}|${w.seq}|${w.table}|${w.pk}|${w.cid}`;
 
 /**
@@ -101,6 +104,7 @@ export class Courier {
   /** A pending note the office refuses to number (non-retriable), kept visible in lastError (rule 8). */
   private numberingProblem: string | null = null;
   private oldOfficeLogged = false;
+  private noAccessLogged = false;
 
   constructor(opts: CourierOptions) {
     this.opt = { retryMs: 30_000, debounceMs: 200, maxReconnectMs: 30_000, batchSize: 2000, watch: true, ...opts };
@@ -168,14 +172,15 @@ export class Courier {
     return this.enqueue(async () => { await this.numberPending(); });
   }
   /**
-   * Modules, team projects, pull, number pending notes, push: what a
-   * (re)connect does. A project clash pauses the pull only (P10).
+   * Modules, team projects, pull, access (+ replays), number pending notes,
+   * push: what a (re)connect does. A project clash pauses the pulls only (P10).
    */
   syncNow(): Promise<void> {
     return this.enqueue(async () => {
       await this.refreshModules();
       await this.refreshProjects();
       if (this.clashes().length === 0) await this.pull();
+      await this.refreshAccess(); // a removed project is marked left before numbering and pushing (R15)
       const numbering = await this.numberPending();
       if (numbering === "revoked") return;
       await this.push();
@@ -308,6 +313,84 @@ export class Courier {
       const next = JSON.stringify(clashes);
       if (next !== (getSyncValue(this.db, K.projectClash) ?? "[]")) setSyncValue(this.db, K.projectClash, next);
     })();
+  }
+
+  /**
+   * What this laptop may do, as the office says (R2): cached locally, never
+   * synced. A team project of this office no longer listed is marked left
+   * (R15: its notes stay, read-only); one listed again after that is writable
+   * again. Then any replay the office owes us (R14). An older office (404)
+   * keeps no roles: nothing changes.
+   */
+  private async refreshAccess(): Promise<void> {
+    if (!hasSeries(this.db)) return;
+    const r = await requestJson(this.target, "GET", "/v1/access");
+    if (r.status === 404) {
+      if (!this.noAccessLogged) this.log("this post office keeps no roles (an older version): update it to use roles");
+      this.noAccessLogged = true;
+      return;
+    }
+    const p = r.body as AccessPayload | null;
+    // Never write a bad answer: an empty list would mark every project left.
+    if (r.status !== 200 || !p || !Array.isArray(p.projects) || !Array.isArray(p.replays)) {
+      throw new Error(`the post office did not say what this laptop may do (${r.status})`);
+    }
+    const fingerprint = this.target.fingerprint;
+    const ours = (ulid: string) => {
+      const x = findProject(this.db, ulid);
+      return x && x.ulid === ulid && x.mode === "team" && x.team === fingerprint ? x : null;
+    };
+    this.db.transaction(() => {
+      const before = new Set(
+        (this.db.prepare(`SELECT project_ulid FROM access_cache WHERE project_ulid IS NOT NULL`).all() as Array<{ project_ulid: string }>)
+          .map((x) => x.project_ulid),
+      );
+      const { dropped } = writeAccessCache(this.db, p);
+      for (const u of dropped) {
+        const x = ours(u);
+        if (x && !x.left_at && hasProjectLeft(this.db)) {
+          markProjectLeft(this.db, u);
+          this.log(`removed from team project ${x.code}: its notes stay here, read-only`);
+        }
+      }
+      for (const pr of p.projects) {
+        if (!before.has(pr.ulid) && clearProjectLeft(this.db, pr.ulid, fingerprint)) this.log(`added back to team project ${pr.code}: it is writable again`);
+      }
+    })();
+    await this.runReplays(p.replays);
+  }
+
+  /**
+   * R14: a project's past changes, once, after this laptop was given note.view
+   * (the receive-bookmark already passed them). Per project, from its own
+   * bookmark; each page applies like a pull() page. Ends with the confirming
+   * call (done), then the bookmark goes. A clash holds, the bookmark unmoved.
+   */
+  private async runReplays(list: AccessPayload["replays"]): Promise<void> {
+    for (const { project_ulid: ulid } of list) {
+      const key = replayKey(ulid);
+      let after = Number(getSyncValue(this.db, key) ?? 0);
+      for (;;) {
+        const r = await requestJson(this.target, "GET", `/v1/replay?project=${encodeURIComponent(ulid)}&after=${after}&limit=${this.opt.batchSize}`);
+        if (r.status === 404 || r.status === 403) {
+          // Removed, or note.view taken away, since /v1/access answered: nothing is owed.
+          this.log(`no history to fetch for team project ${ulid} (${r.status}${r.body?.error ? `: ${r.body.error}` : ""})`);
+          this.db.prepare(`DELETE FROM sync_state WHERE key = ?`).run(key);
+          break;
+        }
+        if (r.status !== 200) throw new Error(`the post office did not send a project's history (${r.status}${r.body?.error ? `: ${r.body.error}` : ""})`);
+        if (r.body?.done === true) {
+          this.db.prepare(`DELETE FROM sync_state WHERE key = ?`).run(key);
+          break;
+        }
+        const last = Number(r.body?.last_seq);
+        const changes = (r.body?.changes ?? []) as WireChange[];
+        if (!Number.isInteger(last) || last <= after) break; // never spin; the next sync asks again
+        if (await this.heldForUnknownProject(changes)) return;
+        this.applyPage(changes, key, last);
+        after = last;
+      }
+    }
   }
 
   /**
@@ -449,26 +532,37 @@ export class Courier {
       const last = Number(r.body?.last_seq);
       const changes = (r.body?.changes ?? []) as WireChange[];
       if (!Number.isInteger(last) || last <= after) break; // nothing new (and the office now knows we hold `after`)
-      // A note of a team project this laptop doesn't know yet: learn the
-      // project list BEFORE applying, so a clashing code never mixes two
-      // series here (P10). On a clash nothing is applied and the
-      // receive-bookmark stays put.
-      if (this.namesUnknownProject(changes)) {
-        await this.refreshProjects();
-        if (this.clashes().length > 0) return this.holdForClash();
-      }
-      this.db.transaction(() => {
-        if (changes.length > 0) {
-          const applied = applyChanges(this.db, changes.map(decodeChange));
-          reindexFts(this.db, applied.entryUlids);
-        }
-        setSyncValue(this.db, K.recv, String(last));
-      })();
+      if (await this.heldForUnknownProject(changes)) return;
+      this.applyPage(changes, K.recv, last);
       after = last;
+    }
+  }
+
+  /**
+   * A note of a team project this laptop doesn't know yet: learn the project
+   * list BEFORE applying, so a clashing code never mixes two series here
+   * (P10). True = a clash: hold, apply nothing, the bookmark stays put.
+   */
+  private async heldForUnknownProject(changes: WireChange[]): Promise<boolean> {
+    if (!this.namesUnknownProject(changes)) return false;
+    await this.refreshProjects();
+    if (this.clashes().length === 0) return false;
+    this.holdForClash();
+    return true;
+  }
+
+  /** Apply + re-index (D15) + move `bookmark` to `last` in ONE transaction (pull and replay pages). */
+  private applyPage(changes: WireChange[], bookmark: string, last: number): void {
+    this.db.transaction(() => {
       if (changes.length > 0) {
-        this.set({ receivedTotal: this.st.receivedTotal + changes.length, lastPullAt: now(), lastError: this.notice() });
-        this.log(`received ${changes.length} change(s)`);
+        const applied = applyChanges(this.db, changes.map(decodeChange));
+        reindexFts(this.db, applied.entryUlids);
       }
+      setSyncValue(this.db, bookmark, String(last));
+    })();
+    if (changes.length > 0) {
+      this.set({ receivedTotal: this.st.receivedTotal + changes.length, lastPullAt: now(), lastError: this.notice() });
+      this.log(`received ${changes.length} change(s)`);
     }
   }
 
@@ -529,6 +623,12 @@ export class Courier {
           void this.pullNow();
         } else if (name === "projects") {
           void this.syncNow(); // a team project was created or promoted: learn it, then send
+        } else if (name === "access") {
+          // A membership or role changed (R2): learn the projects, then the keys and any replay.
+          void this.enqueue(async () => {
+            await this.refreshProjects();
+            await this.refreshAccess();
+          });
         } else if (name === "modules") {
           void this.enqueue(async () => {
             await this.refreshModules();

@@ -268,6 +268,20 @@ export function markProjectLeft(db: DB, codeOrUlid: string): Project {
   return findProject(db, p.ulid)!;
 }
 
+/**
+ * Undo markProjectLeft when the office adds this laptop back (R14): the
+ * project is writable and receives again; the replay brings what was missed.
+ * Only a team project of the office `fingerprint`. True when it cleared one.
+ */
+export function clearProjectLeft(db: DB, ulid: string, fingerprint: string): boolean {
+  needs0009(db);
+  if (!hasProjectLeft(db)) return false;
+  return db.prepare(
+    `UPDATE projects SET left_at = NULL, updated_at = datetime('now')
+      WHERE ulid = ? AND mode = 'team' AND team = ? AND left_at IS NOT NULL`,
+  ).run(ulid, fingerprint).changes > 0;
+}
+
 export function renameProject(db: DB, codeOrUlid: string, newName: string): Project {
   needs0009(db);
   const p = findProject(db, codeOrUlid);
