@@ -275,10 +275,17 @@ export function registerProject(db: Store, p: { ulid: unknown; name: unknown; co
       if (same.code !== code) throw new StoreError(`project ${ulid} is already registered with code ${same.code}`, 409);
       return same;
     }
-    const byCode = db.prepare(`SELECT name FROM po_projects WHERE code = ?`).get(code) as { name: string } | undefined;
-    if (byCode) throw new StoreError(`this team already has a project with code ${code} ("${byCode.name}")`, 409);
-    const byName = db.prepare(`SELECT code FROM po_projects WHERE lower(name) = lower(?)`).get(name) as { code: string } | undefined;
-    if (byName) throw new StoreError(`this team already has a project named "${name}" (${byName.code})`, 409);
+    // R7a: the other half of a clashing project is told only to its members.
+    const isMember = (projectUlid: string) =>
+      !!db.prepare(`SELECT 1 FROM po_project_members WHERE project_ulid = ? AND device_id = ?`).get(projectUlid, String(creatorDevice));
+    const byCode = db.prepare(`SELECT ulid, name FROM po_projects WHERE code = ?`).get(code) as { ulid: string; name: string } | undefined;
+    if (byCode) {
+      throw new StoreError(isMember(byCode.ulid) ? `this team already has a project with code ${code} ("${byCode.name}")` : "that project code is taken", 409);
+    }
+    const byName = db.prepare(`SELECT ulid, code FROM po_projects WHERE lower(name) = lower(?)`).get(name) as { ulid: string; code: string } | undefined;
+    if (byName) {
+      throw new StoreError(isMember(byName.ulid) ? `this team already has a project named "${name}" (${byName.code})` : "that project name is taken", 409);
+    }
     db.prepare(`INSERT INTO po_projects (ulid, name, code) VALUES (?, ?, ?)`).run(ulid, name, code);
     db.prepare(`INSERT INTO po_series_counters (series, value) VALUES (?, ?)`).run(code, seed);
     seedNewProject(db, ulid, creatorDevice);

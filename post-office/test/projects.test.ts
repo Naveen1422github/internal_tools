@@ -87,6 +87,29 @@ test('register: clashes refused, the same project again is idempotent, bad input
   } finally { t.cleanup(); }
 });
 
+test('register clash: members see which project clashes, others only that it is taken (R7a)', () => {
+  const t = tempStore();
+  try {
+    const owner = main(t.store);
+    const other = addMember(t.store, 'other').deviceId;
+    registerProject(t.store, { ulid: newUlid(), name: 'Secret plan', code: 'SP', seed: 0 }, owner);
+    const msg = (device: string, p: { name: string; code: string }) => {
+      try { registerProject(t.store, { ulid: newUlid(), ...p, seed: 0 }, device); } catch (e) {
+        assert.ok(e instanceof StoreError && e.status === 409);
+        return (e as StoreError).message;
+      }
+      assert.fail('expected a clash');
+    };
+    assert.equal(msg(owner, { name: 'Other', code: 'SP' }), 'this team already has a project with code SP ("Secret plan")');
+    assert.equal(msg(owner, { name: 'secret PLAN', code: 'SQ' }), 'this team already has a project named "secret PLAN" (SP)');
+    for (const m of [msg(other, { name: 'Other', code: 'SP' }), msg(other, { name: 'secret PLAN', code: 'SQ' })]) {
+      assert.ok(!/Secret plan/i.test(m) && !/\bSP\b/.test(m), `nothing of the other project leaks: ${m}`);
+    }
+    assert.equal(msg(other, { name: 'Other', code: 'SP' }), 'that project code is taken');
+    assert.equal(msg(other, { name: 'secret PLAN', code: 'SQ' }), 'that project name is taken');
+  } finally { t.cleanup(); }
+});
+
 test('listOfficeProjects: ordered by code', () => {
   const t = tempStore();
   try {
