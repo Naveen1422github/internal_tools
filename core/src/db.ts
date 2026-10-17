@@ -304,6 +304,7 @@ export const KNOWN_MIGRATIONS: ReadonlySet<string> = new Set([
   "0009_projects",
   "0010_project_left",
   "0011_project_modules",
+  "0012_access_cache",
 ]);
 
 /**
