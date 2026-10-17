@@ -6,12 +6,13 @@ import { addEntryAsync, updateEntry, initModule, migrate, migrateTo, enableSync,
 import { tempStore, laptop } from './helpers.js';
 import { acceptChanges, fetchDeliveries, lastSeq } from '../src/deliveries.js';
 import { registerProject, openStore, closeStore, getMeta, type Store } from '../src/store.js';
-import { setProjectMember as grant } from '../src/access.js';
+import { setProjectMember as grant, assignNewMemberOfficeRole } from '../src/access.js';
 
 const TABLES = ['entries', 'refs', 'entry_modules', 'entry_revisions'];
 
 function member(store: Store, id: string): void {
   store.prepare(`INSERT INTO po_members (device_id, name, joined_at) VALUES (?, ?, datetime('now'))`).run(id, id);
+  assignNewMemberOfficeRole(store, id); // as addMember does: the first is Office admin (S2: modules need office keys)
 }
 function project(store: Store, code: string, creator: string): string {
   return registerProject(store, { ulid: newUlid(), name: `Project ${code}`, code }, creator).ulid;
@@ -253,6 +254,7 @@ test('stamping 2000 changes adds < 5 ms', async () => {
   const la = laptop();
   const { store, cleanup } = tempStore();
   try {
+    member(store, 'd-a'); // S2: the sender's modules cells are judged against its office keys
     const A = newUlid();
     let wire: WireChange[] = [];
     for (let i = 0; wire.length < 2000 * (RUNS + WARM); i++) {
@@ -263,7 +265,9 @@ test('stamping 2000 changes adds < 5 ms', async () => {
     for (let k = 0; k < RUNS + WARM; k++) {
       const timing = { stampMs: -1 };
       const r = acceptChanges(store, 'd-a', wire.slice(k * 2000, (k + 1) * 2000), { timing });
-      assert.equal(r.accepted, 2000);
+      // S2: a cut between a note's insert (project NULL) and its later project cell is a
+      // project move (S2-1), refused: the harness sets the project in a second transaction.
+      assert.ok(r.accepted > 1950 && r.refused.every((x) => x.reason.startsWith("A note can't move")), JSON.stringify(r.refused));
       if (k >= WARM) ms.push(timing.stampMs);
     }
     assert.ok((store.prepare(`SELECT COUNT(*) n FROM po_deliveries WHERE project_ulid = ?`).get(A) as { n: number }).n > 0, 'it did real work');

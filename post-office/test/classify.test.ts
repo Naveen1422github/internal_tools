@@ -4,7 +4,7 @@ import assert from 'node:assert';
 import { performance } from 'node:perf_hooks';
 import Database from 'better-sqlite3';
 import {
-  addEntryAsync, updateEntry, supersede, initModule, upsertModule, setAllocator, readOwnChanges, decodeChange,
+  addEntryAsync, updateEntry, supersede, initModule, upsertModule, setAllocator, readOwnChanges, decodeChange, applyChanges,
   migrate, migrateTo, enableSync, isCrsqliteLoaded, rootRevId,
   newUlid, encodeChange, COPIED_TO_PREFIX, type RawChange,
 } from '@collab-mcp/core';
@@ -216,6 +216,7 @@ test('modules insert needs module.create, update needs module.edit (office keys)
     assert.ok(ins.every((c) => c.table === 'modules'));
     assert.deepEqual(refused(classify(w.store, 'd-x', ins)).map((r) => [r.key, r.reason, r.ulid]),
       [['module.create', need('Create modules', 'module.create', 'this office'), null]]);
+    setOfficeRole(w.store, null, 'd-own', 'Office admin'); // S2: acceptChanges judges the setup too
     acceptChanges(w.store, 'd-own', ins.map(enc));
     const up = await cells(w.la.db, () => upsertModule(w.la.db, { slug: 'newmod', summary: 'changed' }));
     assert.ok(up.length > 0);
@@ -383,7 +384,9 @@ test('fix 1: a hard delete of a held note is refused; a re-insert keeps its owne
     }
     // A tombstone the office already holds (from before S2), then the laptop re-inserts the row.
     const u = await w.held('tombstoned', 'd-own');
-    acceptChanges(w.store, 'd-own', (await cells(w.la.db, () => w.la.db.prepare(`DELETE FROM entries WHERE ulid = ?`).run(u))).map(enc));
+    // Applied directly: S2's acceptChanges refuses the hard delete (only an office before S2 holds one).
+    const tomb = await cells(w.la.db, () => w.la.db.prepare(`DELETE FROM entries WHERE ulid = ?`).run(u));
+    w.store.transaction(() => applyChanges(w.store, tomb))();
     assert.equal(w.store.prepare(`SELECT 1 FROM entries WHERE ulid = ?`).get(u), undefined, 'the office has no row now');
     const back = await cells(w.la.db, () => w.la.db.prepare(
       `INSERT INTO entries (ulid, type, title, summary, module, series, project_ulid) VALUES (?, 'decision', 'back', 'b', 'm', 'TM', ?)`).run(u, w.A));

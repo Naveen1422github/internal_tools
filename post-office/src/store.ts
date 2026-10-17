@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { migrate, latestMigration, enableSync, loadCrsqlite, isCrsqliteLoaded, SLUG_REGEX } from "@collab-mcp/core";
-import { seedAccess, seedNewProject, assignNewMemberOfficeRole, assertRevocable } from "./access.js";
+import { seedAccess, seedNewProject, assignNewMemberOfficeRole, assertRevocable, requireProjectKey } from "./access.js";
 import { backfillProjectStamps } from "./deliveries.js";
 
 // The post office's ONE SQLite file (D14). The notes schema (0007 + CRRs) is a
@@ -109,10 +109,12 @@ CREATE TABLE IF NOT EXISTS po_note_owners (
   device_id TEXT NOT NULL
 );
 -- R7: a note whose creation was refused; its later changes are refused too.
+-- reason = the refusal it got, answered again when the creation is resent.
 CREATE TABLE IF NOT EXISTS po_refused_notes (
   ulid      TEXT NOT NULL PRIMARY KEY,
   device_id TEXT NOT NULL,
   key       TEXT,
+  reason    TEXT,
   at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS po_office_roles (
@@ -226,7 +228,9 @@ export interface OfficeProject { ulid: string; name: string; code: string; creat
  * Idempotent by ulid: a retried request gets the same number (E-713), and one
  * ulid never gets numbers in two series. The increment and the record commit in
  * ONE transaction, so a number is never handed out twice and never silently
- * skipped by a failure.
+ * skipped by a failure. R7: a team series needs note.create in its project; a
+ * refusal is recorded in po_refused_notes (the note's later changes are refused
+ * too). `deviceId = null` = the office machine's CLI: unguarded.
  */
 export function allocate(db: Store, ulid: unknown, deviceId: string | null, series = "E"): number {
   if (typeof ulid !== "string" || !ULID_RE.test(ulid)) throw new StoreError(`not a ULID: ${String(ulid).slice(0, 40)}`);
@@ -242,22 +246,37 @@ export function allocate(db: Store, ulid: unknown, deviceId: string | null, seri
       return id;
     }).immediate();
   }
-  return db.transaction(() => {
-    if (!db.prepare(`SELECT 1 FROM po_projects WHERE code = ?`).get(series)) {
+  let refused: StoreError | null = null;
+  const id = db.transaction(() => {
+    const project = db.prepare(`SELECT ulid FROM po_projects WHERE code = ?`).get(series) as { ulid: string } | undefined;
+    if (!project) {
       throw new StoreError(`no team project with code ${series} on this post office`, 404);
     }
     const hit = db.prepare(`SELECT series, id FROM po_series_allocations WHERE ulid = ?`).get(ulid) as { series: string; id: number } | undefined;
     if (hit) {
       if (hit.series !== series) throw new StoreError(`this note was already numbered ${hit.series}-${hit.id}`, 409);
-      return hit.id;
+      return hit.id; // E-713: numbered already, whoever asks
     }
     if (db.prepare(`SELECT 1 FROM po_allocations WHERE ulid = ?`).get(ulid)) {
       throw new StoreError("this note was already given an E number", 409);
+    }
+    if (deviceId !== null) {
+      try {
+        requireProjectKey(db, deviceId, project.ulid, "note.create");
+      } catch (e) {
+        if (!(e instanceof StoreError) || e.status !== 403) throw e;
+        // Recorded in this transaction, so it commits: thrown only after.
+        db.prepare(`INSERT OR IGNORE INTO po_refused_notes (ulid, device_id, key, reason) VALUES (?, ?, 'note.create', ?)`).run(ulid, deviceId, e.message);
+        refused = e;
+        return 0;
+      }
     }
     const row = db.prepare(`UPDATE po_series_counters SET value = value + 1 WHERE series = ? RETURNING value`).get(series) as { value: number };
     db.prepare(`INSERT INTO po_series_allocations (ulid, series, id, device_id) VALUES (?, ?, ?, ?)`).run(ulid, series, row.value, deviceId);
     return row.value;
   }).immediate();
+  if (refused) throw refused;
+  return id;
 }
 
 /**

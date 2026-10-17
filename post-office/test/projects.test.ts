@@ -7,6 +7,7 @@ import { tempStore } from './helpers.js';
 import { allocate, registerProject, listOfficeProjects, addMember, StoreError, type Store } from '../src/store.js';
 
 /** RnR: a project needs a creator; pre-RnR tests register as the office's first member. */
+// allocate(..., null, series): the office machine's CLI, unguarded (RnR S2 checks note.create for a device).
 function main(db: Store): string {
   const r = db.prepare(`SELECT device_id FROM po_members ORDER BY rowid LIMIT 1`).get() as { device_id: string } | undefined;
   return r ? r.device_id : addMember(db, 'main').deviceId;
@@ -20,8 +21,8 @@ test('series counters are independent of each other and of E', () => {
   try {
     registerProject(t.store, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 }, main(t.store));
     const [u1, u2, u3] = [newUlid(), newUlid(), newUlid()];
-    assert.equal(allocate(t.store, u1, 'd', 'SH'), 1);
-    assert.equal(allocate(t.store, u2, 'd', 'SH'), 2);
+    assert.equal(allocate(t.store, u1, null, 'SH'), 1);
+    assert.equal(allocate(t.store, u2, null, 'SH'), 2);
     assert.equal(allocate(t.store, u3, 'd'), 101, 'E continues its own counter');
     assert.equal(allocate(t.store, newUlid(), 'd', 'E'), 102);
   } finally { t.cleanup(); }
@@ -32,9 +33,9 @@ test('same ulid in the same series: same number, counter moves once', () => {
   try {
     registerProject(t.store, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 }, main(t.store));
     const u = newUlid();
-    assert.equal(allocate(t.store, u, 'd', 'SH'), 1);
-    assert.equal(allocate(t.store, u, 'd', 'SH'), 1);
-    assert.equal(allocate(t.store, newUlid(), 'd', 'SH'), 2);
+    assert.equal(allocate(t.store, u, null, 'SH'), 1);
+    assert.equal(allocate(t.store, u, null, 'SH'), 1);
+    assert.equal(allocate(t.store, newUlid(), null, 'SH'), 2);
   } finally { t.cleanup(); }
 });
 
@@ -44,8 +45,8 @@ test('one ulid never gets numbers in two series', () => {
     registerProject(t.store, { ulid: newUlid(), name: 'Support hub', code: 'SH', seed: 0 }, main(t.store));
     registerProject(t.store, { ulid: newUlid(), name: 'Navi', code: 'NV', seed: 0 }, main(t.store));
     const u = newUlid();
-    allocate(t.store, u, 'd', 'SH');
-    assert.throws(() => allocate(t.store, u, 'd', 'NV'), storeError(409, /already numbered SH-1/));
+    allocate(t.store, u, null, 'SH');
+    assert.throws(() => allocate(t.store, u, null, 'NV'), storeError(409, /already numbered SH-1/));
     assert.throws(() => allocate(t.store, u, 'd'), storeError(409, /already numbered SH-1/));
     const e = newUlid();
     allocate(t.store, e, 'd');
@@ -64,7 +65,7 @@ test('seed: a promoted project continues after its highest number', () => {
   const t = tempStore();
   try {
     registerProject(t.store, { ulid: newUlid(), name: 'Navi', code: 'NV', seed: 7 }, main(t.store));
-    assert.equal(allocate(t.store, newUlid(), 'd', 'NV'), 8);
+    assert.equal(allocate(t.store, newUlid(), null, 'NV'), 8);
   } finally { t.cleanup(); }
 });
 

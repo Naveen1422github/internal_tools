@@ -218,14 +218,17 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
       }
       case "POST /v1/changes": {
         const b = await readJson(req, maxBody);
+        // R5: a refusal is never an HTTP error; it is listed in `refused`.
         const r = acceptChanges(o.store, me.device_id, b?.changes);
-        if (r.accepted > 0) {
-          // A merge written by the office must reach the sender too.
+        if (r.accepted > 0 || r.officeWrote) {
+          // A merge or write-back (R6) written by the office must reach the sender too.
           ring("changes", { last_seq: r.lastSeq }, r.officeWrote ? undefined : me.device_id);
-          log(`${me.name}: ${r.accepted} change(s) accepted, ${r.duplicates} duplicate(s)${r.officeWrote ? ", office wrote a merge/flag" : ""}`);
+        }
+        if (r.accepted > 0 || r.refused.length) {
+          log(`${me.name}: ${r.accepted} change(s) accepted, ${r.duplicates} duplicate(s)${r.refused.length ? `, ${r.refused.length} refused` : ""}${r.officeWrote ? ", office wrote a merge/flag/write-back" : ""}`);
         }
         if (o.testHooks?.dropChangesAnswer?.(me.device_id)) { req.socket.destroy(); return; }
-        return send(res, 200, { accepted: r.accepted, duplicates: r.duplicates, last_seq: r.lastSeq });
+        return send(res, 200, { accepted: r.accepted, duplicates: r.duplicates, last_seq: r.lastSeq, refused: r.refused });
       }
       case "GET /v1/changes": {
         const r = fetchDeliveries(o.store, me.device_id, intParam(url, "after", 0), intParam(url, "limit", 2000));

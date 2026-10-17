@@ -5,6 +5,8 @@ import type Database from "better-sqlite3";
 import { StoreError, getMeta, setMeta, type Store } from "./store.js";
 import { divergentStatusOrType, flagNeedsMerge, mergeEntries } from "./merge.js";
 import { memberProjects } from "./access.js";
+import { classify, type Refusal } from "./classify.js";
+import { writeBack } from "./writeback.js";
 
 export const OFFICE_ORIGIN = "post-office";
 
@@ -12,7 +14,7 @@ const RECORD = `INSERT OR IGNORE INTO po_deliveries (origin, tbl, pk, cid, val, 
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 // R3: a member's change is recorded with its guessed project; stampProjects corrects it before commit.
-const RECORD_STAMPED = `INSERT OR IGNORE INTO po_deliveries (origin, tbl, pk, cid, val, col_version, db_version, site_id, cl, ch_seq, project_ulid)
+export const RECORD_STAMPED = `INSERT OR IGNORE INTO po_deliveries (origin, tbl, pk, cid, val, col_version, db_version, site_id, cl, ch_seq, project_ulid)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 export function lastSeq(db: Store): number {
@@ -20,7 +22,7 @@ export function lastSeq(db: Store): number {
 }
 
 /** The office's own new writes (merges, needs_merge flags) become deliveries too. Returns the recorded rows. */
-function recordOwnChanges(db: Store): DeliveryRow[] {
+export function recordOwnChanges(db: Store): DeliveryRow[] {
   const since = Number(getMeta(db, "self_db_version") ?? 0);
   const own = db
     .prepare(
@@ -269,28 +271,89 @@ export function backfillProjectStamps(db: Store): void {
   }).immediate();
 }
 
-export interface AcceptResult { accepted: number; duplicates: number; lastSeq: number; officeWrote: boolean }
+export interface AcceptResult { accepted: number; duplicates: number; lastSeq: number; officeWrote: boolean; refused: Refusal[] }
+export interface AcceptTiming { stampMs: number; classifyMs?: number; writeBackMs?: number }
+
+const SAME_DELIVERY = `SELECT 1 FROM po_deliveries WHERE site_id = ? AND db_version = ? AND ch_seq = ? AND tbl = ? AND pk = ? AND cid = ?`;
 
 /**
- * One batch from one member, in ONE transaction: record (de-duplicated by the
- * change's cr-sqlite identity), apply, merge forked edits, flag diverging
- * status/type, record the office's own writes, stamp projects (R3). A resend
- * changes nothing. `opts` exists for the timing test only: `stamp: false`
- * skips R3, `timing.stampMs` receives the time R3 took.
+ * R7: a refused creation is recorded once, and the held ('?') rows of its note are
+ * deleted, never released: a creation cut across batches is judged in the half
+ * carrying its project cell, so the first half is already held here.
+ */
+function refuseCreations(db: Store, origin: string, dead: Map<string, Refusal>): void {
+  const ins = prep(db, `INSERT OR IGNORE INTO po_refused_notes (ulid, device_id, key, reason) VALUES (?, ?, ?, ?)`);
+  for (const [u, r] of dead) ins.run(u, origin, r.key, r.reason);
+  const held = prep(db, `SELECT seq, tbl, pk FROM po_deliveries WHERE project_ulid = '?'`).all() as Array<{ seq: number; tbl: string; pk: Buffer }>;
+  if (!held.length) return;
+  const keys = held.map((h) => firstTextCell(h.pk));
+  const revs = revisionEntries(db, held.flatMap((h, i) => (h.tbl === "entry_revisions" && keys[i] ? [keys[i]!] : [])));
+  const gone = held.filter((h, i) => {
+    const k = keys[i];
+    if (!k || h.tbl === "modules") return false;
+    return dead.has(h.tbl === "entry_revisions" ? revs.get(k) ?? "" : k);
+  });
+  if (gone.length) prep(db, `DELETE FROM po_deliveries WHERE seq IN (SELECT value FROM json_each(?))`).run(JSON.stringify(gone.map((h) => h.seq)));
+}
+
+/**
+ * One batch from one member, in ONE transaction: judge it (R4/R5), record (de-
+ * duplicated by the change's cr-sqlite identity) and apply only the groups its
+ * role allows, merge forked edits, flag diverging status/type, write the office's
+ * value back over refused groups (R6), record the office's own writes, stamp
+ * projects (R3). A resend changes nothing: a refused group gets the same refusal
+ * and no second write-back. `opts` exists for the timing test only: `stamp: false`
+ * skips R3, `timing` receives the time R3, R4 and R6 took.
  */
 export function acceptChanges(
-  db: Store, origin: string, wire: WireChange[], opts: { stamp?: boolean; timing?: { stampMs: number } } = {},
+  db: Store, origin: string, wire: WireChange[], opts: { stamp?: boolean; timing?: AcceptTiming } = {},
 ): AcceptResult {
   if (!Array.isArray(wire)) throw new StoreError("changes must be a list");
-  let raws: RawChange[];
+  let all: RawChange[];
   try {
-    raws = wire.map(decodeChange);
+    all = wire.map(decodeChange);
   } catch (e) {
     throw new StoreError((e as Error).message);
   }
   return db.transaction(() => {
     const stamp = opts.stamp !== false;
+    // R4/R5: only allowed groups go on. A refused group already recorded is a resend of
+    // what was accepted before (the role changed since): a duplicate, not a refusal.
     let t0 = performance.now();
+    const verdict = classify(db, origin, all);
+    let raws = all, out: RawChange[] = [], dupes = 0;
+    const refused: Refusal[] = [];
+    const dead = new Map<string, Refusal>();
+    if ([...verdict.groups.values()].some((r) => r !== null)) {
+      const same = prep(db, SAME_DELIVERY);
+      const resent = new Map<string, boolean>();
+      const outGroup: string[] = [];
+      raws = [];
+      all.forEach((r, i) => {
+        const g = verdict.groupOf[i];
+        if (!verdict.groups.get(g)) { raws.push(r); return; }
+        if (resent.get(g) !== false) resent.set(g, !!same.get(r.site_id, r.db_version, r.seq, r.table, r.pk, r.cid));
+        out.push(r); outGroup.push(g);
+      });
+      out = out.filter((_, i) => (resent.get(outGroup[i]) ? (dupes++, false) : true));
+      for (const [u, g] of verdict.creations) {
+        const r = verdict.groups.get(g);
+        if (r && !resent.get(g)) dead.set(u, r);
+      }
+      // A resent refused creation: the refusal it got the first time (po_refused_notes).
+      const first = prep(db, `SELECT key, reason FROM po_refused_notes WHERE ulid = ?`);
+      for (const [g, r] of verdict.groups) {
+        if (!r || resent.get(g)) continue;
+        if (r.key === null && r.ulid && verdict.creations.get(r.ulid) === g) {
+          const was = first.get(r.ulid) as { key: string | null; reason: string | null } | undefined;
+          if (was?.reason) { refused.push({ ...r, key: was.key, reason: was.reason }); continue; }
+        }
+        refused.push(r);
+      }
+    }
+    const classifyMs = performance.now() - t0;
+
+    t0 = performance.now();
     const guess = stamp ? guessStamps(db, raws) : null;
     let stampMs = performance.now() - t0;
     const rec = prep(db, RECORD_STAMPED);
@@ -318,16 +381,23 @@ export function acceptChanges(
     }
     mergeEntries(db, applied.revisedUlids);
     for (const u of diverged) flagNeedsMerge(db, u);
+    // R6/R7: refused creations first (writeBack skips their notes), then the write-backs,
+    // recorded and stamped by writeBack itself before recordOwnChanges.
+    t0 = performance.now();
+    if (dead.size) refuseCreations(db, origin, dead);
+    const wb = writeBack(db, out);
+    const writeBackMs = performance.now() - t0;
     const own = recordOwnChanges(db);
     t0 = performance.now();
-    const all = [...stamped, ...own];
-    if (stamp) stampProjects(db, all.map((r) => r.seq), all);
+    const mine = [...stamped, ...own];
+    if (stamp) stampProjects(db, mine.map((r) => r.seq), mine);
     const seq = lastSeq(db);
-    if (stamp && all.length) prep(db, SET_STAMPED_UPTO).run(String(seq)); // R3 watermark: stamped up to here
+    if (stamp && (mine.length || wb.length)) prep(db, SET_STAMPED_UPTO).run(String(seq)); // R3 watermark: stamped up to here
     stampMs += performance.now() - t0;
-    if (opts.timing) opts.timing.stampMs = stampMs;
-    const officeWrote = own.length > 0;
-    return { accepted: fresh.length, duplicates: raws.length - fresh.length, lastSeq: seq, officeWrote };
+    if (opts.timing) Object.assign(opts.timing, { stampMs, classifyMs, writeBackMs });
+    // Review Focus 2: any office write (merge, flag, write-back) rings the sender too.
+    const officeWrote = own.length + wb.length > 0;
+    return { accepted: fresh.length, duplicates: raws.length - fresh.length + dupes, lastSeq: seq, officeWrote, refused };
   }).immediate();
 }
 

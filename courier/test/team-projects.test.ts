@@ -118,7 +118,7 @@ test('Review Focus 3: the answer was lost after the office allocated: the retry 
     team(w.office);
     await w.ca.syncNow();
     const u = newUlid();
-    assert.equal(allocate(w.office.store, u, 'd', 'SH'), 1); // the office numbered it; the laptop never heard
+    assert.equal(allocate(w.office.store, u, null, 'SH'), 1); // the office numbered it; the laptop never heard
     const p = addEntry(w.wa, { ...note('lost answer'), project: 'SH', pendingUlid: u });
     assert.deepEqual([p.pending, p.ulid], [true, u]);
     await w.ca.numberPendingNow();
@@ -212,7 +212,7 @@ test('a note that can never be numbered stays pending; everything else is sent a
     setAllocator({
       allocate: async (u, s) => {
         if (s === 'SH') throw Object.assign(new Error('the post office did not number this note in series SH: update the post office'), { retriable: false });
-        return allocate(w.office.store, u, 'fake', s);
+        return allocate(w.office.store, u, null, s); // the office machine (unguarded): the test is about the courier
       },
     });
     const sh = await addEntryAsync(w.wa, note('never numbered', { project: 'SH' }));
