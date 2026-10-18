@@ -245,3 +245,51 @@ test('can() p99 < 1 ms over 10k calls', () => {
     else assert.ok(p50 < 3, `p50 ${p50} ms (p99 ${p99} ms; strict: COLLAB_PERF=1)`);
   } finally { t.cleanup(); }
 });
+
+// R-31: module writes are office keys, judged on the laptop from the office row of
+// access_cache, and only for a shared module (an unshared module row is never sent).
+test('module writes: an Office member is refused module.edit / module.create on a shared module; unshared or admin passes', async () => {
+  const { STARTER_OFFICE_ROLES } = await import('../src/access/catalog.js');
+  const { upsertModule } = await import('../src/ops/module.js');
+  const { setModuleHub } = await import('../src/ops/hub.js');
+  const { setSyncValue } = await import('../src/sync/state.js');
+  const officeRole = (db: any, name: 'Office admin' | 'Office member') =>
+    writeAccessCache(db, { office: { role: name, keys: STARTER_OFFICE_ROLES.find((r) => r.name === name)!.keys }, projects: [], replays: [] });
+  const officeDenied = (key: string) => (e: unknown) =>
+    e instanceof AccessDeniedError && e.key === key && e.projectUlid === null && e.message === `You need "${key === 'module.edit' ? 'Edit modules' : 'Create modules'}" (${key}) in this office to do this`;
+  const t = freshDb({ shared: true });
+  try {
+    migrate(t.db);
+    initModule(t.db, { slug: 'shared', name: 'Shared' });
+    initModule(t.db, { slug: 'mine', name: 'Mine' });
+    const e = addEntry(t.db, note('hub', { module: 'shared', assigned: assigned(900) }));
+    // No cache row yet (S2-4): allowed.
+    setSyncValue(t.db, 'shared_modules', JSON.stringify(['shared', 'shared-new']));
+    upsertModule(t.db, { slug: 'shared', name: 'Shared 1' });
+    assert.ok(can(t.db, null, 'module.edit').ok, 'no office row: the office decides');
+
+    officeRole(t.db, 'Office member');
+    assert.deepEqual(can(t.db, null, 'module.edit'), { ok: false, reason: 'You need "Edit modules" (module.edit) in this office to do this' });
+    assert.throws(() => upsertModule(t.db, { slug: 'shared', name: 'Shared 2' }), officeDenied('module.edit'));
+    assert.throws(() => upsertModule(t.db, { slug: 'shared-new', name: 'New' }), officeDenied('module.create'));
+    assert.throws(() => initModule(t.db, { slug: 'shared-new' }), officeDenied('module.create'));
+    assert.throws(() => setModuleHub(t.db, { slug: 'shared', id: e.id as number }), officeDenied('module.edit'));
+    assert.throws(() => setModuleHub(t.db, { slug: 'shared', id: null }), officeDenied('module.edit'));
+    const row = (slug: string) => t.db.prepare(`SELECT name, hub FROM modules WHERE slug = ?`).get(slug) as { name: string; hub: string | null } | undefined;
+    assert.deepEqual(row('shared'), { name: 'Shared 1', hub: null }, 'nothing written');
+    assert.equal(row('shared-new'), undefined);
+    // initModule of a slug that exists is a no-op: nothing to judge.
+    assert.deepEqual(initModule(t.db, { slug: 'shared' }), { slug: 'shared' });
+    // An unshared module is never sent: no check.
+    upsertModule(t.db, { slug: 'mine', name: 'Mine 2' });
+    upsertModule(t.db, { slug: 'brand-new', name: 'Local only' });
+    assert.equal(row('mine')!.name, 'Mine 2');
+
+    officeRole(t.db, 'Office admin');
+    upsertModule(t.db, { slug: 'shared', name: 'Shared 3' });
+    upsertModule(t.db, { slug: 'shared-new', name: 'New' });
+    setModuleHub(t.db, { slug: 'shared', id: e.id as number });
+    assert.equal(row('shared')!.name, 'Shared 3');
+    assert.equal(row('shared')!.hub, e.ulid);
+  } finally { t.cleanup(); }
+});

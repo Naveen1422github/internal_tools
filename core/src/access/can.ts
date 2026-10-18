@@ -5,6 +5,8 @@
 // only: the post office stays the real enforcer (R4/R7).
 import type { DB } from "../db.js";
 import { keysOf, labelOf } from "./catalog.js";
+import { getSyncValue } from "../sync/state.js";
+import { SHARED_KEY } from "../sync/send-filter.js";
 
 export type Actor = "human" | "ai";
 export type CanResult = { ok: true } | { ok: false; reason: string };
@@ -23,10 +25,16 @@ export function setDefaultActor(a: Actor): void { defaultActor = a; }
 export function getDefaultActor(): Actor { return defaultActor; }
 
 const ACTIVE = new Set([...keysOf("project"), ...keysOf("office")]);
+const OFFICE_KEYS = new Set(keysOf("office", { includeInactive: true }));
 
 /** The office's refusal sentence (post-office/src/access.ts, classify.ts). */
 export function refusalText(key: string, code: string): string {
   return `You need "${labelOf(key)}" (${key}) in ${code} to do this`;
+}
+
+/** The office's refusal sentence for an office key (S1's requireOfficeKey). */
+export function officeRefusalText(key: string): string {
+  return `You need "${labelOf(key)}" (${key}) in this office to do this`;
 }
 
 // Prepared once per DB (like post-office's prep). No in-memory cache of the
@@ -69,6 +77,7 @@ function teamCode(db: DB, projectUlid: string): string | null {
  */
 export function can(db: DB, projectUlid: string | null, key: string, actor: Actor = defaultActor): CanResult {
   void actor; // R9/R10 (AI settings) come later: role layer only
+  if (OFFICE_KEYS.has(key)) return canInOffice(db, key);
   if (!projectUlid) return { ok: true };
   const code = teamCode(db, projectUlid);
   if (code === null) return { ok: true };
@@ -76,6 +85,32 @@ export function can(db: DB, projectUlid: string | null, key: string, actor: Acto
   const r = prep(db, "keyHeld")?.get(key, projectUlid) as { has: number } | undefined;
   if (!r || r.has === 1) return { ok: true };
   return { ok: false, reason: refusalText(key, code) };
+}
+
+/**
+ * R-31: an office key (module.create, module.edit, ...) is answered from the
+ * `office` row of access_cache, whatever the project. No row => ok (S2-4: not
+ * cached yet, or no office: the office decides).
+ */
+function canInOffice(db: DB, key: string): CanResult {
+  const r = prep(db, "keyHeld")?.get(key, "office") as { has: number } | undefined;
+  if (!r || (r.has === 1 && ACTIVE.has(key))) return { ok: true };
+  return { ok: false, reason: officeRefusalText(key) };
+}
+
+/** The modules this laptop shares with its office (the courier's list; empty when sharing is off). */
+function sharedModules(db: DB): Set<string> {
+  try { return new Set(JSON.parse(getSyncValue(db, SHARED_KEY) ?? "[]") as string[]); } catch { return new Set(); }
+}
+
+/**
+ * R-31: a module write the office will judge: module.create for a slug this laptop
+ * doesn't have yet, module.edit for one it has. Only a shared slug is judged: an
+ * unshared module row is never sent (send filter).
+ */
+export function assertCanModule(db: DB, slug: string, exists: boolean): void {
+  if (!sharedModules(db).has(slug)) return;
+  assertCan(db, null, exists ? "module.edit" : "module.create");
 }
 
 /** can() or throw AccessDeniedError. */
