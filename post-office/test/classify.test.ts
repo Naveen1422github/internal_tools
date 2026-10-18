@@ -9,6 +9,7 @@ import {
   newUlid, encodeChange, COPIED_TO_PREFIX, type RawChange,
 } from '@collab-mcp/core';
 import { tempStore, laptop } from './helpers.js';
+import { budget } from './perf.js'; // strict: COLLAB_PERF=1 npx tsx --test --test-concurrency=1 test/<file>.test.ts
 import { acceptChanges } from '../src/deliveries.js';
 import { registerProject, type Store } from '../src/store.js';
 import { setProjectMember, setOfficeRole } from '../src/access.js';
@@ -522,6 +523,6 @@ test('classify 2000 cells within the Task 1 budget', async () => {
     const med = (xs: number[]) => [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 2)];
     const cold = ms.slice(3, 3 + RUNS), warm = ms.slice(WARM);
     console.log(`2000 cells x ${RUNS}: R4 classify median ${med(warm).toFixed(2)} ms after ${WARM} warm-ups (runs ${warm.map((x) => x.toFixed(2)).join(', ')}); after 3: ${med(cold).toFixed(2)} ms`);
-    assert.ok(med(warm) < 5, `classify took ${med(warm).toFixed(2)} ms`);
+    assert.ok(med(warm) < budget(5), `classify took ${med(warm).toFixed(2)} ms (limit ${budget(5)})`);
   } finally { w.done(); }
 });

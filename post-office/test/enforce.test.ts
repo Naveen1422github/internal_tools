@@ -9,6 +9,7 @@ import {
   addEntry, revisionsOf, headsOf, rootRevId, newUlid, requestJson, openEventStream, upsertTeamProjectFromOffice, type WireChange,
 } from '@collab-mcp/core';
 import { tempStore, laptop } from './helpers.js';
+import { budget } from './perf.js'; // strict: COLLAB_PERF=1 npx tsx --test --test-concurrency=1 test/<file>.test.ts
 import { office } from './office.js';
 import { acceptChanges, fetchDeliveries, firstTextCell, OFFICE_ORIGIN } from '../src/deliveries.js';
 import { allocate, registerProject, StoreError, type Store } from '../src/store.js';
@@ -414,12 +415,12 @@ test('an all-allowed 2000-change batch: classify + stamp < 5 ms', async () => {
   const runs = await perfRuns(0);
   const ms = runs.map((r) => r.classifyMs + r.stampMs);
   console.log(`2000 allowed changes x ${runs.length}: classify+stamp median ${median(ms).toFixed(2)} ms (runs ${runs.map((r) => `${r.classifyMs.toFixed(2)}+${r.stampMs.toFixed(2)}`).join(', ')})`);
-  assert.ok(median(ms) < 5, `R4+R3 took ${median(ms).toFixed(2)} ms`);
+  assert.ok(median(ms) < budget(5), `R4+R3 took ${median(ms).toFixed(2)} ms (limit ${budget(5)})`);
 });
 
 test('R6 write-back: < 0.25 ms per refused cell', async () => {
   const runs = await perfRuns(5);
   const per = runs.map((r) => r.writeBackMs / r.refusedCells);
   console.log(`2000 changes x ${runs.length} (${runs[0].refusedGroups} refused groups, ${runs[0].refusedCells} refused cells): write-back median ${median(per).toFixed(3)} ms per refused cell (runs ${runs.map((r) => `${r.writeBackMs.toFixed(2)}/${r.refusedCells}`).join(', ')})`);
-  assert.ok(median(per) < 0.25, `write-back took ${median(per).toFixed(3)} ms per refused cell`);
+  assert.ok(median(per) < budget(0.25), `write-back took ${median(per).toFixed(3)} ms per refused cell (limit ${budget(0.25)})`);
 });

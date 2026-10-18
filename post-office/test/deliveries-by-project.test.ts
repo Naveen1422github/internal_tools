@@ -4,6 +4,7 @@ import assert from 'node:assert';
 import Database from 'better-sqlite3';
 import { addEntryAsync, createProject, updateEntry, initModule, migrate, migrateTo, enableSync, isCrsqliteLoaded, setAllocator, readOwnChanges, applyChanges, decodeChange, newUlid, type WireChange } from '@collab-mcp/core';
 import { tempStore, laptop } from './helpers.js';
+import { budget } from './perf.js'; // strict: COLLAB_PERF=1 npx tsx --test --test-concurrency=1 test/<file>.test.ts
 import { acceptChanges, fetchDeliveries, lastSeq } from '../src/deliveries.js';
 import { registerProject, openStore, closeStore, getMeta, type Store } from '../src/store.js';
 import { setProjectMember as grant, assignNewMemberOfficeRole } from '../src/access.js';
@@ -275,7 +276,7 @@ test('stamping 2000 changes adds < 5 ms', async () => {
     assert.ok((store.prepare(`SELECT COUNT(*) n FROM po_deliveries WHERE project_ulid = ?`).get(A) as { n: number }).n > 0, 'it did real work');
     const median = [...ms].sort((x, y) => x - y)[Math.floor(ms.length / 2)];
     console.log(`2000 changes x ${RUNS}: R3 stamping median ${median.toFixed(2)} ms (runs ${ms.map((x) => x.toFixed(2)).join(', ')})`);
-    assert.ok(median < 5, `stamping added ${median.toFixed(2)} ms`);
+    assert.ok(median < budget(5), `stamping added ${median.toFixed(2)} ms (limit ${budget(5)})`);
   } finally { setAllocator(null); la.cleanup(); cleanup(); }
 });
 
