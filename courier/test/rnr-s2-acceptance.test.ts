@@ -4,7 +4,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import Database from 'better-sqlite3';
 import type { Database as DB } from 'better-sqlite3';
 import {
@@ -32,6 +33,7 @@ test('RnR S2 acceptance: roles enforced by the office, refusals kept, MCP guard,
   const t = tempDir('collab-rnr-s2-');
   const office = await startOffice(t.dir, 0);
   setModuleShared(office.store, 'team', true);
+  setModuleShared(office.store, 'docs', true);
   const jn = await joinedDb(office, t.dir, 'n'), jr = await joinedDb(office, t.dir, 'r');
   const wn = openWriter(jn.path), wr = openWriter(jr.path);
   const cn = new Courier({ dbPath: jn.path, watch: false, retryMs: 60_000 });
@@ -63,7 +65,8 @@ test('RnR S2 acceptance: roles enforced by the office, refusals kept, MCP guard,
     await cr.syncNow();
     const edits = listRefused(wr).filter((r) => r.kind === 'edit');
     // Three edits can leave more than one transaction (an older updated_at cell keeps its own); each is its own row.
-    assert.ok(edits.length >= 1, 'the refused edit is listed');
+    // R-27: one row per refused laptop transaction per note, so 3 offline edits may leave up to 3 rows.
+    assert.ok(edits.length >= 1 && edits.length <= 3, `1 to 3 refused rows, got ${edits.length}`);
     for (const e of edits) {
       assert.equal(e.note_ulid, nNote);
       assert.equal(e.key, 'note.edit.any');
@@ -122,12 +125,12 @@ test('RnR S2 acceptance: roles enforced by the office, refusals kept, MCP guard,
     assert.equal(unsentSharedCount(wr), 0, 'not counted as waiting');
 
     // 7. An E note and a legacy shared-module note from R still reach N unchecked (even as a Reader of SH).
-    const e1 = (await addEntryAsync(wr, note('plain E from R'))).ulid;
+    const e1 = (await addEntryAsync(wr, note('E from R', { module: 'docs' }))).ulid;
     const e2 = (await addEntryAsync(wr, note('legacy from R', { module: 'team' }))).ulid;
     await cr.syncNow(); await cn.syncNow();
     assert.equal(titleOf(wn, e2), 'legacy from R', 'shared-module note reached N');
-    assert.ok(idOf(wr, e1) !== undefined);
-    // the plain E note follows the unchanged S1 send rules; assert it did not become a refusal.
+    assert.equal(titleOf(wn, e1), 'E from R', 'the E note in a shared module reached N');
+    assert.equal(idOf(wn, e1), idOf(wr, e1), 'with the same number');
     assert.equal(listRefused(wr).filter((r) => r.note_ulid === e1 || r.note_ulid === e2).length, 0, 'E notes are never refused');
 
     // 8. Grant-then-edit race: no id-NULL ghost note on R.
@@ -160,6 +163,9 @@ test('RnR S2 acceptance: roles enforced by the office, refusals kept, MCP guard,
 // copies named notebook.db and store.db (with any -wal/-shm); the test opens
 // only those. It SKIPS when they are absent. The real files are never opened.
 const COPY_DIR = process.env.COLLAB_REAL_COPY_DIR ?? '';
+const norm = (p: string) => resolve(p).split(String.fromCharCode(92)).join('/').toLowerCase();
+const realOffice = norm(join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'collab', 'post-office'));
+const unsafeCopyDir = !!COPY_DIR && (norm(COPY_DIR).startsWith(realOffice) || /\/internal-tools\/mcp(\/|$)/.test(norm(COPY_DIR)));
 const haveCopies = !!COPY_DIR && existsSync(join(COPY_DIR, 'notebook.db')) && existsSync(join(COPY_DIR, 'store.db'));
 const ENTRY_COLS = `ulid, series, id, title, summary, description, project_ulid, updated_at`;
 const entriesOf = (db: DB) => db.prepare(`SELECT ${ENTRY_COLS} FROM entries ORDER BY ulid`).all();
@@ -172,7 +178,8 @@ function openNotebook(path: string): DB {
 const errorChecks = (db: DB, cwd: string) =>
   new Set(doctor(db, { cwd, env: {} }).checks.filter((c) => c.severity === 'error').map((c) => c.name));
 
-test('regression: copies of the real notebook and office store open unchanged; a replay of the last 2000 deliveries refuses nothing', { skip: !haveCopies && 'set COLLAB_REAL_COPY_DIR to a folder of copies' }, (tc) => {
+test('regression: copies of the real notebook and office store open unchanged; a replay of the last 2000 deliveries refuses nothing', { skip: !haveCopies && !unsafeCopyDir && 'set COLLAB_REAL_COPY_DIR to a folder of copies' }, (tc) => {
+  assert.ok(!unsafeCopyDir, `COLLAB_REAL_COPY_DIR (${COPY_DIR}) is inside the real office folder or an internal-tools/mcp folder: refusing to open or migrate real files; point it at plain copies`);
   const t = tempDir('collab-rnr-s2-real-');
   try {
     // Notebook: work on a second copy so the untouched one gives the doctor baseline.
