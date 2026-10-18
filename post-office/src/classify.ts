@@ -287,15 +287,31 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     return x;
   };
 
-  // R-28: a number is the office's. One query for every note whose id cell is checked:
-  // a held pending note (office id NULL) and a new team note.
-  const checked = (n: Note | undefined) => !!n && (n.existing ? n.existing.id === null : n.created !== null && n.project !== null);
-  const numbered = new Set<string>();
+  // R-28: a number is the office's. One query for every note whose number is checked:
+  // a held pending note (office id NULL) whose id cell the batch sets, and every creation
+  // judged in a team project. R-35: a creation is checked on the batch's id/series cells
+  // and on the office's stored values (a note held as '?' whose project cell comes in a
+  // later POST): either may win the merge (col_version), so both must pass; no series at
+  // all is a mismatch.
+  const cellId = new Map<string, unknown>(), cellSeries = new Map<string, unknown>();
   raws.forEach((r, i) => {
-    if (r.cid !== "id" || r.table !== "entries" || norm(r.val) === null) return;
+    if (r.table !== "entries" || (r.cid !== "id" && r.cid !== "series")) return;
     const u = ulids[i];
-    if (u && checked(notes.get(u))) numbered.add(u);
+    if (u) (r.cid === "id" ? cellId : cellSeries).set(u, norm(r.val));
   });
+  const numbered = new Set<string>();
+  const creating = new Map<string, { series: unknown[]; ids: unknown[] }>();
+  for (const [u, n] of notes) {
+    if (n.created !== null && n.project !== null) {
+      const f = facts.get(u)!, series: unknown[] = [], ids: unknown[] = [];
+      if (cellSeries.has(u)) series.push(cellSeries.get(u));
+      if (f.held && f.hs) series.push(norm(f.series));
+      if (cellId.has(u) && cellId.get(u) !== null) ids.push(cellId.get(u));
+      if (f.held && f.id !== null) ids.push(norm(f.id));
+      creating.set(u, { series, ids });
+      if (ids.length) numbered.add(u);
+    } else if (n.existing && n.existing.id === null && cellId.has(u) && cellId.get(u) !== null) numbered.add(u);
+  }
   const allocs = new Map<string, { series: string; id: number }>();
   if (numbered.size) for (const a of prep(db, ALLOCS).all(JSON.stringify([...numbered])) as Array<{ ulid: string; series: string; id: number }>) allocs.set(a.ulid, a);
   const allocated = (u: string, series: string, v: unknown) => {
@@ -323,6 +339,12 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     promotedTaken.set(k, u);
     return true;
   };
+  // R-28/R-35: a creation is in its project's series, numbered by allocate (or promote) or not yet.
+  const badNumber = new Set<string>();
+  for (const [u, e] of creating) {
+    const code = team(notes.get(u)!.project!)!.code;
+    if (!e.series.length || e.series.some((x) => x !== code) || e.ids.some((id) => !allocated(u, code, id) && !promoted(u, code, id))) badNumber.add(u);
+  }
 
   // Each cell's key (null = refused outright or not judged) and, when refused, why.
   const whyKey: Array<string | null> = new Array(raws.length).fill(null);
@@ -351,11 +373,7 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
       if (r.cid === "id" && cur === null && allocated(u, n.existing.series ?? "E", r.val)) return;
       why[i] = NUMBER; return;
     }
-    if (n.created !== null && n.project !== null && r.table === "entries" && (r.cid === "id" || r.cid === "series")) {
-      // R-28: a new team note is in its project's series, numbered by allocate or not yet.
-      const code = team(n.project)!.code;
-      if (r.cid === "series" ? norm(r.val) !== code : norm(r.val) !== null && !allocated(u, code, r.val) && !promoted(u, code, r.val)) { why[i] = NUMBER; return; }
-    }
+    if (badNumber.size && act[i] === "note.create" && badNumber.has(u)) { why[i] = NUMBER; return; } // R-28/R-35: its whole creating group
     if (r.table === "entry_revisions" && r.cid === "entry_ulid" && keys[i] && officeRev.has(keys[i]!) && r.val !== u) {
       why[i] = REV_MOVED; return;
     }

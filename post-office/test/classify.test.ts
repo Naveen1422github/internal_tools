@@ -555,6 +555,76 @@ test("R-28 promote: a promoted project's older notes keep their numbers up to it
   } finally { w.done(); }
 });
 
+test("R-35: a creation split across POSTs is checked against the allocation with the office's stored id and series", async () => {
+  const w = await world();
+  try {
+    const other = await w.held('numbered other', 'd-own');
+    // POST 1: the note's cells with its series and id, no project cell (held as '?', not judged).
+    // POST 2: only the project cell, judged as note.create.
+    const split = async (series: string, id: (u: string) => number | null) => {
+      let u = '';
+      const all = await cells(w.la.db, async () => {
+        u = (await addEntryAsync(w.la.db, { type: 'decision', title: `split ${series}`, summary: 's', module: 'm' })).ulid;
+        w.la.db.prepare(`UPDATE entries SET series = ?, id = ? WHERE ulid = ?`).run(series, id(u), u);
+        w.la.db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(w.A, u);
+      });
+      const cut = all.findIndex((c) => c.table === 'entries' && c.cid === 'project_ulid');
+      assert.ok(allowed(classify(w.store, 'd-con', all.slice(0, cut))), "POST 1: held as '?'");
+      acceptChanges(w.store, 'd-con', all.slice(0, cut).map(enc));
+      const rest = all.slice(cut);
+      assert.ok(rest.every((c) => c.cid !== 'id' && c.cid !== 'series'), 'POST 2 carries no number');
+      return rest;
+    };
+    const why = (c: RawChange[]) => refused(classify(w.store, 'd-con', c)).filter((r) => r.reason !== REFUSED_BEFORE).map((r) => [r.key, r.reason]);
+    assert.deepEqual(why(await split('TM', () => allocOf(w.store, other))), [[null, NUMBER]], "another note's number");
+    assert.deepEqual(why(await split('TM', () => 99999)), [[null, NUMBER]], 'a number never allocated');
+    assert.deepEqual(why(await split('E', (u) => allocate(w.store, u, null, 'TM'))), [[null, NUMBER]], 'its TM number under series E');
+    assert.ok(allowed(classify(w.store, 'd-con', await split('TM', (u) => allocate(w.store, u, null, 'TM')))), 'its allocated number');
+    assert.ok(allowed(classify(w.store, 'd-con', await split('TM', () => null))), 'pending: no number yet');
+  } finally { w.done(); }
+});
+
+test("R-35: a split creation can't hide its stored number behind a low-version id or series cell", async () => {
+  const w = await world();
+  try {
+    // POST 1: forged id (and series) at the laptop's col_version, no project cell. POST 2:
+    // the project cell plus id/series cells naming the allocated values at col_version 1:
+    // cr-sqlite keeps the stored (higher-version) values, so the batch's cells prove nothing.
+    for (const which of ['id', 'series'] as const) {
+      let u = '';
+      const all = await cells(w.la.db, async () => {
+        u = (await addEntryAsync(w.la.db, { type: 'decision', title: `low ${which}`, summary: 's', module: 'm' })).ulid;
+        w.la.db.prepare(`UPDATE entries SET series = ?, id = ? WHERE ulid = ?`).run(which === 'series' ? 'E' : 'TM', which === 'id' ? 99999 : null, u);
+        w.la.db.prepare(`UPDATE entries SET series = ?, id = ? WHERE ulid = ?`).run(which === 'series' ? 'XX' : 'TM', which === 'id' ? 99998 : null, u);
+        w.la.db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(w.A, u);
+      });
+      const cut = all.findIndex((c) => c.table === 'entries' && c.cid === 'project_ulid');
+      acceptChanges(w.store, 'd-con', all.slice(0, cut).map(enc));
+      const stored = all.find((c) => c.table === 'entries' && c.cid === which)!;
+      assert.ok(stored.col_version > 1, 'the stored cell outranks a version-1 cell');
+      const good = which === 'id' ? allocate(w.store, u, null, 'TM') : 'TM';
+      const post2 = [...all.slice(cut), { ...stored, val: good, col_version: 1, db_version: all[cut].db_version, site_id: all[cut].site_id }];
+      assert.deepEqual(refused(classify(w.store, 'd-con', post2)).filter((r) => r.reason !== REFUSED_BEFORE).map((r) => [r.key, r.reason]), [[null, NUMBER]], which);
+    }
+  } finally { w.done(); }
+});
+
+test('R-35: a creation that leaves out its series cell is refused (a missing series is a mismatch)', async () => {
+  const w = await world();
+  try {
+    const fresh = async (id: (u: string) => number | null) => cells(w.la.db, async () => {
+      const u = (await addEntryAsync(w.la.db, { type: 'decision', title: 'no series', summary: 's', module: 'm' })).ulid;
+      w.la.db.prepare(`UPDATE entries SET series = 'TM', id = ?, project_ulid = ? WHERE ulid = ?`).run(id(u), w.A, u);
+    });
+    const noSeries = (c: RawChange[]) => c.filter((x) => !(x.table === 'entries' && x.cid === 'series'));
+    const why = (c: RawChange[]) => refused(classify(w.store, 'd-con', c)).filter((r) => r.reason !== REFUSED_BEFORE).map((r) => [r.key, r.reason]);
+    const ok = await fresh((u) => allocate(w.store, u, null, 'TM'));
+    assert.ok(allowed(classify(w.store, 'd-con', ok)), 'with its series cell');
+    assert.deepEqual(why(noSeries(ok)), [[null, NUMBER]], 'its allocated TM number, no series cell');
+    assert.deepEqual(why(noSeries(await fresh(() => null))), [[null, NUMBER]], 'pending, no series cell');
+  } finally { w.done(); }
+});
+
 test('fix 4: supersede and archive carry only their side cells; resolve still carries the text', async () => {
   const w = await world();
   try {
