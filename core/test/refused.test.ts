@@ -132,3 +132,28 @@ test('copyRefused applies a cleared description, the latest version, and ignores
     assert.equal(row.description, null);
   } finally { t.cleanup(); }
 });
+
+test('copyRefused keeps the refs the refused cells added (R-32b), once, and only this note\'s', async () => {
+  const { t } = setup();
+  try {
+    createProject(t.db, { name: 'Solo Box', code: 'SB' });
+    const n = addEntry(t.db, { type: 'decision', title: 'T', summary: 's', project: 'none', refs: [{ ref_type: 'file', ref_value: 'kept.ts' }] });
+    const other = addEntry(t.db, { type: 'decision', title: 'Other', summary: 's', project: 'none' });
+    const ref = (u: string, type: string, value: string, cid: string, cl = 1): WireChange => {
+      const pk = (t.db.prepare(`SELECT crsql_pack_columns(?, ?, ?) AS p`).get(u, type, value) as { p: Buffer }).p;
+      return { table: 'refs', pk: pk.toString('base64'), cid, val: null, col_version: 1, db_version: 1, site_id: 'AA==', cl, seq: 0 };
+    };
+    // The refused edit added two refs (the laptop's copy was reverted since), plus a cell of a ref
+    // the note still has, a removed ref (even cl) and another note's ref.
+    const id = recordRefusal(t.db, { noteUlid: n.ulid, projectUlid: null, kind: 'edit', key: 'note.edit.any', reason: 'no', cells: [
+      cell(t.db, n.ulid, 'title', 'T, edited', 2),
+      ref(n.ulid, 'file', 'added.ts', '-1'), ref(n.ulid, 'file', 'added.ts', 'created_at'),
+      ref(n.ulid, 'task', 'T-9', '-1'), ref(n.ulid, 'file', 'kept.ts', '-1'),
+      ref(n.ulid, 'file', 'removed.ts', '-1', 2), ref(other.ulid, 'file', 'not-mine.ts', '-1')] });
+    const res = await copyRefused(t.db, id, 'SB');
+    const u = (t.db.prepare(`SELECT ulid FROM entries WHERE series = 'SB' AND id = ?`).get(res.id) as { ulid: string }).ulid;
+    const refs = (t.db.prepare(`SELECT ref_type, ref_value FROM refs WHERE entry_ulid = ? ORDER BY ref_type, ref_value`).all(u) as Array<{ ref_type: string; ref_value: string }>)
+      .map((r) => `${r.ref_type}:${r.ref_value}`);
+    assert.deepEqual(refs, ['file:added.ts', 'file:kept.ts', 'task:T-9']);
+  } finally { t.cleanup(); }
+});

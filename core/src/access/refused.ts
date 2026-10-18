@@ -9,6 +9,7 @@ import { newUlid } from "../ulid.js";
 import { addEntryAsync, type AddEntryArgs } from "../ops/add.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { findProject, isTeamProject, notFound } from "../projects.js";
+import { isCopiedToValue } from "../entry-write.js";
 
 export interface RefusedRow {
   ulid: string;
@@ -91,6 +92,24 @@ export function discardRefused(db: DB, id: string): void {
 const FIELDS = ["type", "title", "summary", "description", "agent", "module", "category", "status"] as const;
 const NULLABLE = new Set(["description", "agent", "module"]); // a cleared field is the user's intent
 
+/**
+ * The refs rows alive in the refused cells for this note: (entry_ulid, ref_type,
+ * ref_value) from each refs pk. A removal (even cl) and a copy-out marker are not
+ * additions (the marker belongs to the source note).
+ */
+function refusedRefs(db: DB, cells: WireChange[], noteUlid: string): Array<{ ref_type: string; ref_value: string }> {
+  const out: Array<{ ref_type: string; ref_value: string }> = [];
+  const unpack = db.prepare(`SELECT cell FROM crsql_unpack_columns(?)`);
+  for (const c of cells) {
+    if (c.table !== "refs" || c.cl % 2 === 0) continue;
+    const pk = (unpack.all(Buffer.from(c.pk, "base64")) as Array<{ cell: unknown }>).map((x) => x.cell);
+    if (pk.length !== 3 || pk[0] !== noteUlid || typeof pk[1] !== "string" || typeof pk[2] !== "string") continue;
+    if (isCopiedToValue(pk[2])) continue;
+    out.push({ ref_type: pk[1], ref_value: pk[2] });
+  }
+  return out;
+}
+
 /** Copy the refused note into a solo project (local note overlaid with the refused cells), then drop the refusal. */
 export async function copyRefused(db: DB, id: string, toCode: string): Promise<{ id: number; series: string }> {
   const r = getRefused(db, id);
@@ -129,8 +148,13 @@ export async function copyRefused(db: DB, id: string, toCode: string): Promise<{
     if (primary) args.module = primary;
     const extra = mods.map((m) => m.module).filter((m) => m !== primary);
     if (extra.length) args.modules = extra;
-    const refs = db.prepare(`SELECT ref_type, ref_value FROM refs WHERE entry_ulid = ?`).all(r.note_ulid) as AddEntryArgs["refs"];
-    if (refs && refs.length) args.refs = refs;
+    const refs = db.prepare(`SELECT ref_type, ref_value FROM refs WHERE entry_ulid = ?`).all(r.note_ulid) as NonNullable<AddEntryArgs["refs"]>;
+    // R-32b: the refs the refused cells added (the laptop's copy was reverted since) travel too.
+    const have = new Set(refs.map((x) => x.ref_type + "\0" + x.ref_value));
+    for (const x of refusedRefs(db, r.cells, r.note_ulid)) {
+      if (!have.has(x.ref_type + "\0" + x.ref_value)) { have.add(x.ref_type + "\0" + x.ref_value); refs.push(x as (typeof refs)[number]); }
+    }
+    if (refs.length) args.refs = refs;
   } else if (fields.module) args.module = String(fields.module);
   const res = await addEntryAsync(db, args);
   // A crash between the copy and this discard leaves a duplicate: it errs toward keeping data.
