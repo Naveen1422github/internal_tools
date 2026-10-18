@@ -6,6 +6,7 @@ import { headsOf, revisionsOf, snapshotForRevision, finishRevision } from "../re
 import { ensureCrsqlite } from "../sync/extension.js";
 import { formatEntryRef } from "../entry-ref.js";
 import { assertNoteWritable } from "../projects.js";
+import { assertCanNote } from "../access/can.js";
 
 // Settling a note whose edits collided (spec part 2, V4/V5). The caller says
 // which versions it showed the person (expectedHeads); if another edit arrived
@@ -61,14 +62,15 @@ export function getMergeView(db: DB, id: number, series = "E"): MergeView {
 /** Pick a version or save a hand-combined text. Any write here settles the flag (finishRevision folds every head). */
 export function resolveWithText(
   db: DB,
-  a: { id: number; expectedHeads: string[]; title: string; summary: string; description: string | null },
+  a: { id: number; series?: string; expectedHeads: string[]; title: string; summary: string; description: string | null },
 ): { id: number } {
   ensureCrsqlite(db);
   if (!a.title?.trim()) throw new Error("title cannot be blank");
   if (!a.summary?.trim()) throw new Error("summary cannot be blank");
   if (a.summary.length > 200) throw new Error(`summary exceeds 200 chars (got ${a.summary.length})`);
   db.transaction(() => {
-    const ulid = flaggedUlid(db, a.id);
+    const ulid = flaggedUlid(db, a.id, a.series ?? "E"); // series: S2 (omitted = E, as before)
+    assertCanNote(db, ulid, "merge.resolve"); // R8: here, not in flaggedUlid (getMergeView reads)
     assertHeads(db, a.id, ulid, a.expectedHeads);
     const before = snapshotForRevision(db, ulid);
     db.prepare(

@@ -10,6 +10,7 @@ import { snapshotForRevision, finishRevision } from "../revisions.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { NeedsMergeError } from "./merge.js";
 import { assertNoteWritable } from "../projects.js";
+import { assertCanEdit } from "../access/can.js";
 
 // The REST server's note writes, moved here unchanged (collab E-720): every
 // write to a synced table goes through core (revisions, checks, future rules).
@@ -67,6 +68,7 @@ export function editEntry(db: DB, args: EditEntryArgs): { id: number } {
   const owner = ownerOfRef(db, { series, id: Number(id) });
   if (!owner) throw new EntryNotFoundError(id, series);
   assertNoteWritable(db, owner.ulid); // a left team's note is read-only (stage B2, P11)
+  assertCanEdit(db, owner.ulid); // R8
   const byUlid = hasUlidPrimaryKey(db);
   const tokens = estimateTokens(description);
   const tx = db.transaction(() => {
@@ -104,7 +106,11 @@ export function reassignModule(db: DB, ids: Array<number | NoteRef>, module: str
   const refs = ids.map((v): NoteRef => (typeof v === "object" && v !== null ? v : { series: "E", id: Number(v) }));
   const uniqueRefs = [...new Map(refs.map((r) => [`${r.series}:${r.id}`, r])).values()];
   // A left team's note is read-only (stage B2, P11): refuse the whole batch before writing.
-  for (const ref of uniqueRefs) assertNoteWritable(db, ownerOfRef(db, ref)?.ulid);
+  for (const ref of uniqueRefs) {
+    const u = ownerOfRef(db, ref)?.ulid;
+    assertNoteWritable(db, u);
+    assertCanEdit(db, u); // R8: the whole batch, before writing
+  }
   let updated = 0;
   const tx = db.transaction(() => {
     for (const ref of uniqueRefs) {

@@ -59,8 +59,9 @@ export const CATALOG: PermissionArea[] = [
     area: 'project', label: 'Project', scope: 'project',
     permissions: [
       def('project.edit', 'Edit project', 'Change project name and settings'),
-      def('project.make_solo', 'Make project solo', 'Convert the team project back to a solo project'),
-      def('project.delete', 'Delete project', 'Delete the project'),
+      // S2-2: neither op exists yet, so neither key is offered or grants anything.
+      def('project.make_solo', 'Make project solo', 'Convert the team project back to a solo project', false),
+      def('project.delete', 'Delete project', 'Delete the project', false),
     ],
   },
   {

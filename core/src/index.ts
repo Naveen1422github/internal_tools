@@ -60,3 +60,4 @@ export * from './projects.js';
 export * from './access/catalog.js';
 export * from './access/cache.js';
 export * from './access/refused.js';
+export * from './access/can.js';

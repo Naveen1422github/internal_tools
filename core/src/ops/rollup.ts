@@ -2,9 +2,10 @@ import type { DB } from "../db.js";
 import { estimateTokens, hasUlidColumns } from "../db.js";
 import type { EntryType, Agent, RefInput } from "./add.js";
 import { insertEntryRow, insertRefs, ownerOf, type RefRowInput } from "../entry-write.js";
-import { liveEntry, hasUlidPrimaryKey } from "../schema.js";
+import { liveEntry, hasUlidPrimaryKey, hasSeries } from "../schema.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { formatEntryRef } from "../entry-ref.js";
+import { assertCan } from "../access/can.js";
 
 // ------------------------------------------------------------
 // Public types
@@ -341,6 +342,12 @@ export interface ArchiveArgs {
   dry_run?: boolean;       // defaults TRUE — preview before any deprecation
 }
 
+/** The distinct projects of the selected rows archive() would act on (rows with a module; see groupEntries). */
+function archivedProjects(db: DB, rows: Array<RawEntryRow & { project_ulid?: string | null }>): string[] {
+  if (!hasSeries(db)) return [];
+  return [...new Set(rows.filter((r) => r.module && r.project_ulid).map((r) => r.project_ulid as string))];
+}
+
 function selectArchiveEntries(db: DB, args: ArchiveArgs): RawEntryRow[] {
   const cutoff = parseSince(args.older_than ?? "30d");
 
@@ -354,7 +361,7 @@ function selectArchiveEntries(db: DB, args: ArchiveArgs): RawEntryRow[] {
   // Only ACTIVE, non-deprecated rows older than the cutoff. Drafts/resolved are
   // left for explicit handling; deprecated rows are already archived.
   let sql =
-    `SELECT id, type, title, summary, agent, module, task_id, created_at
+    `SELECT id, type, title, summary, agent, module, task_id, created_at${hasSeries(db) ? ", project_ulid" : ""}
      FROM entries
      WHERE created_at < ?
        AND deprecated = 0
@@ -400,6 +407,11 @@ export function archive(db: DB, args: ArchiveArgs): RollupResult {
   if (isDry) {
     return { groups, created_entries: [], deprecated_count: 0, dry_run: true };
   }
+
+  // R8: note.archive on the project of every note being archived, before any
+  // write. Gated on the selected notes, not on what is written: the E-only
+  // number lookup below (pre-existing bug, spike §Pre-existing) writes E rows.
+  for (const project of archivedProjects(db, rows)) assertCan(db, project, "note.archive");
 
   const runGroup = db.transaction((group: RollupGroup): number | null => {
     const { summary, description } = formatRollupBody(group);

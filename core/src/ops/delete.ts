@@ -3,6 +3,7 @@ import { hasUlidPrimaryKey } from "../schema.js";
 import { ownerOfRef } from "../entry-write.js";
 import { formatEntryRef } from "../entry-ref.js";
 import { ensureCrsqlite } from "../sync/extension.js";
+import { assertCanNote } from "../access/can.js";
 
 /**
  * After 0006: a tombstone (deleted_at). The row, its refs and its module rows
@@ -22,6 +23,7 @@ export function deleteEntry(db: DB, id: number, series = "E"): { id: number; tom
   if (hasUlidPrimaryKey(db)) {
     const owner = ownerOfRef(db, { series, id });
     if (!owner) throw new Error(`no entry found with id ${label}`);
+    assertCanNote(db, owner.ulid, "note.archive"); // R8: it writes deleted_at (spike §3)
     db.prepare(`UPDATE entries SET deleted_at = datetime('now') WHERE ulid = ? AND deleted_at IS NULL`).run(owner.ulid);
     return { id, tombstoned: true };
   }
