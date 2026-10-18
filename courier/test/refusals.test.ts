@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import {
-  addEntryAsync, newUlid, getSyncValue, listRefused, unsentSharedCount, setAllocator, setAllocationRetry, type WireChange,
+  addEntryAsync, newUlid, getSyncValue, createProject, copyRefused, listRefused, unsentSharedCount, setAllocator, setAllocationRetry, type WireChange,
 } from '@collab-mcp/core';
 import { registerProject, setProjectMember } from '@collab-mcp/post-office';
 import { tempDir, startOffice, joinedDb, openWriter, closeWriter } from './world.js';
@@ -192,8 +192,11 @@ test('offline note in a project where note.create was taken away: refused on num
     setProjectMember(w.office.store, w.n, w.sh.ulid, w.r, 'Reader');
     await w.office.up();
     const allocs = () => w.office.requests.filter((q) => q.route === 'POST /v1/allocate' && q.device === w.r).length;
-    await w.cr.syncNow();
+    await w.cr.numberPendingNow();
     assert.equal(allocs(), 1, 'asked once');
+    assert.match(w.cr.status.lastError ?? '', /1 change\(s\) refused by the post office/, 'the count shows at once');
+    await w.cr.syncNow();
+    assert.equal(allocs(), 1, 'not asked again by the sync');
     const rows = listRefused(w.wr);
     assert.equal(rows.length, 1);
     assert.equal(rows[0].kind, 'new');
@@ -222,5 +225,31 @@ test('courier status shows the refused count', async () => {
     await w.cr.syncNow();
     assert.equal(w.cr.status.state, 'connected');
     assert.match(w.cr.status.lastError ?? '', /1 change\(s\) refused by the post office: collab refused list/);
+  } finally { await w.cleanup(); }
+});
+
+test('one transaction editing two notes, refused: one row per note, each recoverable with its own values (R-24)', async () => {
+  const w = await world();
+  try {
+    const [a, b] = await readerHasNotes(w, 2);
+    w.wr.transaction(() => {
+      w.wr.prepare(`UPDATE entries SET title = 'typed A' WHERE ulid = ?`).run(a);
+      w.wr.prepare(`UPDATE entries SET title = 'typed B' WHERE ulid = ?`).run(b);
+    })();
+    await w.cr.pushNow();
+    const rows = listRefused(w.wr);
+    assert.equal(rows.length, 2, 'one row per note');
+    const of = (u: string) => rows.find((r) => r.note_ulid === u)!;
+    assert.deepEqual(typed(of(a).cells), ['typed A']);
+    assert.deepEqual(typed(of(b).cells), ['typed B']);
+    for (const r of rows) { assert.equal(r.kind, 'edit'); assert.equal(r.project_ulid, w.sh.ulid); }
+    await w.cr.pullNow();
+    assert.deepEqual([titleOf(w.wr, a), titleOf(w.wr, b)], ['office title', 'office title'], 'reverted');
+    createProject(w.wr, { name: 'mine', code: 'P1' });
+    await copyRefused(w.wr, of(a).ulid, 'P1');
+    await copyRefused(w.wr, of(b).ulid, 'P1');
+    const copies = (w.wr.prepare(`SELECT title FROM entries WHERE series = 'P1' ORDER BY id`).all() as Array<{ title: string }>).map((r) => r.title);
+    assert.deepEqual(copies, ['typed A', 'typed B'], 'each note recovered with its own value');
+    assert.equal(listRefused(w.wr).length, 0);
   } finally { await w.cleanup(); }
 });

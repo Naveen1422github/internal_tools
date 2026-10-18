@@ -512,6 +512,7 @@ export class Courier {
       recordRefusal(this.db, { noteUlid: ulid, projectUlid: this.projectOf(ulid), kind: "new", key, reason, cells });
     })();
     this.log(`note ${ulid} was refused by the post office: ${reason} (collab refused list)`);
+    this.set({ lastError: this.notice() }); // the refused count shows at once, not only after the next sync
   }
 
   private async refreshModules(): Promise<void> {
@@ -644,8 +645,11 @@ export class Courier {
 
   /**
    * Keep each refused group with the cells it carried (R6); the caller owns the
-   * transaction. A refused creation is `new` (the note stays local, no write-back,
-   * R7); anything else is an `edit`, which the office's write-back reverts on pull.
+   * transaction. One row per note of the group (R-24: one transaction can touch
+   * several notes, e.g. supersede, and each note is recovered or discarded on
+   * its own; rule 5). Cells of no note go with the office's note. A note whose
+   * creation is in a group refused for note.create is `new` (it stays local, no
+   * write-back, R7); anything else is an `edit`, reverted by the write-back on pull.
    */
   private recordRefusals(batch: WireChange[], refused: Refusal[]): void {
     const groups = new Map<string, WireChange[]>();
@@ -655,12 +659,25 @@ export class Courier {
       if (g) g.push(w); else groups.set(k, [w]);
     }
     for (const f of refused) {
-      const cells = groups.get(`${String(f.site_id).toLowerCase()}:${f.db_version}`) ?? [];
-      const ulid = typeof f.ulid === "string" ? f.ulid : null;
-      recordRefusal(this.db, {
-        noteUlid: ulid, projectUlid: ulid ? this.projectOf(ulid) : null,
-        kind: f.key === "note.create" ? "new" : "edit", key: f.key ?? null, reason: String(f.reason ?? "refused by the post office"), cells,
-      });
+      const at = `${String(f.site_id).toLowerCase()}:${f.db_version}`;
+      const office = typeof f.ulid === "string" ? f.ulid : null;
+      const reason = String(f.reason ?? "refused by the post office");
+      const group = groups.get(at);
+      if (!group) this.log(`warning: the post office refused a change group (${at}) this push did not send; kept with no cells`);
+      const byNote = new Map<string | null, WireChange[]>([[office, []]]);
+      for (const w of group ?? []) {
+        const u = entryUlidOf(this.db, w.table, Buffer.from(w.pk, "base64")) ?? office;
+        const list = byNote.get(u);
+        if (list) list.push(w); else byNote.set(u, [w]);
+      }
+      for (const [u, cells] of byNote) {
+        if (cells.length === 0 && u === office && byNote.size > 1) continue; // the office's note has no cells of its own here
+        const created = cells.some((w) => w.table === "entries" && w.cid === "created_at");
+        recordRefusal(this.db, {
+          noteUlid: u, projectUlid: u ? this.projectOf(u) : null,
+          kind: f.key === "note.create" && created ? "new" : "edit", key: f.key ?? null, reason, cells,
+        });
+      }
     }
     this.log(`${refused.length} change group(s) refused by the post office (collab refused list)`);
   }
