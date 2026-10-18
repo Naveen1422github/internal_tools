@@ -142,9 +142,21 @@ export function assertCanNote(db: DB, ulid: string | null | undefined, key: stri
   assertCan(db, projectOfNote(db, ulid), key);
 }
 
+/** The key an edit of this note needs (S2-6) and its project, or null outside a team project. */
+function editKey(db: DB, ulid: string | null | undefined): { project: string; key: string } | null {
+  const project = projectOfNote(db, ulid);
+  if (!project || teamCode(db, project) === null) return null;
+  return { project, key: isOwnNote(db, ulid as string) ? "note.edit.own" : "note.edit.any" };
+}
+
+/** May the person edit this note? note.edit.own for an own note (S2-6), else note.edit.any; ok outside a team project. */
+export function canEdit(db: DB, ulid: string | null | undefined): CanResult {
+  const k = editKey(db, ulid);
+  return k ? can(db, k.project, k.key) : { ok: true };
+}
+
 /** An edit: note.edit.own for an own note (S2-6), else note.edit.any. Ownership is read only in a team project. */
 export function assertCanEdit(db: DB, ulid: string | null | undefined): void {
-  const project = projectOfNote(db, ulid);
-  if (!project || teamCode(db, project) === null) return;
-  assertCan(db, project, isOwnNote(db, ulid as string) ? "note.edit.own" : "note.edit.any");
+  const k = editKey(db, ulid);
+  if (k) assertCan(db, k.project, k.key);
 }

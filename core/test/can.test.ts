@@ -293,3 +293,32 @@ test('module writes: an Office member is refused module.edit / module.create on 
     assert.equal(row('shared')!.hub, e.ulid);
   } finally { t.cleanup(); }
 });
+
+test("R-32: closing a task resolves only the handoffs the person may edit; another member's stays active, nothing refused", async () => {
+  const { createTask, transitionTask } = await import('../src/ops/task.js');
+  const me = freshDb({ shared: true }), other = freshDb({ shared: true });
+  try {
+    migrate(me.db); migrate(other.db);
+    teamRow(me.db); teamRow(other.db);
+    const { id: task } = createTask(me.db, { title: 'the task' });
+    const theirs = addEntry(other.db, { type: 'handoff', title: 'their handoff', summary: 's', project: 'TM', task_id: task, assigned: assigned(1) });
+    ship(other.db, me.db);
+    const mine = addEntry(me.db, { type: 'handoff', title: 'my handoff', summary: 's', project: 'TM', task_id: task, assigned: assigned(2) });
+    const e = addEntry(me.db, { type: 'review', title: 'an E review', summary: 's', task_id: task, assigned: assigned(3) });
+    setRole(me.db, 'Contributor');
+    for (const to of ['in-progress', 'review'] as const) transitionTask(me.db, task, to);
+    const v = dbVersion(me.db);
+    assert.deepEqual(transitionTask(me.db, task, 'done'), { id: task, status: 'done' }, 'the transition never fails');
+    const status = (u: string) => (me.db.prepare(`SELECT status FROM entries WHERE ulid = ?`).get(u) as { status: string }).status;
+    assert.equal(status(mine.ulid), 'resolved');
+    assert.equal(status(e.ulid), 'resolved', 'not in a team project: no check');
+    assert.equal(status(theirs.ulid), 'active', 'note.edit.any is not a Contributor key: left alone');
+    const touched = me.db.prepare(`SELECT COUNT(*) n FROM crsql_changes WHERE "table" = 'entries' AND pk = crsql_pack_columns(?) AND db_version > ?`).get(theirs.ulid, v) as { n: number };
+    assert.equal(touched.n, 0, 'no change to send, so nothing for the office to refuse');
+    // An Owner closing it resolves both.
+    transitionTask(me.db, task, 'pending');
+    setRole(me.db, 'Owner');
+    for (const to of ['in-progress', 'review', 'done'] as const) transitionTask(me.db, task, to);
+    assert.equal(status(theirs.ulid), 'resolved');
+  } finally { me.cleanup(); other.cleanup(); }
+});

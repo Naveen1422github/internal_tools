@@ -2,6 +2,8 @@ import type { DB } from "../db.js";
 import { hasProjectLeft, hasSeries, liveEntry } from "../schema.js";
 import type { Agent } from "./add.js";
 import { ensureCrsqlite } from "../sync/extension.js";
+import { hasUlidColumns } from "../db.js";
+import { canEdit } from "../access/can.js";
 
 // ------------------------------------------------------------
 // Types
@@ -129,16 +131,22 @@ export function transitionTask(
   const tx = db.transaction(() => {
     db.prepare(`UPDATE tasks SET status = ? WHERE id = ?`).run(to, id);
     // Cascade: on done, active handoffs and reviews for this task become 'resolved'.
+    // R-32: only the notes the person may edit (can(), as the edit ops ask); the
+    // others are left as they are, so the office has nothing to refuse.
     if (to === "done") {
-      db.prepare(
-        `
-        UPDATE entries
-        SET status = 'resolved'
-        WHERE task_id = ?
+      const match = `task_id = ?
           AND status = 'active'
-          AND type IN ('handoff', 'review')${leftOut}
-      `
-      ).run(id);
+          AND type IN ('handoff', 'review')${leftOut}`;
+      const notes = hasUlidColumns(db)
+        ? (db.prepare(`SELECT ulid FROM entries WHERE ${match}`).all(id) as Array<{ ulid: string }>)
+        : [];
+      const editable = notes.filter((n) => canEdit(db, n.ulid).ok);
+      if (editable.length === notes.length) {
+        db.prepare(`UPDATE entries SET status = 'resolved' WHERE ${match}`).run(id);
+      } else if (editable.length) {
+        db.prepare(`UPDATE entries SET status = 'resolved' WHERE ulid IN (SELECT value FROM json_each(?))`)
+          .run(JSON.stringify(editable.map((n) => n.ulid)));
+      }
     }
   });
   tx();
