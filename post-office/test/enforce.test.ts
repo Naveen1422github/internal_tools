@@ -54,7 +54,8 @@ let n = 0;
 /** Office with team project TM: d-n Owner, d-r Contributor, d-m Editor, d-rd Reader, d-x no project. */
 function world() {
   const { store, cleanup } = tempStore();
-  setAllocator({ allocate: async () => ++n });
+  // The office numbers every note (R-28: a number it never allocated is refused); E stays local.
+  setAllocator({ allocate: async (u, series) => (series === 'E' ? ++n : allocate(store, u, null, series)) });
   for (const d of ['d-n', 'd-r', 'd-m', 'd-rd', 'd-x']) member(store, d);
   const A = registerProject(store, { ulid: newUlid(), name: 'Team', code: 'TM' }, 'd-n').ulid;
   setProjectMember(store, null, A, 'd-r', 'Contributor');
@@ -196,7 +197,7 @@ test('mixed batch: allowed group delivered to N, refused group answered in refus
 test('all-refused batch still rings the sender', async () => {
   const o = await office();
   const ln = laptop(), lr = laptop();
-  setAllocator({ allocate: async () => ++n });
+  setAllocator({ allocate: async (u, series) => allocate(o.store, u, null, series) }); // R-28: the office's number
   try {
     const nn = await o.join('n'), rr = await o.join('r');
     const A = registerProject(o.store, { ulid: newUlid(), name: 'Team', code: 'TM' }, nn.device).ulid;

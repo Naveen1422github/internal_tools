@@ -36,7 +36,7 @@ export function groupKey(r: RawChange): string {
   return r.site_id.toString("hex") + ":" + r.db_version;
 }
 
-export const REFUSED_BEFORE ="this note was refused when it was created";
+export const REFUSED_BEFORE = "this note was refused when it was created";
 const MOVED = "A note can't move between projects: copy it instead"; // S2-1
 const REV_MOVED = "A note's history can't move to another note";
 const HARD = "Notes are never hard-deleted: archive it instead";
@@ -58,6 +58,12 @@ SELECT j.value AS ulid, e.ulid IS NOT NULL AS held, p.ulid IS NOT NULL AS known,
   LEFT JOIN entries__crsql_pks p ON p.ulid = j.value
   LEFT JOIN po_note_owners o ON o.ulid = j.value
   LEFT JOIN po_refused_notes r ON r.ulid = j.value`;
+// R-28: the numbers the office handed out, for the notes whose id cell the batch sets.
+const ALLOCS = `
+WITH j AS (SELECT value FROM json_each(?))
+SELECT ulid, 'E' AS series, id FROM po_allocations WHERE ulid IN j
+UNION ALL
+SELECT ulid, series, id FROM po_series_allocations WHERE ulid IN j`;
 interface Facts {
   ulid: string; held: number; known: number; id: number | null; series: string | null; project_ulid: string | null; deprecated: number | null; deleted_at: string | null;
   needs_merge: number | null; hp: number; hs: number; owner: string | null; refused: number;
@@ -83,7 +89,7 @@ const same = (a: unknown, b: unknown): boolean => {
 /**
  * R4/R5: judge one batch from `origin`. Every raw gets a group (site_id +
  * db_version); a group is refused when any of its cells is (reason = the first
- * refused cell's). Three IN queries at most (revisions, notes, module slugs),
+ * refused cell's). Four IN queries at most (revisions, notes, numbers, module slugs),
  * plus one role lookup per distinct project.
  */
 export function classify(db: Store, origin: string, raws: RawChange[]): Verdict {
@@ -249,6 +255,22 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     return x;
   };
 
+  // R-28: a number is the office's. One query for every note whose id cell is checked:
+  // a held pending note (office id NULL) and a new team note.
+  const checked = (n: Note | undefined) => !!n && (n.existing ? n.existing.id === null : n.created !== null && n.project !== null);
+  const numbered = new Set<string>();
+  raws.forEach((r, i) => {
+    if (r.cid !== "id" || r.table !== "entries" || norm(r.val) === null) return;
+    const u = ulids[i];
+    if (u && checked(notes.get(u))) numbered.add(u);
+  });
+  const allocs = new Map<string, { series: string; id: number }>();
+  if (numbered.size) for (const a of prep(db, ALLOCS).all(JSON.stringify([...numbered])) as Array<{ ulid: string; series: string; id: number }>) allocs.set(a.ulid, a);
+  const allocated = (u: string, series: string, v: unknown) => {
+    const a = allocs.get(u);
+    return !!a && a.series === series && a.id === norm(v);
+  };
+
   // Each cell's key (null = refused outright or not judged) and, when refused, why.
   const whyKey: Array<string | null> = new Array(raws.length).fill(null);
   const why: Array<string | null> = new Array(raws.length).fill(null);
@@ -269,11 +291,17 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
       why[i] = MOVED; return;
     }
     if (n.existing && r.table === "entries" && (r.cid === "id" || r.cid === "series")) {
-      // Fix 3: numbers come from the office. Only assignPendingNumber (NULL -> integer) passes, judged at allocate (R7).
+      // Fix 3: numbers come from the office. Only assignPendingNumber (NULL -> integer) passes, judged at
+      // allocate (R7), and only with the number allocate gave this note in its series (R-28).
       const cur = r.cid === "id" ? n.existing.id : n.existing.series;
       if (same(r.val, cur)) return;
-      if (r.cid === "id" && cur === null && Number.isInteger(norm(r.val))) return;
+      if (r.cid === "id" && cur === null && allocated(u, n.existing.series ?? "E", r.val)) return;
       why[i] = NUMBER; return;
+    }
+    if (n.created !== null && n.project !== null && r.table === "entries" && (r.cid === "id" || r.cid === "series")) {
+      // R-28: a new team note is in its project's series, numbered by allocate or not yet.
+      const code = team(n.project)!.code;
+      if (r.cid === "series" ? norm(r.val) !== code : norm(r.val) !== null && !allocated(u, code, r.val)) { why[i] = NUMBER; return; }
     }
     if (r.table === "entry_revisions" && r.cid === "entry_ulid" && keys[i] && officeRev.has(keys[i]!) && r.val !== u) {
       why[i] = REV_MOVED; return;

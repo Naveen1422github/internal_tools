@@ -6,7 +6,7 @@ import { addEntryAsync, createProject, updateEntry, initModule, migrate, migrate
 import { tempStore, laptop } from './helpers.js';
 import { budget } from './perf.js'; // strict: COLLAB_PERF=1 npx tsx --test --test-concurrency=1 test/<file>.test.ts
 import { acceptChanges, fetchDeliveries, lastSeq } from '../src/deliveries.js';
-import { registerProject, openStore, closeStore, getMeta, type Store } from '../src/store.js';
+import { registerProject, openStore, closeStore, getMeta, allocate, type Store } from '../src/store.js';
 import { setProjectMember as grant, assignNewMemberOfficeRole } from '../src/access.js';
 
 const TABLES = ['entries', 'refs', 'entry_modules', 'entry_revisions'];
@@ -15,8 +15,18 @@ function member(store: Store, id: string): void {
   store.prepare(`INSERT INTO po_members (device_id, name, joined_at) VALUES (?, ?, datetime('now'))`).run(id, id);
   assignNewMemberOfficeRole(store, id); // as addMember does: the first is Office admin (S2: modules need office keys)
 }
+// Each team project's office: its notes take the series and number the office allocates (R-28).
+const offices = new Map<string, { store: Store; code: string }>();
 function project(store: Store, code: string, creator: string): string {
-  return registerProject(store, { ulid: newUlid(), name: `Project ${code}`, code }, creator).ulid;
+  const ulid = registerProject(store, { ulid: newUlid(), name: `Project ${code}`, code }, creator).ulid;
+  offices.set(ulid, { store, code });
+  return ulid;
+}
+/** A laptop note set into a team project: its series and the office's number, as allocate gives it. */
+function intoProject(db: Database.Database, u: string, projectUlid: string): void {
+  const o = offices.get(projectUlid);
+  if (o) db.prepare(`UPDATE entries SET series = ?, id = ? WHERE ulid = ?`).run(o.code, allocate(o.store, u, null, o.code), u);
+  db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(projectUlid, u);
 }
 let n = 0;
 /** A note with a ref, a module and revisions; `projectUlid` is set as a laptop would (a column change). */
@@ -26,7 +36,7 @@ async function note(db: Database.Database, title: string, projectUlid: string | 
     type: 'decision', title, summary: `${title} s`, description: `${title} body`, module: 'm',
     refs: [{ ref_type: 'file', ref_value: `${title}.ts` }],
   });
-  if (projectUlid) db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(projectUlid, r.ulid);
+  if (projectUlid) intoProject(db, r.ulid, projectUlid);
   updateEntry(db, { ulid: r.ulid, description: `${title} body, edited` }); // gives entry_revisions rows
   return r.ulid;
 }
@@ -289,7 +299,7 @@ test("the office's own merge rows of a team note are stamped too", async () => {
     setProjectMember(store, 'd-a', A, 'd-b', 'Editor');
     setAllocator({ allocate: async () => ++n });
     const r = await addEntryAsync(la.db, { type: 'decision', title: 't', summary: 's', description: 'p1\n\np2', module: 'm' });
-    la.db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(A, r.ulid);
+    intoProject(la.db, r.ulid, A);
     acceptChanges(store, 'd-a', readOwnChanges(la.db, 0));
     const got = fetchAll(store, 'd-b');
     lb.db.transaction(() => applyChanges(lb.db, got.changes.map(decodeChange)))();

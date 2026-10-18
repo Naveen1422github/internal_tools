@@ -11,9 +11,9 @@ import {
 import { tempStore, laptop } from './helpers.js';
 import { budget } from './perf.js'; // strict: COLLAB_PERF=1 npx tsx --test --test-concurrency=1 test/<file>.test.ts
 import { acceptChanges } from '../src/deliveries.js';
-import { registerProject, type Store } from '../src/store.js';
+import { registerProject, allocate, type Store } from '../src/store.js';
 import { setProjectMember, setOfficeRole } from '../src/access.js';
-import { classify, groupKey, type Verdict, type Refusal } from '../src/classify.js';
+import { classify, groupKey, REFUSED_BEFORE, type Verdict, type Refusal } from '../src/classify.js';
 
 type DB = Database.Database;
 const member = (s: Store, id: string) =>
@@ -26,10 +26,19 @@ async function cells(db: DB, fn: () => unknown): Promise<RawChange[]> {
   return readOwnChanges(db, t).map(decodeChange);
 }
 let n = 0;
+let office: Store | null = null; // world()'s store: team numbers come from its allocate (R-28)
+/** A team note's series and the number the office allocates for it, as the laptop holds them. */
+function teamNumber(db: DB, u: string, projectUlid: string): void {
+  const p = office?.prepare(`SELECT code FROM po_projects WHERE ulid = ?`).get(projectUlid) as { code: string } | undefined;
+  if (p) db.prepare(`UPDATE entries SET series = ?, id = ? WHERE ulid = ?`).run(p.code, allocate(office!, u, null, p.code), u);
+}
 /** A note on the laptop; `projectUlid` is set as a laptop does it (a later column change). */
 async function note(db: DB, title: string, projectUlid: string | null, module = 'm'): Promise<string> {
   const r = await addEntryAsync(db, { type: 'decision', title, summary: `${title} s`, description: `${title} body`, module, refs: [{ ref_type: 'file', ref_value: `${title}.ts` }] });
-  if (projectUlid) db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(projectUlid, r.ulid);
+  if (projectUlid) {
+    teamNumber(db, r.ulid, projectUlid);
+    db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(projectUlid, r.ulid);
+  }
   return r.ulid;
 }
 const refused = (v: Verdict): Refusal[] => [...v.groups.values()].filter((r): r is Refusal => r !== null);
@@ -41,6 +50,7 @@ async function world() {
   const { store, cleanup } = tempStore();
   const la = laptop();
   setAllocator({ allocate: async () => ++n });
+  office = store;
   for (const d of ['d-own', 'd-con', 'd-rd', 'd-x']) member(store, d);
   const A = registerProject(store, { ulid: newUlid(), name: 'Team', code: 'TM' }, 'd-own').ulid;
   setProjectMember(store, null, A, 'd-con', 'Contributor');
@@ -55,7 +65,7 @@ async function world() {
     store.prepare(`INSERT INTO po_roles (ulid, project_ulid, name, keys) VALUES (?, ?, ?, ?)`).run(newUlid(), A, name, JSON.stringify(keys));
     setProjectMember(store, null, A, device, name);
   };
-  return { store, la, A, held, role, done: () => { setAllocator(null); la.cleanup(); cleanup(); } };
+  return { store, la, A, held, role, done: () => { setAllocator(null); office = null; la.cleanup(); cleanup(); } };
 }
 const enc = (r: RawChange) => encodeChange(r);
 
@@ -289,7 +299,7 @@ test("not judged: children of a note the office doesn't hold, and a lone number 
     assert.ok(allowed(v), "S1 holds them as '?'");
     assert.equal(v.creations.size, 0);
     const held = await pendingNote(w, 'pending');
-    const num = await cells(w.la.db, () => w.la.db.prepare(`UPDATE entries SET id = 4242 WHERE ulid = ?`).run(held));
+    const num = await cells(w.la.db, () => w.la.db.prepare(`UPDATE entries SET id = ? WHERE ulid = ?`).run(allocOf(w.store, held), held));
     assert.deepEqual(num.map((c) => c.cid), ['id']);
     assert.ok(allowed(classify(w.store, 'd-rd', num)), 'assignPendingNumber was judged at allocate (R7)');
   } finally { w.done(); }
@@ -342,6 +352,7 @@ test('a held note whose project cell is still arriving is judged as a creation w
     const all = await cells(w.la.db, async () => {
       const x = await addEntryAsync(w.la.db, { type: 'decision', title: 'split', summary: 's', module: 'm' });
       u = x.ulid;
+      teamNumber(w.la.db, u, w.A);
       w.la.db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(w.A, u);
     });
     // The project cell is sent once, at its latest version (a later laptop transaction).
@@ -430,10 +441,61 @@ test("fix 3: only a pending note's first number passes unjudged; other id or ser
     const reser = await cells(w.la.db, () => w.la.db.prepare(`UPDATE entries SET series = 'XX' WHERE ulid = ?`).run(numbered));
     assert.deepEqual(refused(classify(w.store, 'd-own', reser)).map((r) => [r.key, r.reason]), [[null, NUMBER]]);
     const pend = await pendingNote(w, 'pending');
-    assert.ok(allowed(classify(w.store, 'd-rd', await cells(w.la.db, () => w.la.db.prepare(`UPDATE entries SET id = 7 WHERE ulid = ?`).run(pend)))));
+    assert.ok(allowed(classify(w.store, 'd-own', await cells(w.la.db, () => w.la.db.prepare(`UPDATE entries SET id = ? WHERE ulid = ?`).run(allocOf(w.store, pend), pend)))));
     const pend2 = await pendingNote(w, 'pending 2');
     const text = await cells(w.la.db, () => w.la.db.prepare(`UPDATE entries SET id = 'seven' WHERE ulid = ?`).run(pend2));
     assert.deepEqual(refused(classify(w.store, 'd-own', text)).map((r) => r.reason), [NUMBER], 'a number that is not an integer');
+  } finally { w.done(); }
+});
+
+const allocOf = (s: Store, u: string) => (s.prepare(`SELECT id FROM po_series_allocations WHERE ulid = ?`).get(u) as { id: number }).id;
+
+test('R-28: a pending note takes only the number the office allocated for it', async () => {
+  const w = await world();
+  try {
+    const pend = await pendingNote(w, 'pending forged');
+    const real = allocOf(w.store, pend);
+    const set = (id: number) => cells(w.la.db, () => w.la.db.prepare(`UPDATE entries SET id = ? WHERE ulid = ?`).run(id, pend));
+    const forged = await set(real + 1000);
+    for (const by of ['d-rd', 'd-x', 'd-own']) {
+      assert.deepEqual(refused(classify(w.store, by, forged)).map((r) => [r.key, r.reason, r.ulid]), [[null, NUMBER, pend]], `${by} forging a number`);
+    }
+    // Another note's number (allocated, but not to this note) is a forgery too.
+    const other = await w.held('numbered other', 'd-own');
+    assert.deepEqual(refused(classify(w.store, 'd-own', await set(allocOf(w.store, other)))).map((r) => r.reason), [NUMBER]);
+    // The creator's real number passes.
+    assert.ok(allowed(classify(w.store, 'd-own', await set(real))));
+    // A held pending E note: its po_allocations number only.
+    const e = await w.held('pending e', 'd-own', null);
+    w.store.prepare(`UPDATE entries SET id = NULL WHERE ulid = ?`).run(e);
+    const eid = allocate(w.store, e, null);
+    const setE = (id: number) => cells(w.la.db, () => w.la.db.prepare(`UPDATE entries SET id = ? WHERE ulid = ?`).run(id, e));
+    assert.deepEqual(refused(classify(w.store, 'd-own', await setE(eid + 1000))).map((r) => r.reason), [NUMBER]);
+    assert.ok(allowed(classify(w.store, 'd-own', await setE(eid))));
+  } finally { w.done(); }
+});
+
+test('R-28: a new team note is in its project series, with no number or its allocated one', async () => {
+  const w = await world();
+  try {
+    const fresh = async (series: string | null, id: (u: string) => number | null) => {
+      let u = '';
+      const c = await cells(w.la.db, async () => {
+        u = (await addEntryAsync(w.la.db, { type: 'decision', title: `new ${series}`, summary: 's', module: 'm' })).ulid;
+        w.la.db.prepare(`UPDATE entries SET series = COALESCE(?, series), id = ?, project_ulid = ? WHERE ulid = ?`).run(series, id(u), w.A, u);
+      });
+      return { u, c };
+    };
+    const ok = await fresh('TM', (u) => allocate(w.store, u, null, 'TM'));
+    assert.ok(allowed(classify(w.store, 'd-con', ok.c)), 'its allocated number');
+    assert.ok(allowed(classify(w.store, 'd-con', (await fresh('TM', () => null)).c)), 'pending: no number yet');
+    // The refused cell's own reason (a later group of the dead creation says REFUSED_BEFORE).
+    const why = (c: RawChange[]) => refused(classify(w.store, 'd-con', c)).filter((r) => r.reason !== REFUSED_BEFORE).map((r) => [r.key, r.reason]);
+    assert.deepEqual(why((await fresh('E', (u) => allocate(w.store, u, null, 'TM'))).c), [[null, NUMBER]], 'wrong series (E)');
+    assert.deepEqual(why((await fresh('XX', () => null)).c), [[null, NUMBER]], 'wrong series (another code)');
+    assert.deepEqual(why((await fresh('TM', () => allocOf(w.store, ok.u))).c), [[null, NUMBER]], "a duplicate: another note's number");
+    assert.deepEqual(why((await fresh('TM', () => 99999)).c), [[null, NUMBER]], 'a number never allocated');
+    assert.deepEqual(why((await fresh('TM', (u) => allocate(w.store, u, null))).c), [[null, NUMBER]], 'allocated in E, not TM');
   } finally { w.done(); }
 });
 
@@ -483,6 +545,7 @@ test('fix 6: a held note whose project cell is still arriving keeps its recorded
     let u = '';
     const all = await cells(w.la.db, async () => {
       u = (await addEntryAsync(w.la.db, { type: 'decision', title: 'split', summary: 's', module: 'm' })).ulid;
+      teamNumber(w.la.db, u, w.A);
       w.la.db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(w.A, u);
       updateEntry(w.la.db, { ulid: u, title: 'split, edited' });
     });
