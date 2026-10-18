@@ -529,6 +529,32 @@ test('R-28: a new team note is in its project series, with no number or its allo
   } finally { w.done(); }
 });
 
+test("R-28 promote: a promoted project's older notes keep their numbers up to its seed, once each", async () => {
+  const w = await world();
+  try {
+    const P = registerProject(w.store, { ulid: newUlid(), name: 'Promoted', code: 'PR', seed: 3 }, 'd-own').ulid;
+    const older = async (id: number) => {
+      let u = '';
+      const c = await cells(w.la.db, async () => {
+        u = (await addEntryAsync(w.la.db, { type: 'decision', title: `older ${id}`, summary: 's', module: 'm' })).ulid;
+        w.la.db.prepare(`UPDATE entries SET series = 'PR', id = ?, project_ulid = ? WHERE ulid = ?`).run(id, P, u);
+      });
+      return { u, c };
+    };
+    const why = (c: RawChange[]) => refused(classify(w.store, 'd-own', c)).filter((r) => r.reason !== REFUSED_BEFORE).map((r) => r.reason);
+    const one = await older(1), two = await older(2);
+    assert.ok(allowed(classify(w.store, 'd-own', [...one.c, ...two.c])), 'numbers 1..seed, given before the promote');
+    acceptChanges(w.store, 'd-own', one.c.map(enc));
+    assert.deepEqual(why((await older(1)).c), [NUMBER], 'a number another held note has');
+    const dup = await older(3);
+    assert.deepEqual(why([...dup.c, ...(await older(3)).c]), [NUMBER], 'the same number twice in one batch');
+    assert.deepEqual(why((await older(4)).c), [NUMBER], 'past the seed: only allocate gives it');
+    const next = allocate(w.store, newUlid(), null, 'PR');
+    assert.equal(next, 4, 'allocate continues after the seed');
+    assert.ok(allowed(classify(w.store, 'd-own', (await older(2)).c)), 'still within the seed once allocations began');
+  } finally { w.done(); }
+});
+
 test('fix 4: supersede and archive carry only their side cells; resolve still carries the text', async () => {
   const w = await world();
   try {

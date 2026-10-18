@@ -302,6 +302,27 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     const a = allocs.get(u);
     return !!a && a.series === series && a.id === norm(v);
   };
+  // R-28, promote (P9): a solo project made team keeps the numbers its notes got before,
+  // 1..seed (registerProject's seed; allocate hands out seed+1 on). Such a number is
+  // accepted once: not allocated, not held by another office note, not twice in a batch.
+  const seeds = new Map<string, number>();
+  const promotedTaken = new Map<string, string>(); // series:id -> ulid, within this batch
+  const promoted = (u: string, series: string, v: unknown) => {
+    const id = norm(v);
+    if (typeof id !== "number" || !Number.isInteger(id) || id < 1 || allocs.has(u)) return false;
+    let seed = seeds.get(series);
+    if (seed === undefined) {
+      const r = prep(db, `SELECT COALESCE((SELECT MIN(id) - 1 FROM po_series_allocations WHERE series = ?),
+                                          (SELECT value FROM po_series_counters WHERE series = ?), 0) AS seed`).get(series, series) as { seed: number };
+      seeds.set(series, (seed = r.seed));
+    }
+    if (id > seed) return false;
+    const k = series + ":" + id, by = promotedTaken.get(k);
+    if (by !== undefined && by !== u) return false;
+    if (prep(db, `SELECT 1 FROM entries WHERE series = ? AND id = ? AND ulid <> ?`).get(series, id, u)) return false;
+    promotedTaken.set(k, u);
+    return true;
+  };
 
   // Each cell's key (null = refused outright or not judged) and, when refused, why.
   const whyKey: Array<string | null> = new Array(raws.length).fill(null);
@@ -333,7 +354,7 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     if (n.created !== null && n.project !== null && r.table === "entries" && (r.cid === "id" || r.cid === "series")) {
       // R-28: a new team note is in its project's series, numbered by allocate or not yet.
       const code = team(n.project)!.code;
-      if (r.cid === "series" ? norm(r.val) !== code : norm(r.val) !== null && !allocated(u, code, r.val)) { why[i] = NUMBER; return; }
+      if (r.cid === "series" ? norm(r.val) !== code : norm(r.val) !== null && !allocated(u, code, r.val) && !promoted(u, code, r.val)) { why[i] = NUMBER; return; }
     }
     if (r.table === "entry_revisions" && r.cid === "entry_ulid" && keys[i] && officeRev.has(keys[i]!) && r.val !== u) {
       why[i] = REV_MOVED; return;

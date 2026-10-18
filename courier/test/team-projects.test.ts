@@ -262,7 +262,8 @@ test('Review Focus 5: a team code that clashes with a local solo project is neve
     assert.equal(`${mine.series}-${mine.id}`, 'SH-1');
     const sh = team(w.office);
     await w.ca.syncNow();
-    const aNote = addEntry(w.wa, { ...note('A team SH one'), project: 'SH', assigned: { ulid: '00000000000000000000000001', id: 1 } });
+    const aUlid = '00000000000000000000000001'; // numbered by the office, as allocate does (R-28)
+    const aNote = addEntry(w.wa, { ...note('A team SH one'), project: 'SH', assigned: { ulid: aUlid, id: allocate(w.office.store, aUlid, null, 'SH') } });
     await w.ca.pushNow();
     assert.equal(atOffice(w.office, aNote.ulid)?.title, 'A team SH one');
     const bE = await addEntryAsync(w.wb, note('B E note', { module: 'portfolio' }));
