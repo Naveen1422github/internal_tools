@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import Database from 'better-sqlite3';
-import { addEntryAsync, updateEntry, initModule, migrate, migrateTo, enableSync, isCrsqliteLoaded, setAllocator, readOwnChanges, applyChanges, decodeChange, newUlid, type WireChange } from '@collab-mcp/core';
+import { addEntryAsync, createProject, updateEntry, initModule, migrate, migrateTo, enableSync, isCrsqliteLoaded, setAllocator, readOwnChanges, applyChanges, decodeChange, newUlid, type WireChange } from '@collab-mcp/core';
 import { tempStore, laptop } from './helpers.js';
 import { acceptChanges, fetchDeliveries, lastSeq } from '../src/deliveries.js';
 import { registerProject, openStore, closeStore, getMeta, type Store } from '../src/store.js';
@@ -255,19 +255,21 @@ test('stamping 2000 changes adds < 5 ms', async () => {
   const { store, cleanup } = tempStore();
   try {
     member(store, 'd-a'); // S2: the sender's modules cells are judged against its office keys
-    const A = newUlid();
+    // Each note is written as production writes it: its project in the INSERT, one laptop
+    // transaction (a solo project here: the office doesn't know it, so nothing is judged).
+    const A = createProject(la.db, { name: 'Perf', code: 'PF' }).ulid;
     let wire: WireChange[] = [];
     for (let i = 0; wire.length < 2000 * (RUNS + WARM); i++) {
-      await note(la.db, `perf ${i}`, i % 2 ? A : null);
+      setAllocator({ allocate: async () => ++n });
+      await addEntryAsync(la.db, { type: 'decision', title: `perf ${i}`, summary: `perf ${i} s`, description: `perf ${i} body`, module: 'm',
+        refs: [{ ref_type: 'file', ref_value: `perf ${i}.ts` }], project: i % 2 ? A : 'none' });
       if (i % 20 === 19) wire = readOwnChanges(la.db, 0);
     }
     const ms: number[] = [];
     for (let k = 0; k < RUNS + WARM; k++) {
       const timing = { stampMs: -1 };
       const r = acceptChanges(store, 'd-a', wire.slice(k * 2000, (k + 1) * 2000), { timing });
-      // S2: a cut between a note's insert (project NULL) and its later project cell is a
-      // project move (S2-1), refused: the harness sets the project in a second transaction.
-      assert.ok(r.accepted > 1950 && r.refused.every((x) => x.reason.startsWith("A note can't move")), JSON.stringify(r.refused));
+      assert.equal(r.accepted, 2000, JSON.stringify(r.refused));
       if (k >= WARM) ms.push(timing.stampMs);
     }
     assert.ok((store.prepare(`SELECT COUNT(*) n FROM po_deliveries WHERE project_ulid = ?`).get(A) as { n: number }).n > 0, 'it did real work');

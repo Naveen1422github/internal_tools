@@ -5,7 +5,7 @@ import type Database from "better-sqlite3";
 import { StoreError, getMeta, setMeta, type Store } from "./store.js";
 import { divergentStatusOrType, flagNeedsMerge, mergeEntries } from "./merge.js";
 import { memberProjects } from "./access.js";
-import { classify, type Refusal } from "./classify.js";
+import { classify, REFUSED_BEFORE, type Refusal } from "./classify.js";
 import { writeBack } from "./writeback.js";
 
 export const OFFICE_ORIGIN = "post-office";
@@ -340,12 +340,14 @@ export function acceptChanges(
         const r = verdict.groups.get(g);
         if (r && !resent.get(g)) dead.set(u, r);
       }
-      // A resent refused creation: the refusal it got the first time (po_refused_notes).
+      // R7: every group of a note refused at creation (now or before) names the key
+      // its creation was refused for, so a resend gets the same refusal.
       const first = prep(db, `SELECT key, reason FROM po_refused_notes WHERE ulid = ?`);
       for (const [g, r] of verdict.groups) {
         if (!r || resent.get(g)) continue;
-        if (r.key === null && r.ulid && verdict.creations.get(r.ulid) === g) {
-          const was = first.get(r.ulid) as { key: string | null; reason: string | null } | undefined;
+        if (r.reason === REFUSED_BEFORE && r.ulid) {
+          const now = dead.get(r.ulid);
+          const was = now && now.reason !== REFUSED_BEFORE ? now : (first.get(r.ulid) as { key: string | null; reason: string | null } | undefined);
           if (was?.reason) { refused.push({ ...r, key: was.key, reason: was.reason }); continue; }
         }
         refused.push(r);
@@ -385,7 +387,7 @@ export function acceptChanges(
     // recorded and stamped by writeBack itself before recordOwnChanges.
     t0 = performance.now();
     if (dead.size) refuseCreations(db, origin, dead);
-    const wb = writeBack(db, out);
+    const wb = writeBack(db, out, verdict.noteProjects);
     const writeBackMs = performance.now() - t0;
     const own = recordOwnChanges(db);
     t0 = performance.now();

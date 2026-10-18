@@ -228,9 +228,11 @@ export interface OfficeProject { ulid: string; name: string; code: string; creat
  * Idempotent by ulid: a retried request gets the same number (E-713), and one
  * ulid never gets numbers in two series. The increment and the record commit in
  * ONE transaction, so a number is never handed out twice and never silently
- * skipped by a failure. R7: a team series needs note.create in its project; a
- * refusal is recorded in po_refused_notes (the note's later changes are refused
- * too). `deviceId = null` = the office machine's CLI: unguarded.
+ * skipped by a failure. R7a: a team series is a 404 to a device outside its
+ * project (nothing recorded). R7: a member needs note.create; a refusal is recorded
+ * in po_refused_notes (the note's later changes are refused too), and lifted when
+ * a later ask passes while the office holds nothing of the note. `deviceId = null`
+ * = the office machine's CLI: unguarded.
  */
 export function allocate(db: Store, ulid: unknown, deviceId: string | null, series = "E"): number {
   if (typeof ulid !== "string" || !ULID_RE.test(ulid)) throw new StoreError(`not a ULID: ${String(ulid).slice(0, 40)}`);
@@ -249,8 +251,11 @@ export function allocate(db: Store, ulid: unknown, deviceId: string | null, seri
   let refused: StoreError | null = null;
   const id = db.transaction(() => {
     const project = db.prepare(`SELECT ulid FROM po_projects WHERE code = ?`).get(series) as { ulid: string } | undefined;
-    if (!project) {
-      throw new StoreError(`no team project with code ${series} on this post office`, 404);
+    const missing = () => new StoreError(`no team project with code ${series} on this post office`, 404);
+    if (!project) throw missing();
+    // R7a: a project you are not in does not exist for you (same answer, nothing recorded).
+    if (deviceId !== null && !db.prepare(`SELECT 1 FROM po_project_members WHERE project_ulid = ? AND device_id = ?`).get(project.ulid, deviceId)) {
+      throw missing();
     }
     const hit = db.prepare(`SELECT series, id FROM po_series_allocations WHERE ulid = ?`).get(ulid) as { series: string; id: number } | undefined;
     if (hit) {
@@ -270,6 +275,9 @@ export function allocate(db: Store, ulid: unknown, deviceId: string | null, seri
         refused = e;
         return 0;
       }
+      // Granted since an earlier refusal: the note is alive again unless the office
+      // already holds content of it (then its refusal stands, R7).
+      if (!db.prepare(`SELECT 1 FROM entries WHERE ulid = ?`).get(ulid)) db.prepare(`DELETE FROM po_refused_notes WHERE ulid = ?`).run(ulid);
     }
     const row = db.prepare(`UPDATE po_series_counters SET value = value + 1 WHERE series = ? RETURNING value`).get(series) as { value: number };
     db.prepare(`INSERT INTO po_series_allocations (ulid, series, id, device_id) VALUES (?, ?, ?, ?)`).run(ulid, series, row.value, deviceId);

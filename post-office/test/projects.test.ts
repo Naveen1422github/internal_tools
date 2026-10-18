@@ -50,7 +50,7 @@ test('one ulid never gets numbers in two series', () => {
     assert.throws(() => allocate(t.store, u, 'd'), storeError(409, /already numbered SH-1/));
     const e = newUlid();
     allocate(t.store, e, 'd');
-    assert.throws(() => allocate(t.store, e, 'd', 'SH'), storeError(409, /E number/));
+    assert.throws(() => allocate(t.store, e, null, 'SH'), storeError(409, /E number/));
   } finally { t.cleanup(); }
 });
 

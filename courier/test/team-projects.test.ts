@@ -187,6 +187,11 @@ test('Review Focus 4: a pulled note names an unknown project: the pull learns it
   try {
     await w.ca.syncNow(); await w.cb.syncNow();
     team(w.office, 'ZZ', 'Zed');
+    // R14: B, just added to ZZ, is owed a replay (empty: ZZ is new), and the office holds
+    // ZZ's rows back from B's pulls until it is done. Run B's replay step alone
+    // (refreshAccess -> runReplays, as on the `access` doorbell) without the projects
+    // refresh, so the pull below is still what teaches B the project.
+    await (w.cb as any).enqueue(() => (w.cb as any).refreshAccess());
     await w.ca.syncNow();
     const z = await addEntryAsync(w.wa, note('zz one', { project: 'ZZ' }));
     await w.ca.pushNow();

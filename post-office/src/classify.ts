@@ -29,13 +29,14 @@ import { firstTextCell, textCells, prep, batchHints, revisionEntries } from "./d
 
 export interface Refusal { site_id: string /* hex */; db_version: number; ulid: string | null; key: string | null; reason: string }
 /** groups: every group of the batch, null = accepted. groupOf: each raw's group. creations: new note -> its creating group. */
-export interface Verdict { groups: Map<string, Refusal | null>; groupOf: string[]; creations: Map<string, string> }
+/** noteProjects: each note -> its project as judged (null = none); R6 stamps write-backs with it. */
+export interface Verdict { groups: Map<string, Refusal | null>; groupOf: string[]; creations: Map<string, string>; noteProjects: Map<string, string | null> }
 
 export function groupKey(r: RawChange): string {
   return r.site_id.toString("hex") + ":" + r.db_version;
 }
 
-const REFUSED_BEFORE = "this note was refused when it was created";
+export const REFUSED_BEFORE ="this note was refused when it was created";
 const MOVED = "A note can't move between projects: copy it instead"; // S2-1
 const REV_MOVED = "A note's history can't move to another note";
 const HARD = "Notes are never hard-deleted: archive it instead";
@@ -89,6 +90,7 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
   const groupOf: string[] = new Array(raws.length);
   const groups = new Map<string, Refusal | null>();
   const creations = new Map<string, string>();
+  const noteProjects = new Map<string, string | null>();
   const hints = batchHints(raws);
 
   // Each raw's group and first pk cell, decoded once per run of equal values.
@@ -166,6 +168,7 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
       isNew = true;
       project = hints.project.get(u) ?? null;
     } // else: S1 holds it as '?', not judged here
+    noteProjects.set(u, project);
     if (project !== null && !team(project)) project = null; // solo or unknown project (rule 2)
     if (isNew) creations.set(u, created!);
     // The owner is po_note_owners' whenever the office has the note (fix 6); the sender's only for a note new here.
@@ -304,5 +307,5 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     for (const [u, g] of creations) if (groups.get(g) && !dead.has(u)) { dead.add(u); grew = true; }
     if (!grew) break;
   }
-  return { groups, groupOf, creations };
+  return { groups, groupOf, creations, noteProjects };
 }

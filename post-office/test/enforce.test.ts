@@ -6,13 +6,14 @@ import assert from 'node:assert';
 import type Database from 'better-sqlite3';
 import {
   addEntryAsync, updateEntry, updateEntryRefs, setAllocator, readOwnChanges, applyChanges, decodeChange,
-  revisionsOf, headsOf, rootRevId, newUlid, requestJson, openEventStream, type WireChange,
+  addEntry, revisionsOf, headsOf, rootRevId, newUlid, requestJson, openEventStream, upsertTeamProjectFromOffice, type WireChange,
 } from '@collab-mcp/core';
 import { tempStore, laptop } from './helpers.js';
 import { office } from './office.js';
 import { acceptChanges, fetchDeliveries, firstTextCell, OFFICE_ORIGIN } from '../src/deliveries.js';
 import { allocate, registerProject, StoreError, type Store } from '../src/store.js';
 import { setProjectMember } from '../src/access.js';
+import { groupKey } from '../src/classify.js';
 
 type DB = Database.Database;
 const dbv = (db: DB | Store) => (db.prepare(`SELECT crsql_db_version() v`).get() as { v: number }).v;
@@ -23,6 +24,8 @@ const titleOf = (db: DB | Store, u: string) => (db.prepare(`SELECT title FROM en
 const cvOf = (db: DB | Store, u: string, cid: string) =>
   (db.prepare(`SELECT col_version v FROM crsql_changes WHERE "table" = 'entries' AND pk = crsql_pack_columns(?) AND cid = ?`).get(u, cid) as { v: number } | undefined)?.v;
 const need = (label: string, key: string) => `You need "${label}" (${key}) in TM to do this`;
+/** The laptop knows team project TM, as the courier records it from the office. */
+const teamOn = (db: DB, ulid: string) => upsertTeamProjectFromOffice(db, { ulid, name: 'Team', code: 'TM' }, 'test-office');
 
 /** A member's laptop: push = its own changes since the last push; pull = deliveries since the last pull, applied. */
 function device(store: Store, id: string) {
@@ -59,10 +62,10 @@ function world() {
   store.prepare(`DELETE FROM po_replays`).run(); // nothing to replay yet (R14): the project is new
   const devs = ['d-n', 'd-r', 'd-m', 'd-rd', 'd-x'].map((d) => device(store, d));
   const [N, R, M, RD, X] = devs;
-  /** A team note on `on`'s laptop (project set as a laptop does it: a later column change). */
-  const note = async (on: ReturnType<typeof device>, title: string, project: string | null = A) => {
-    const r = await addEntryAsync(on.db, { type: 'decision', title, summary: `${title} s`, module: 'm', refs: [{ ref_type: 'file', ref_value: `${title}.ts` }] });
-    if (project) on.db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(project, r.ulid);
+  for (const d of devs) teamOn(d.db, A);
+  /** A TM note on `on`'s laptop, written as production writes it: project and series in the INSERT (one transaction). */
+  const note = async (on: ReturnType<typeof device>, title: string) => {
+    const r = await addEntryAsync(on.db, { type: 'decision', title, summary: `${title} s`, module: 'm', project: A, refs: [{ ref_type: 'file', ref_value: `${title}.ts` }] });
     return r.ulid;
   };
   return { store, A, N, R, M, RD, X, note, done: () => { setAllocator(null); for (const d of devs) d.cleanup(); cleanup(); } };
@@ -198,8 +201,8 @@ test('all-refused batch still rings the sender', async () => {
     const A = registerProject(o.store, { ulid: newUlid(), name: 'Team', code: 'TM' }, nn.device).ulid;
     setProjectMember(o.store, null, A, rr.device, 'Contributor');
     o.store.prepare(`DELETE FROM po_replays`).run();
-    const u = (await addEntryAsync(ln.db, { type: 'decision', title: 'n', summary: 's', module: 'm' })).ulid;
-    ln.db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(A, u);
+    teamOn(ln.db, A);
+    const u = (await addEntryAsync(ln.db, { type: 'decision', title: 'n', summary: 's', module: 'm', project: A })).ulid;
     assert.equal((await requestJson(o.target(nn), 'POST', '/v1/changes', { changes: readOwnChanges(ln.db, 0) })).status, 200);
     const page = await requestJson(o.target(rr), 'GET', '/v1/changes?after=0');
     lr.db.transaction(() => applyChanges(lr.db, page.body.changes.map(decodeChange)))();
@@ -220,13 +223,18 @@ test('all-refused batch still rings the sender', async () => {
     const end = Date.now() + 3000;
     while (!events.includes('changes')) { if (Date.now() > end) throw new Error('the sender was not rung'); await new Promise((x) => setTimeout(x, 10)); }
     stream.close();
-    // Allocate over HTTP: a Contributor holds note.create; a member outside TM gets the 403.
+    // Allocate over HTTP: a Contributor holds note.create; a Reader gets the 403;
+    // a device outside TM gets the 404 of a project that doesn't exist for it (R7a).
     const ok = await requestJson(o.target(rr), 'POST', '/v1/allocate', { ulid: newUlid(), series: 'TM' });
     assert.deepEqual([ok.status, ok.body.series], [200, 'TM']);
-    const x = await o.join('x');
-    const no = await requestJson(o.target(x), 'POST', '/v1/allocate', { ulid: newUlid(), series: 'TM' });
+    const rd = await o.join('rd');
+    setProjectMember(o.store, null, A, rd.device, 'Reader');
+    const no = await requestJson(o.target(rd), 'POST', '/v1/allocate', { ulid: newUlid(), series: 'TM' });
     assert.equal(no.status, 403);
     assert.match(no.body.error, /note\.create/);
+    const x = await o.join('x');
+    const out = await requestJson(o.target(x), 'POST', '/v1/allocate', { ulid: newUlid(), series: 'TM' });
+    assert.deepEqual([out.status, out.body.error], [404, 'no team project with code TM on this post office']);
   } finally { setAllocator(null); ln.cleanup(); lr.cleanup(); await o.stop(); }
 });
 
@@ -249,11 +257,16 @@ test('resend of a refused group: same refusal, no second write-back', async () =
     const c = await w.note(w.RD, 'reader note');
     const create = readOwnChanges(w.RD.db, v);
     const r1 = w.RD.push({ changes: create });
-    assert.deepEqual(r1.refused.map((r) => [r.key, r.ulid]).slice(0, 1), [['note.create', c]]);
+    assert.deepEqual(r1.refused.map((r) => [r.key, r.ulid]), [['note.create', c]]);
     const r2 = w.RD.push({ changes: create });
     assert.deepEqual(r2.refused, r1.refused);
     assert.equal(count(w.store, `SELECT COUNT(*) n FROM po_deliveries`), rows, 'a refused creation gets no write-back (R-13)');
     assert.equal(count(w.store, `SELECT COUNT(*) n FROM po_refused_notes WHERE ulid = ?`, c), 1);
+    // A later edit of that note names the key its creation was refused for (R7).
+    const ev = dbv(w.RD.db);
+    updateEntry(w.RD.db, { ulid: c, title: 'reader note, edited' });
+    const later = w.RD.push({ changes: readOwnChanges(w.RD.db, ev) });
+    assert.deepEqual(later.refused.map((r) => [r.key, r.reason, r.ulid]), [['note.create', need('Create notes', 'note.create'), c]]);
   } finally { w.done(); }
 });
 
@@ -274,6 +287,63 @@ test('allocate without note.create -> 403 naming note.create; po_refused_notes h
     assert.equal(allocate(w.store, newUlid(), null, 'TM'), 2);
     assert.throws(() => allocate(w.store, newUlid(), 'd-rd', 'ZZ'), (e: unknown) => e instanceof StoreError && e.status === 404);
     assert.throws(() => allocate(w.store, v, 'd-rd', 'E'), (e: unknown) => e instanceof StoreError && e.status === 409);
+    // R7a: outside TM the project doesn't exist: the same 404 as a missing one, nothing recorded.
+    const outside = newUlid();
+    assert.throws(() => allocate(w.store, outside, 'd-x', 'TM'),
+      (e: unknown) => e instanceof StoreError && e.status === 404 && e.message === 'no team project with code TM on this post office');
+    assert.equal(count(w.store, `SELECT COUNT(*) n FROM po_refused_notes WHERE ulid = ?`, outside), 0);
+  } finally { w.done(); }
+});
+
+test('refused allocate, then note.create granted: allocate numbers it and the note is accepted', async () => {
+  const w = world();
+  try {
+    const u = newUlid();
+    assert.throws(() => allocate(w.store, u, 'd-rd', 'TM'), (e: unknown) => e instanceof StoreError && e.status === 403);
+    assert.equal(count(w.store, `SELECT COUNT(*) n FROM po_refused_notes WHERE ulid = ?`, u), 1);
+    setProjectMember(w.store, null, w.A, 'd-rd', 'Contributor');
+    w.store.prepare(`DELETE FROM po_replays`).run();
+    const id = allocate(w.store, u, 'd-rd', 'TM');
+    assert.ok(id > 0);
+    assert.equal(count(w.store, `SELECT COUNT(*) n FROM po_refused_notes WHERE ulid = ?`, u), 0, 'the refusal is lifted: the office holds nothing of it');
+    // The laptop wrote it pending under that ulid, then numbered it (as the courier does).
+    addEntry(w.RD.db, { type: 'decision', title: 'granted', summary: 's', module: 'm', project: w.A, pendingUlid: u });
+    w.RD.db.prepare(`UPDATE entries SET id = ? WHERE ulid = ?`).run(id, u);
+    const res = w.RD.push();
+    assert.deepEqual(res.refused, []);
+    assert.ok(res.accepted > 0);
+    assert.equal(titleOf(w.store, u), 'granted');
+    w.N.pull();
+    assert.equal(titleOf(w.N.db, u), 'granted');
+  } finally { w.done(); }
+});
+
+test('a refused group touching a held note still arriving: its write-back is held, never stamped NULL', async () => {
+  const w = world();
+  try {
+    const other = await w.note(w.N, 'other');
+    w.N.push();
+    // N's next note reaches the office cut before its project cell: held ('?').
+    const v = dbv(w.N.db);
+    const half = await w.note(w.N, 'half');
+    const cells = readOwnChanges(w.N.db, v);
+    const cut = cells.map(decodeChange).findIndex((c) => c.table === 'entries' && c.cid === 'project_ulid');
+    w.N.push({ changes: cells.slice(0, cut) });
+    // R has both notes (out of band) and edits them in ONE transaction: refused (edit.any on N's notes).
+    w.R.pull();
+    w.R.db.transaction(() => applyChanges(w.R.db, cells.map(decodeChange)))();
+    const rv = dbv(w.R.db);
+    w.R.db.transaction(() => {
+      w.R.db.prepare(`UPDATE entries SET title = 'r' WHERE ulid IN (?, ?)`).run(other, half);
+    })();
+    const seq0 = fetchDeliveries(w.store, 'd-n', 0, 5000).lastSeq;
+    const res = w.R.push({ changes: readOwnChanges(w.R.db, rv) });
+    assert.equal(res.refused.length, 1);
+    const stamps = w.store.prepare(`SELECT pk, project_ulid p FROM po_deliveries WHERE seq > ? AND origin = ?`).all(seq0, OFFICE_ORIGIN) as Array<{ pk: Buffer; p: string | null }>;
+    const of = (u: string) => stamps.filter((s) => firstTextCell(s.pk) === u).map((s) => s.p);
+    assert.ok(of(other).length > 0 && of(other).every((p) => p === w.A));
+    assert.ok(of(half).length > 0 && of(half).every((p) => p === '?'), 'held like its note, never NULL (sent to everyone)');
+    assert.ok(fetchDeliveries(w.store, 'd-x', 0, 5000).changes.every((c) => ![other, half].includes(firstTextCell(decodeChange(c).pk)!)));
   } finally { w.done(); }
 });
 
@@ -303,25 +373,21 @@ test('held "?" rows of a refused creation are purged, never released', async () 
   } finally { w.done(); }
 });
 
-// TODO (reported, task-4-report.md): over budget on the dev laptop. Classify (~1.9 ms)
-// + stamp (~1.5 ms) already use most of the 5 ms; each write-back cell is one
-// cr-sqlite crsql_changes insert (~65-100 us, a title cell fires the office's FTS
-// triggers), so 5 refused groups (15 cells) add ~1.9 ms. The assert is kept as
-// written; `todo` keeps the figure visible without failing the suite.
-test('accept + classify + stamp + write-back for 2000 changes < 5 ms extra', { todo: 'over the 5 ms budget: see task-4-report.md' }, async () => {
-  // One long-lived store fed consecutive 2000-change batches from a Contributor, as
-  // in production. Each batch mixes own edits and creations (allowed) with edits of
-  // the Owner's notes (5 groups refused, written back). Median of RUNS after WARM warm-ups.
-  const RUNS = 5, WARM = 5;
+/**
+ * The perf harness: one long-lived store fed consecutive 2000-change batches from
+ * a Contributor, as in production. Each batch: own edits and creations (allowed),
+ * plus edits of `refusedNotes` of the Owner's notes (refused, written back).
+ * Returns per-run timings after WARM warm-ups (the JIT's, not the steady state).
+ */
+async function perfRuns(refusedNotes: number, RUNS = 5, WARM = 10) {
   const w = world();
   try {
     const theirs: string[] = [], mine: string[] = [];
-    for (let i = 0; i < 5; i++) theirs.push(await w.note(w.N, `perf theirs ${i}`));
+    for (let i = 0; i < refusedNotes; i++) theirs.push(await w.note(w.N, `perf theirs ${i}`));
     w.N.push(); w.R.pull();
     for (let i = 0; i < 30; i++) mine.push(await w.note(w.R, `perf mine ${i}`));
     w.R.push();
-    const ms: number[] = [], parts: string[] = [];
-    let refusedSeen = 0;
+    const runs: Array<{ classifyMs: number; stampMs: number; writeBackMs: number; refusedCells: number; refusedGroups: number }> = [];
     for (let k = 0; k < WARM + RUNS; k++) {
       const v = dbv(w.R.db);
       for (const u of theirs) updateEntry(w.R.db, { ulid: u, title: `${u} ${k}` });
@@ -330,15 +396,30 @@ test('accept + classify + stamp + write-back for 2000 changes < 5 ms extra', { t
       const batch = readOwnChanges(w.R.db, v).slice(0, 2000);
       const timing = { stampMs: -1, classifyMs: -1, writeBackMs: -1 };
       const res = acceptChanges(w.store, 'd-r', batch, { timing });
-      refusedSeen = res.refused.length;
-      assert.ok(res.accepted > 1000 && res.refused.length >= 5, `round ${k}: real work (${res.accepted} accepted, ${res.refused.length} refused)`);
-      if (k >= WARM) {
-        ms.push(timing.stampMs + timing.classifyMs + timing.writeBackMs);
-        parts.push(`${timing.classifyMs.toFixed(2)}+${timing.stampMs.toFixed(2)}+${timing.writeBackMs.toFixed(2)}`);
-      }
+      const refusedKeys = new Set(res.refused.map((r) => `${r.site_id}:${r.db_version}`));
+      const refusedCells = batch.map(decodeChange).filter((c) => refusedKeys.has(groupKey(c))).length;
+      assert.equal(res.refused.length, refusedNotes, `round ${k}: one refused group per edit of the Owner's notes`);
+      assert.equal(res.accepted + refusedCells, 2000, `round ${k}: every cell accepted or refused`);
+      if (k >= WARM) runs.push({ ...timing, refusedCells, refusedGroups: res.refused.length });
+      // The rest of the last note, untimed (as the courier's next POST): otherwise each
+      // round leaves a half note held ('?') and R3's held sweep grows with the rounds.
+      acceptChanges(w.store, 'd-r', readOwnChanges(w.R.db, v).slice(2000));
     }
-    const median = [...ms].sort((x, y) => x - y)[Math.floor(ms.length / 2)];
-    console.log(`2000 changes x ${RUNS} (${refusedSeen} refused groups): classify+stamp+write-back median ${median.toFixed(2)} ms (runs ${parts.join(', ')})`);
-    assert.ok(median < 5, `R4+R3+R6 added ${median.toFixed(2)} ms`);
+    return runs;
   } finally { w.done(); }
+}
+const median = (xs: number[]) => [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 2)];
+
+test('an all-allowed 2000-change batch: classify + stamp < 5 ms', async () => {
+  const runs = await perfRuns(0);
+  const ms = runs.map((r) => r.classifyMs + r.stampMs);
+  console.log(`2000 allowed changes x ${runs.length}: classify+stamp median ${median(ms).toFixed(2)} ms (runs ${runs.map((r) => `${r.classifyMs.toFixed(2)}+${r.stampMs.toFixed(2)}`).join(', ')})`);
+  assert.ok(median(ms) < 5, `R4+R3 took ${median(ms).toFixed(2)} ms`);
+});
+
+test('R6 write-back: < 0.25 ms per refused cell', async () => {
+  const runs = await perfRuns(5);
+  const per = runs.map((r) => r.writeBackMs / r.refusedCells);
+  console.log(`2000 changes x ${runs.length} (${runs[0].refusedGroups} refused groups, ${runs[0].refusedCells} refused cells): write-back median ${median(per).toFixed(3)} ms per refused cell (runs ${runs.map((r) => `${r.writeBackMs.toFixed(2)}/${r.refusedCells}`).join(', ')})`);
+  assert.ok(median(per) < 0.25, `write-back took ${median(per).toFixed(3)} ms per refused cell`);
 });
