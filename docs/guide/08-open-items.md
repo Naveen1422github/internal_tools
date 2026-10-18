@@ -4,11 +4,17 @@ As of 2026-10-18.
 
 ## Next up
 
-1. **Rinku updates** to migration 0012.
-2. **RnR S2:** the post office refuses changes a role doesn't allow. It starts with the parked "stray note on reconnect" issue, plus two carried items: moving a team note out of every project, and checking permission before numbering a pending note.
+1. **Rinku updates** to migration 0013: pull, rebuild, migrate. Until then his courier shows needs-update. (S2 is merged; COLLAB-189.)
+2. **Your rulings on S2** (see Open below).
 3. **RnR S3:** the team admin screens. Role editing must protect the Owner and Office admin names and stop people from managing someone above them.
 4. **RnR S4:** AI Allow / Ask me / Deny and the approve/reject list.
 5. **Web UI part 3:** this-laptop controls (not designed yet).
+
+## Open after RnR S2 (your ruling, COLLAB-189)
+
+1. **Speed budget:** classify + stamp should take under 5 ms per 2000-change batch. Strict medians: 4.0-4.84 ms when the machine is quiet, 8.4-8.7 ms under load.
+2. **Should an Office member get `module.edit`?** Today Rinku's module push is refused.
+3. **Number squatting on a promoted project:** a short window where someone could grab a number.
 
 ## Not built yet
 
@@ -27,3 +33,16 @@ As of 2026-10-18.
 | Index hub integrity (`reachable ≠ found`) | in progress | T-011 |
 | Office advertises old IP | needs an "update address" command | E-767 |
 | Stray empty `internal-tools/collab.db` | ask before deleting | COLLAB-183 |
+
+## Parked after RnR S2 (COLLAB-189)
+
+| Item | Note |
+|---|---|
+| Re-inserting a deleted (tombstoned) note: its number is not checked (security, existed before S2) | COLLAB-189 |
+| Archive reads every number as an `E` number | COLLAB-189 |
+| Archive roll-up of an `E` note can leak team text | COLLAB-189 |
+| A refused split creation leaves its first half in the office tables | COLLAB-189 |
+| `copyRefused` ignores removed refs | COLLAB-189 |
+| A flaky CLI TLS test | COLLAB-189 |
+| 4 stale server snapshots | COLLAB-189 |
+| Project make-solo / delete inactive (overrides spec R7b) | COLLAB-189 |

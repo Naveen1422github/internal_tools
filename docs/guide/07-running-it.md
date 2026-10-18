@@ -12,6 +12,9 @@ All commands are run from `frontend2\internal-tools` unless noted. `C` below mea
 | List projects | `C project list` |
 | See a team's members and roles | `C team list TT` |
 | Give someone a role | `C team set <member> TT <role>` |
+| List changes the office refused | `C refused list` |
+| Keep a refused note in a solo project | `C refused copy <id> --to <SOLO CODE>` |
+| Throw a refused change away | `C refused delete <id>` |
 | Web UI | `C web`, then open `http://127.0.0.1:7473` |
 
 **Trap:** running the CLI from inside `internal-tools/` picks up an empty stray `collab.db` there and fails with "no such table: entries". Set `COLLAB_DB_PATH` to `internal-tools/mcp/collab.db`, or run it from a folder whose `.collab` names your notebook.

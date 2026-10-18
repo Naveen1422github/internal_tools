@@ -55,6 +55,15 @@ All fixed, with tests.
 - Rinku, as Office member, can no longer share old `E` modules.
 - New projects start with only the creator.
 
+## Stage S2 — built 2026-10-18 (COLLAB-189)
+
+- **Enforced at the office.** Every laptop save is checked against the person's role. This is the real lock.
+- **Pre-checked on the laptop** (`can` / `assertCan`), so you get the answer at once instead of after a sync. Your AI is checked as actor `ai`.
+- **Refusal wording:** `You need "<label>" (<key>) in <CODE> to do this`.
+- **Note numbers** are accepted only if the office allocated them to that note.
+- **Project make-solo and delete are inactive for now.** (This overrides spec R7b.)
+- A refused change is undone on your laptop; see file 4 and `collab refused` in file 7.
+
 ## The AI part (stage S4, not built yet)
 
 - Each permission has three AI settings: **Allow** (the AI just does it), **Ask me** (the AI saves a draft that waits for your approve/reject in the web UI) or **Deny**.
@@ -65,7 +74,7 @@ All fixed, with tests.
 
 | Stage | What |
 |---|---|
-| **S2** | The post office refuses changes a role doesn't allow (edit own vs any, supersede, archive, resolve conflicts), and refused offline work is shown and recoverable. |
+| **S2** | Done 2026-10-18 (see above). |
 | **S3** | The team admin screens in the web UI (members, roles, "who can do what", AI settings), with collab's own design rather than a copy of SupportHub or emp1st. |
 | **S4** | AI Allow / Ask me / Deny and the drafts-to-approve list. |
 

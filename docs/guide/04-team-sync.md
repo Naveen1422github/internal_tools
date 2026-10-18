@@ -26,9 +26,16 @@ If anything is unreachable, the courier retries every 30 seconds. When nothing c
 
 Not "Naveen superseded note 41", but **cells**: "table `entries`, row X, column `superseded_by` changed to Y". That matters for permissions (file 5): the post office has to translate cells back into actions.
 
+## When the office refuses a change
+
+- The office judges each laptop save as a whole. If one part isn't allowed, the whole save is refused (COLLAB-189).
+- **The change is undone on your laptop.** The office writes its own value back and your laptop picks it up on the next sync.
+- A refused **new** note is different: it stays only on your laptop and never reaches the team.
+- The courier shows: `N change(s) refused by the post office: collab refused list`. Nothing you typed is lost silently (file 7 has the commands).
+
 ## Safety rails
 
-- **Schema guard:** a laptop and the office must be on the *same* migration (today 0012), or the office refuses (409) and the courier shows **needs-update**. That's why Rinku must update after every migration.
+- **Schema guard:** a laptop and the office must be on the *same* migration (today 0013), or the office refuses (409) and the courier shows **needs-update**. That's why Rinku must update after every migration.
 - **Certificate pin:** the join code contains the office's certificate fingerprint, so a laptop can't be tricked into talking to a fake office.
 - **Pending notes:** if the office is down, team notes are saved and wait. Nothing is lost.
 - **Solo never leaves:** solo-project notes and new `E` notes are never sent, whatever they're tagged with (rule 5 of the projects spec).

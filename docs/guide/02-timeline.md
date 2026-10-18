@@ -34,3 +34,4 @@ Dates are when the decision or the go-live happened. Each line names the collab 
 - **10-11, B2 copy live** (migration 0010). Your notebook was reorganised into **PS** (personal) and **COLLAB**; 194 old notes were replaced by their copies (COLLAB-178). The same day: **module → project binding** (migration 0011, COLLAB-179), plus the **local-first** (COLLAB-121) and **AI parity** (COLLAB-122) principles.
 - **10-17, RnR designed** (COLLAB-180): roles and permissions for team projects, nothing hardcoded, and the AI never does more than its human.
 - **10-17/18, RnR stage S1 built and live** (migration 0012, COLLAB-182, COLLAB-183): membership, each project's notes only to its members, history for new members, read-only on removal.
+- **10-18, RnR stage S2 built and merged: change enforcement** (migration 0013, COLLAB-189): the post office now refuses changes a role doesn't allow, refused work is kept on the laptop, and `collab refused` lets you recover it.

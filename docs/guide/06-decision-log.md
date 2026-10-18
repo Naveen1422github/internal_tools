@@ -4,6 +4,12 @@ The big choices, newest first. "Rejected" is what was considered and turned down
 
 | Date | Decision | Why | Rejected | Note |
 |---|---|---|---|---|
+| 10-18 | A refused save is refused whole (all-or-nothing) | half a note is worse than none | letting the allowed half through | COLLAB-189 |
+| 10-18 | A refused creation kills the note: it stays only on the laptop | a note the team may not have must not leak half-way | keeping it in the office anyway | COLLAB-189 |
+| 10-18 | The office writes the correction back under its own site | laptops pick the true value up through normal sync, no special channel | a separate "undo" message | COLLAB-189 |
+| 10-18 | Note numbers accepted only if the office allocated them | a laptop can't claim a number it was never given | trusting the number sent | COLLAB-189 |
+| 10-18 | Courier keeps a crash-safe outbox; refusals are recorded per note | a crash mid-send must not lose or repeat work | in-memory queue | COLLAB-189 |
+| 10-18 | Speed gate (classify + stamp under 5 ms per 2000 changes) is strict only with `COLLAB_PERF=1` | a busy machine made the strict test flaky; normal runs use a 3x smoke limit | strict always | COLLAB-189 |
 | 10-17 | RnR: SupportHub-style catalog, team projects only, enforced at the post office, AI ≤ its human | real security can only live on the server; the AI must never be a way around a person's limits | emp1st's fixed action grid; browser-side checks; AI with its own separate rights | COLLAB-180 |
 | 10-17 | Two permission levels: Office and Project | some actions (create a project, add a member) belong to no single project | one level only | spec R13 |
 | 10-17 | New members get the project's full history | same as joining a Slack channel or cloning a repo | only new notes from now on | spec R14 |
