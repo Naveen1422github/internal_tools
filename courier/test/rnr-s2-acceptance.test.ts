@@ -62,21 +62,26 @@ test('RnR S2 acceptance: roles enforced by the office, refusals kept, MCP guard,
     await office.up();
     await cr.syncNow();
     const edits = listRefused(wr).filter((r) => r.kind === 'edit');
+    // Three edits can leave more than one transaction (an older updated_at cell keeps its own); each is its own row.
     assert.ok(edits.length >= 1, 'the refused edit is listed');
-    assert.equal(edits[0].note_ulid, nNote);
-    assert.match(edits[0].key ?? '', /^note\.edit\.any$/);
-    assert.match(edits[0].reason, /note\.edit\.any/);
+    for (const e of edits) {
+      assert.equal(e.note_ulid, nNote);
+      assert.equal(e.key, 'note.edit.any');
+      assert.match(e.reason, /note\.edit\.any/);
+    }
+    const typed = edits.find((e) => e.cells.some((c) => c.table === 'entries' && c.cid === 'title'))!;
+    assert.ok(typed, 'one refused row holds the typed title');
     assert.equal(titleOf(office.store as never, nNote), 'N original', 'the office kept N\'s text');
     await cr.pullNow();
     assert.equal(titleOf(wr, nNote), 'N original', 'R is reverted');
     await cn.syncNow();
     assert.equal(titleOf(wn, nNote), 'N original', 'N never saw R\'s edits');
     createProject(wr, { name: 'R solo', code: 'RS' });
-    const copied = await copyRefused(wr, edits[0].ulid, 'RS');
+    const copied = await copyRefused(wr, typed.ulid, 'RS');
     assert.equal(copied.series, 'RS');
     const copy = wr.prepare(`SELECT title FROM entries WHERE series = 'RS' AND id = ?`).get(copied.id) as { title: string };
-    assert.equal(copy.title, 'R edits N\'s note', 'the copy carries R\'s text');
-    assert.equal(listRefused(wr).filter((r) => r.ulid === edits[0].ulid).length, 0, 'the copied refusal is dropped');
+    assert.equal(copy.title, "R edits N's note", 'the copy carries the typed text');
+    assert.equal(listRefused(wr).filter((r) => r.ulid === typed.ulid).length, 0, 'the copied refusal is dropped');
 
     // 4. R edits its own note: accepted.
     updateEntry(wr, { ulid: rNote, title: 'R first, edited' });
