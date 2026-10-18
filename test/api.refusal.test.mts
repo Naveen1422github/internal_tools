@@ -24,3 +24,18 @@ test('editing a note in a team project where you are a Reader answers 403 { erro
   assert.match(body.error, /^You need "Edit own notes" \(note\.edit\.own\) in TB to do this$/);
   assert.equal(srv.db.prepare(`SELECT title FROM entries WHERE ulid = ?`).get(ulid).title, 'Mine');
 });
+
+test('upserting a shared module as an Office member answers 403 naming module.edit in this office (R-31)', async () => {
+  const { initModule, writeAccessCache, setSyncValue, STARTER_OFFICE_ROLES } = await import('@collab-mcp/core');
+  initModule(srv.db, { slug: 'shared-mod', name: 'Shared' });
+  setSyncValue(srv.db, 'shared_modules', JSON.stringify(['shared-mod']));
+  const member = STARTER_OFFICE_ROLES.find((r: any) => r.name === 'Office member')!;
+  writeAccessCache(srv.db, { office: { role: member.name, keys: member.keys }, projects: [], replays: [] });
+  const res = await fetch(`${srv.baseUrl}/api/collab/module/upsert`, { method: 'POST', body: JSON.stringify({ slug: 'shared-mod', name: 'Renamed' }) });
+  const body: any = await res.json();
+  assert.equal(res.status, 403, JSON.stringify(body));
+  assert.equal(body.error, 'You need "Edit modules" (module.edit) in this office to do this');
+  assert.equal(srv.db.prepare(`SELECT name FROM modules WHERE slug = 'shared-mod'`).get().name, 'Shared');
+  const solo = await fetch(`${srv.baseUrl}/api/collab/module/upsert`, { method: 'POST', body: JSON.stringify({ slug: 'local-mod', name: 'Local' }) });
+  assert.equal(solo.status, 200, 'an unshared module is never sent: no check');
+});
