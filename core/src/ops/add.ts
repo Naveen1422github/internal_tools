@@ -266,11 +266,11 @@ function reasonOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** The key of the allocator's 403 (`refused: true`, Task 6), on the error or its allocateWithRetry cause; else null. */
-function refusedKeyOf(e: unknown): string | null {
+/** The allocator's 403 (`refused: true`, Task 6), on the error or its allocateWithRetry cause; else null. */
+function refusalOf(e: unknown): { key: string; reason: string } | null {
   for (const x of [e, (e as { cause?: unknown } | null)?.cause]) {
-    const r = x as { refused?: unknown; key?: unknown } | null;
-    if (r && r.refused === true) return typeof r.key === "string" ? r.key : "note.create";
+    const r = x as { refused?: unknown; key?: unknown; reason?: unknown } | null;
+    if (r && r.refused === true) return { key: typeof r.key === "string" ? r.key : "note.create", reason: String(r.reason ?? "") };
   }
   return null;
 }
@@ -300,9 +300,9 @@ export async function addEntryAsync(db: DB, args: AddEntryArgs): Promise<AddEntr
   try {
     id = await allocateWithRetry(allocator, ulid, series, SAVE_ATTEMPT);
   } catch (e) {
-    // S2-5: the office refused the number (403): nothing is saved. Same wording as the office's.
-    const key = refusedKeyOf(e);
-    if (key) throw new AccessDeniedError(refusalText(key, series), key, project?.ulid ?? null);
+    // S2-5: the office refused the number (403): nothing is saved. The office's words, else the same sentence built here.
+    const r = refusalOf(e);
+    if (r) throw new AccessDeniedError(r.reason.startsWith("You need") ? r.reason : refusalText(r.key, series), r.key, project?.ulid ?? null);
     return withReason(addEntry(db, { ...args, pendingUlid: ulid }), reasonOf(e));
   }
   return addEntry(db, { ...args, assigned: { ulid, id } });
