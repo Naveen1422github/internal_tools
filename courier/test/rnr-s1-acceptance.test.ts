@@ -170,7 +170,7 @@ test('regression: a copy of the real notebook and office store opens unchanged w
       assert.ok(beforeEntries.length > 0);
       baselineErrors = errorChecks(db, t.dir);
       migrate(db);
-      assert.equal(latestMigration(db), '0012_access_cache');
+      assert.equal(latestMigration(db), '0013_refused_changes');
     } finally { closeWriter(db); }
     db = openNotebook(nb);
     try {

@@ -14,7 +14,7 @@ test('0012 is local and latest', () => {
   const t = freshDb();
   try {
     migrate(t.db);
-    assert.equal(latestMigration(t.db), '0012_access_cache');
+    assert.equal(latestMigration(t.db), '0013_refused_changes');
     assert.ok(!SYNCED_TABLES.includes('access_cache' as never));
   } finally { t.cleanup(); }
 });
