@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { migrate, lastResolution, readBuildInfo, runtimeDirFor, startHeartbeat } from '@collab-mcp/core';
+import { AccessDeniedError, migrate, lastResolution, readBuildInfo, runtimeDirFor, startHeartbeat } from '@collab-mcp/core';
 import * as collab from './tools/collab.js';
 import * as ai from './tools/ai.js';
 import * as sync from './tools/sync.js';
@@ -134,7 +134,7 @@ const server = http.createServer(async (req, res) => {
     } catch (err: any) {
       console.error('[error]', key, err);
       if (!res.headersSent) {
-        send(500, { error: err.message });
+        send(err instanceof AccessDeniedError ? 403 : 500, { error: err.message });
       } else {
         res.end();
       }

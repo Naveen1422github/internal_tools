@@ -5,7 +5,7 @@ import {
   notFound, promoteProject, highestNumberOf, renameProject, resolveDbPath, getSyncValue, SYNC_KEYS, type Project,
   projectCreatedLines, projectListLines, projectListRows, bindModule, unbindModule, bindChangeLine,
 } from "@collab-mcp/core";
-import type { CliResult, Io } from "./io.js";
+import { failPlain, type CliResult, type Io } from "./io.js";
 
 // `collab project ...` (spec P2): projects number their own notes (SH-1, SH-2).
 
@@ -132,7 +132,7 @@ export async function runProject(args: string[], io: Io): Promise<CliResult> {
         return { code: 2 };
     }
   } catch (e) {
-    return fail(io, (e as Error).message);
+    return failPlain(io, e);
   } finally {
     closeDb();
   }
