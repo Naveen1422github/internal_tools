@@ -60,6 +60,11 @@ export function isRefusedNote(db: DB, ulid: string): boolean {
   return !!db.prepare(`SELECT 1 FROM refused_changes WHERE note_ulid = ? LIMIT 1`).get(ulid);
 }
 
+/** The office refused this note's creation (kind 'new'): it is never sent or numbered again (R7, ruling R-23). */
+export function isRefusedCreation(db: DB, ulid: string): boolean {
+  return !!db.prepare(`SELECT 1 FROM refused_changes WHERE note_ulid = ? AND kind = 'new' LIMIT 1`).get(ulid);
+}
+
 function getRefused(db: DB, id: string): RefusedRow {
   const raw = db.prepare(`SELECT * FROM refused_changes WHERE ulid = ?`).get(id) as RawRow | undefined;
   if (!raw) throw new Error(`[collab] no refused change "${id}" on this laptop.`);

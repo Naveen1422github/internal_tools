@@ -13,6 +13,7 @@ import { SYNC_KEYS } from '../src/sync/http-allocator.js';
 import { readOwnChanges } from '../src/sync/changes.js';
 import { sendContext, sendVerdictOf, SHARED_KEY, type NotePlace, type SendVerdict } from '../src/sync/send-filter.js';
 import { unsentSharedCount } from '../src/sync/overview.js';
+import { recordRefusal } from '../src/access/refused.js';
 
 const note = (title: string, extra: Record<string, unknown> = {}) =>
   ({ type: 'decision' as const, title, summary: 's', ...extra });
@@ -113,5 +114,21 @@ test('a change of a note that no longer exists here is skipped, never held', () 
     t.db.prepare(`DELETE FROM entries WHERE ulid = ?`).run(t.u.shPending);
     const v = verdicts(t.db);
     for (const x of v.byUlid.get(t.u.shPending) ?? []) assert.equal(x, 'skip');
+  } finally { t.cleanup(); }
+});
+
+test('a note whose creation the office refused is skipped and not counted as waiting; a refused edit blocks nothing (R7, R-23)', () => {
+  const t = world();
+  try {
+    const before = unsentSharedCount(t.db);
+    const sh = (t.db.prepare(`SELECT ulid FROM projects WHERE code = 'SH'`).get() as { ulid: string }).ulid;
+    recordRefusal(t.db, { noteUlid: t.u.shPending, projectUlid: sh, kind: 'new', key: 'note.create', reason: 'no', cells: [] });
+    recordRefusal(t.db, { noteUlid: t.u.shNumbered, projectUlid: sh, kind: 'edit', key: 'note.edit.any', reason: 'no', cells: [] });
+    const v = verdicts(t.db);
+    assert.deepEqual([...(v.byUlid.get(t.u.shPending) ?? [])], ['skip'], 'refused pending: not held');
+    assert.deepEqual([...(v.byUlid.get(t.u.shNumbered) ?? [])], ['send'], 'a refused edit: later edits are judged again');
+    assert.deepEqual([...(v.byUlid.get(t.u.eNumberedShared) ?? [])], ['send'], 'other notes unchanged');
+    assert.ok(unsentSharedCount(t.db) < before);
+    assert.equal(unsentSharedCount(t.db), v.all.filter((x) => x !== 'skip').length);
   } finally { t.cleanup(); }
 });

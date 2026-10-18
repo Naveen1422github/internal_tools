@@ -14,4 +14,6 @@ export const COURIER_KEYS = {
   backfilledProjects: "backfilled_projects",
   /** JSON list of {code, office_ulid, local_ulid, local_code}: team projects that clash with a local one (P10). Non-empty = pulling is paused. */
   projectClash: "project_clash",
+  /** JSON Outbox: a push sent but not yet acknowledged (R-22); resent before anything is pulled. */
+  inflight: "push_inflight",
 } as const;

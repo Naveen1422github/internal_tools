@@ -6,7 +6,7 @@ import {
   readOwnChanges, decodeChange, applyChanges, reindexFts, requestJson, openEventStream, hasSeries, hasProjectLeft,
   sendContext, sendVerdictOf, resolveAllocator, allocateWithRetry, formatEntryRef,
   upsertTeamProjectFromOffice, localClashOf, projectClashText, assignPendingNumber,
-  writeAccessCache, markProjectLeft, clearProjectLeft,
+  writeAccessCache, markProjectLeft, clearProjectLeft, recordRefusal, entryUlidOf,
   AccessRevokedError, SchemaMismatchError, PinMismatchError, COURIER_PORT_KEY,
   type PostOfficeTarget, type WireChange, type EventStream, type NotePlace, type ProjectClash, type AccessPayload,
 } from "@collab-mcp/core";
@@ -52,28 +52,55 @@ type Timer = ReturnType<typeof setTimeout>;
 const now = () => new Date().toISOString();
 /** sync_state key of a replay's bookmark (R14); deleted once the office confirms the replay done. */
 const replayKey = (projectUlid: string) => `replay:${projectUlid}`;
+/** One office refusal (R5): a laptop transaction, named by hex site_id + db_version (ruling R-1). */
+interface Refusal { site_id: string; db_version: number; ulid: string | null; key: string | null; reason: string }
+/** A push not yet acknowledged (R-22): exactly what was sent, and what its acknowledgement moves. */
+interface Outbox { top: number; shared: string; projects: string; pages: WireChange[][] }
+const groupKey = (w: WireChange) => `${decodeChange(w).site_id.toString("hex")}:${w.db_version}`;
 const changeKey = (w: WireChange) => `${w.site_id}|${w.db_version}|${w.seq}|${w.table}|${w.pk}|${w.cid}`;
 
 /**
- * Requests of about `size` changes, in order, except that every `entries` cell
- * of one note rides in the request of that note's first one. The office (R3)
- * holds a note's rows until it has the note's project cell; a note cut before
- * that cell would look like a pre-0009 note with no project, and go to everyone.
+ * Requests of about `size` changes, in order, with two things never split:
+ * one laptop transaction, (site_id, db_version), because the office judges
+ * each one whole (R5); and every `entries` cell of one note, because the office
+ * (R3) holds a note's rows until it has the note's project cell (a note cut
+ * before it would look like a pre-0009 note with no project, and go to
+ * everyone). Both rules join changes into units; a unit bigger than `size`
+ * goes alone on its own page. Within a page, the batch order is kept.
  */
 export function pagesOf(batch: WireChange[], noteOf: (w: WireChange) => string | null, size: number): WireChange[][] {
-  const pages: WireChange[][] = [];
-  const pageOfNote = new Map<string, number>();
-  let fill = size;
+  const up = new Map<string, string>();
+  const root = (k: string): string => {
+    let r = k;
+    while (up.has(r) && up.get(r) !== r) r = up.get(r)!;
+    for (let x = k; x !== r;) { const n = up.get(x)!; up.set(x, r); x = n; }
+    if (!up.has(r)) up.set(r, r);
+    return r;
+  };
+  const group = (w: WireChange) => `g:${w.site_id}:${w.db_version}`;
   for (const w of batch) {
     const u = w.table === "entries" ? noteOf(w) : null;
-    const at = u === null ? undefined : pageOfNote.get(u);
-    if (at !== undefined) { pages[at].push(w); continue; }
-    if (fill >= size) { pages.push([]); fill = 0; }
-    pages[pages.length - 1].push(w);
-    fill++;
-    if (u !== null) pageOfNote.set(u, pages.length - 1);
+    const g = root(group(w));
+    if (u !== null) { const n = root(`n:${u}`); if (n !== g) up.set(n, g); }
   }
-  return pages;
+  const unitSize = new Map<string, number>();
+  const order: string[] = [];
+  for (const w of batch) {
+    const k = root(group(w));
+    if (!unitSize.has(k)) order.push(k);
+    unitSize.set(k, (unitSize.get(k) ?? 0) + 1);
+  }
+  const pageOfUnit = new Map<string, number>();
+  let pages = 0, fill = 0;
+  for (const k of order) {
+    const n = unitSize.get(k)!;
+    if (pages === 0 || (fill > 0 && fill + n > size)) { pages++; fill = 0; }
+    pageOfUnit.set(k, pages - 1);
+    fill += n;
+  }
+  const out: WireChange[][] = Array.from({ length: pages }, () => []);
+  for (const w of batch) out[pageOfUnit.get(root(group(w)))!].push(w);
+  return out;
 }
 
 export class Courier {
@@ -163,6 +190,7 @@ export class Courier {
   }
   pullNow(): Promise<void> {
     return this.enqueue(async () => {
+      await this.flushInflight(); // R-22: before any pull can apply a write-back over it
       if (this.clashes().length > 0) return this.holdForClash();
       await this.pull();
     });
@@ -177,6 +205,9 @@ export class Courier {
    */
   syncNow(): Promise<void> {
     return this.enqueue(async () => {
+      // R-22: an unacknowledged push goes first, before a replay or pull applies
+      // the office's write-back over its cells (the refused values would be lost).
+      await this.flushInflight();
       await this.refreshModules();
       await this.refreshProjects();
       // Before pull (R14): a replay brings an old note's base cells first, so a
@@ -266,10 +297,27 @@ export class Courier {
   private clashes(): ProjectClash[] {
     try { return JSON.parse(getSyncValue(this.db, K.projectClash) ?? "[]") as ProjectClash[]; } catch { return []; }
   }
-  /** What lastError should keep showing after a successful step (rule 8): a clash, or a note the office won't number. */
+  /** What lastError should keep showing after a successful step (rule 8): a clash, or a note the office won't number; and refusals (R6). */
   private notice(): string | null {
     const c = this.clashes();
-    return c.length > 0 ? projectClashText(c) : this.numberingProblem;
+    const main = c.length > 0 ? projectClashText(c) : this.numberingProblem;
+    const n = this.refusedCount();
+    if (n === 0) return main;
+    const line = `${n} change(s) refused by the post office: collab refused list`;
+    return main ? `${main}; ${line}` : line;
+  }
+  /** Rows in the local refused_changes (0013); 0 before that migration. */
+  private refusedCount(): number {
+    if (!this.hasRefusedTable()) return 0;
+    return (this.db.prepare(`SELECT COUNT(*) AS n FROM refused_changes`).get() as { n: number }).n;
+  }
+  private hasRefusedTable(): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'refused_changes'`).get();
+  }
+  /** The project a note is in here (null: none, or before 0009). */
+  private projectOf(ulid: string): string | null {
+    if (!hasSeries(this.db)) return null;
+    return (this.db.prepare(`SELECT project_ulid FROM entries WHERE ulid = ?`).get(ulid) as { project_ulid: string | null } | undefined)?.project_ulid ?? null;
   }
 
   /**
@@ -408,18 +456,21 @@ export class Courier {
    * the office gave before an answer was lost comes back again (E-713).
    * Never throws: an unreachable office stops the loop and schedules the
    * normal retry; a note the office refuses to number is skipped and shown.
+   * R7: a 403 (no note.create) is a refusal, kept with the note's cells, and the
+   * note is never asked for again (refused notes are left out here).
    */
   private async numberPending(): Promise<"ok" | "failed" | "revoked"> {
     this.numberingProblem = null;
     const series = hasSeries(this.db);
+    const notRefused = this.hasRefusedTable() ? " AND NOT EXISTS (SELECT 1 FROM refused_changes r WHERE r.note_ulid = e.ulid AND r.kind = 'new')" : "";
     const rows = (series
       ? this.db.prepare(
           `SELECT e.ulid, e.series FROM entries e LEFT JOIN projects p ON p.ulid = e.project_ulid
-            WHERE e.id IS NULL AND e.deleted_at IS NULL
+            WHERE e.id IS NULL AND e.deleted_at IS NULL${notRefused}
               AND (e.project_ulid IS NULL OR (p.mode = 'team' AND p.team = ?${hasProjectLeft(this.db) ? " AND p.left_at IS NULL" : ""}))
             ORDER BY e.ulid`, // a team this laptop left is never numbered again (stage B2, P11)
         ).all(this.target.fingerprint)
-      : this.db.prepare(`SELECT ulid, 'E' AS series FROM entries WHERE id IS NULL AND deleted_at IS NULL ORDER BY ulid`).all()
+      : this.db.prepare(`SELECT ulid, 'E' AS series FROM entries e WHERE id IS NULL AND deleted_at IS NULL${notRefused} ORDER BY ulid`).all()
     ) as Array<{ ulid: string; series: string }>;
     if (rows.length === 0) return "ok";
     const allocator = resolveAllocator(this.db);
@@ -435,6 +486,11 @@ export class Courier {
         const c = (e as { cause?: unknown })?.cause;
         const cause = c instanceof Error ? c : e instanceof Error ? e : new Error(String(e));
         if (cause instanceof AccessRevokedError) { this.revoked(cause); return "revoked"; }
+        const refusal = cause as { refused?: boolean; key?: string; reason?: string };
+        if (refusal.refused === true && this.hasRefusedTable()) {
+          this.recordNewRefusal(r.ulid, refusal.key ?? "note.create", refusal.reason ?? cause.message);
+          continue;
+        }
         if (cause instanceof SchemaMismatchError || cause instanceof PinMismatchError || (cause as { retriable?: boolean }).retriable !== false) {
           this.failed(cause); // offline (or paused) + the normal retry; push still runs
           return "failed";
@@ -447,6 +503,15 @@ export class Courier {
     }
     if (numbered > 0) this.log(`numbered ${numbered} pending note(s)`);
     return "ok";
+  }
+
+  /** R7: keep a note the office won't let us create, with its current cells (nothing typed is lost, R6). */
+  private recordNewRefusal(ulid: string, key: string, reason: string): void {
+    this.db.transaction(() => {
+      const cells = readOwnChanges(this.db, 0).filter((w) => entryUlidOf(this.db, w.table, Buffer.from(w.pk, "base64")) === ulid);
+      recordRefusal(this.db, { noteUlid: ulid, projectUlid: this.projectOf(ulid), kind: "new", key, reason, cells });
+    })();
+    this.log(`note ${ulid} was refused by the post office: ${reason} (collab refused list)`);
   }
 
   private async refreshModules(): Promise<void> {
@@ -464,6 +529,7 @@ export class Courier {
    * the whole of a note just MOVED into a shared module.
    */
   private async push(): Promise<void> {
+    await this.flushInflight();
     const since = Number(getSyncValue(this.db, K.sent) ?? 0);
     const ctx = sendContext(this.db);
     const shared = ctx.shared;
@@ -509,25 +575,94 @@ export class Courier {
       }
     }
     const batch = [...out.values()];
-    for (const page of pagesOf(batch, (w) => noteOf.get(changeKey(w)) ?? null, this.opt.batchSize)) {
-      const r = await requestJson(this.target, "POST", "/v1/changes", { changes: page });
-      if (r.status !== 200) throw new Error(`the post office refused the changes (${r.status}${r.body?.error ? `: ${r.body.error}` : ""})`);
-    }
-    // Only now is everything up to `top` acknowledged. A crash before this line
-    // means a resend, which the post office de-duplicates.
     const sharedJson = JSON.stringify([...shared].sort());
     const projectsJson = JSON.stringify([...ctx.teamProjects].sort());
-    if (top !== since || sharedJson !== getSyncValue(this.db, K.backfilled) || projectsJson !== (getSyncValue(this.db, K.backfilledProjects) ?? "[]")) {
-      this.db.transaction(() => {
-        setSyncValue(this.db, K.sent, String(top));
-        setSyncValue(this.db, K.backfilled, sharedJson);
-        setSyncValue(this.db, K.backfilledProjects, projectsJson);
-      })();
+    // R5: pages never split a laptop transaction; the office judges each one whole.
+    const box: Outbox = { top, shared: sharedJson, projects: projectsJson, pages: pagesOf(batch, (w) => noteOf.get(changeKey(w)) ?? null, this.opt.batchSize) };
+    // R-22: kept before the first POST, so a lost answer or a failed page is
+    // resent exactly as sent, even after a pull wrote the office's value over it.
+    if (batch.length > 0) setSyncValue(this.db, K.inflight, JSON.stringify(box));
+    const refused = await this.sendPages(box.pages);
+    // Only now is everything up to `top` acknowledged. A crash before this line
+    // means a resend, which the post office de-duplicates (a refused group gets
+    // the same refusal again).
+    if (batch.length > 0 || top !== since || sharedJson !== getSyncValue(this.db, K.backfilled) || projectsJson !== (getSyncValue(this.db, K.backfilledProjects) ?? "[]")) {
+      this.acknowledge(box, refused);
     }
     if (batch.length > 0) {
       this.set({ sentTotal: this.st.sentTotal + batch.length, lastPushAt: now(), lastError: this.notice() });
       this.log(`sent ${batch.length} change(s)`);
     }
+  }
+
+  /** POST the pages in order; the office's refusals of all of them (R5). Throws on any non-200. */
+  private async sendPages(pages: WireChange[][]): Promise<Refusal[]> {
+    const refused: Refusal[] = [];
+    for (const page of pages) {
+      const r = await requestJson(this.target, "POST", "/v1/changes", { changes: page });
+      if (r.status !== 200) throw new Error(`the post office refused the changes (${r.status}${r.body?.error ? `: ${r.body.error}` : ""})`);
+      if (Array.isArray(r.body?.refused)) refused.push(...(r.body.refused as Refusal[]));
+    }
+    return refused;
+  }
+
+  /**
+   * R6: the refusals, the sent-bookmark, the backfill lists and the outbox's
+   * removal commit together, so a refusal is recorded exactly once.
+   */
+  private acknowledge(box: Outbox, refused: Refusal[]): void {
+    this.db.transaction(() => {
+      if (refused.length > 0) this.recordRefusals(box.pages.flat(), refused);
+      const sent = Number(getSyncValue(this.db, K.sent) ?? 0);
+      setSyncValue(this.db, K.sent, String(Math.max(sent, box.top)));
+      setSyncValue(this.db, K.backfilled, box.shared);
+      setSyncValue(this.db, K.backfilledProjects, box.projects);
+      this.db.prepare(`DELETE FROM sync_state WHERE key = ?`).run(K.inflight);
+    })();
+  }
+
+  /**
+   * R-22: a push whose answer never came (lost, crashed, or a later page
+   * failed) is resent push-only, exactly as kept, before anything is pulled.
+   * The office answers a resent refused group with the same refusal.
+   */
+  private async flushInflight(): Promise<void> {
+    const raw = getSyncValue(this.db, K.inflight);
+    if (!raw) return;
+    let box: Outbox;
+    try { box = JSON.parse(raw) as Outbox; } catch {
+      this.log("dropped an unreadable unsent push; the next push resends from the sent-bookmark");
+      this.db.prepare(`DELETE FROM sync_state WHERE key = ?`).run(K.inflight);
+      return;
+    }
+    const refused = await this.sendPages(box.pages);
+    this.acknowledge(box, refused);
+    const n = box.pages.reduce((a, p) => a + p.length, 0);
+    this.set({ sentTotal: this.st.sentTotal + n, lastPushAt: now(), lastError: this.notice() });
+    this.log(`resent ${n} change(s) whose answer was lost`);
+  }
+
+  /**
+   * Keep each refused group with the cells it carried (R6); the caller owns the
+   * transaction. A refused creation is `new` (the note stays local, no write-back,
+   * R7); anything else is an `edit`, which the office's write-back reverts on pull.
+   */
+  private recordRefusals(batch: WireChange[], refused: Refusal[]): void {
+    const groups = new Map<string, WireChange[]>();
+    for (const w of batch) {
+      const k = groupKey(w);
+      const g = groups.get(k);
+      if (g) g.push(w); else groups.set(k, [w]);
+    }
+    for (const f of refused) {
+      const cells = groups.get(`${String(f.site_id).toLowerCase()}:${f.db_version}`) ?? [];
+      const ulid = typeof f.ulid === "string" ? f.ulid : null;
+      recordRefusal(this.db, {
+        noteUlid: ulid, projectUlid: ulid ? this.projectOf(ulid) : null,
+        kind: f.key === "note.create" ? "new" : "edit", key: f.key ?? null, reason: String(f.reason ?? "refused by the post office"), cells,
+      });
+    }
+    this.log(`${refused.length} change group(s) refused by the post office (collab refused list)`);
   }
 
   /** Fetch deliveries after the receive-bookmark; apply + re-index (D15) + move the bookmark in ONE transaction. */
@@ -633,6 +768,7 @@ export class Courier {
         } else if (name === "access") {
           // A membership or role changed (R2): learn the projects, then the keys and any replay.
           void this.enqueue(async () => {
+            await this.flushInflight(); // R-22: before a replay applies anything
             await this.refreshProjects();
             await this.refreshAccess();
           });
