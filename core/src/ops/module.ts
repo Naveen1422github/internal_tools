@@ -270,6 +270,8 @@ export function deleteModule(
   if (refs.entry_count > 0 || refs.task_count > 0) {
     return { deleted: false, entry_count: refs.entry_count, task_count: refs.task_count };
   }
+  // R-31/R-35: the office judges a shared module's delete cell as module.edit; no row, no cell.
+  if (moduleExists(db, slug)) assertCanModule(db, slug, true);
   db.prepare("DELETE FROM modules WHERE slug=?").run(slug);
   return { deleted: true };
 }

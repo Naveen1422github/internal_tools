@@ -322,3 +322,34 @@ test("R-32: closing a task resolves only the handoffs the person may edit; anoth
     assert.equal(status(theirs.ulid), 'resolved');
   } finally { me.cleanup(); other.cleanup(); }
 });
+
+// R-35: deleting a module is a modules delete cell the office judges as module.edit
+// (shared slug): the laptop refuses it up front instead of a silent revert.
+test('deleteModule: an Office member is refused module.edit on a shared module; unshared or admin passes', async () => {
+  const { STARTER_OFFICE_ROLES } = await import('../src/access/catalog.js');
+  const { deleteModule } = await import('../src/ops/module.js');
+  const { setSyncValue } = await import('../src/sync/state.js');
+  const officeRole = (db: any, name: 'Office admin' | 'Office member') =>
+    writeAccessCache(db, { office: { role: name, keys: STARTER_OFFICE_ROLES.find((r) => r.name === name)!.keys }, projects: [], replays: [] });
+  const t = freshDb({ shared: true });
+  try {
+    migrate(t.db);
+    for (const slug of ['shared', 'mine', 'busy']) initModule(t.db, { slug, name: slug });
+    addEntry(t.db, note('busy note', { module: 'busy', assigned: assigned(901) }));
+    setSyncValue(t.db, 'shared_modules', JSON.stringify(['shared', 'busy', 'gone']));
+    const exists = (slug: string) => !!t.db.prepare(`SELECT 1 FROM modules WHERE slug = ?`).get(slug);
+    officeRole(t.db, 'Office member');
+    assert.throws(() => deleteModule(t.db, 'shared'), (e: unknown) =>
+      e instanceof AccessDeniedError && e.key === 'module.edit' && e.projectUlid === null
+      && e.message === 'You need "Edit modules" (module.edit) in this office to do this');
+    assert.ok(exists('shared'), 'nothing deleted');
+    // Nothing would be written: no refusal (still in use, or no such module).
+    assert.deepEqual(deleteModule(t.db, 'busy'), { deleted: false, entry_count: 1, task_count: 0 });
+    assert.deepEqual(deleteModule(t.db, 'gone'), { deleted: true });
+    // An unshared module is never sent: no check.
+    assert.deepEqual(deleteModule(t.db, 'mine'), { deleted: true });
+    officeRole(t.db, 'Office admin');
+    assert.deepEqual(deleteModule(t.db, 'shared'), { deleted: true });
+    assert.ok(!exists('shared'));
+  } finally { t.cleanup(); }
+});
