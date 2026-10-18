@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import {
-  addEntryAsync, newUlid, getSyncValue, createProject, copyRefused, listRefused, unsentSharedCount, setAllocator, setAllocationRetry, type WireChange,
+  addEntry, addEntryAsync, newUlid, getSyncValue, createProject, copyRefused, listRefused, unsentSharedCount, setAllocator, setAllocationRetry, type WireChange,
 } from '@collab-mcp/core';
 import { registerProject, setProjectMember } from '@collab-mcp/post-office';
 import { tempDir, startOffice, joinedDb, openWriter, closeWriter } from './world.js';
@@ -213,6 +213,31 @@ test('offline note in a project where note.create was taken away: refused on num
     assert.equal(w.office.store.prepare(`SELECT 1 FROM entries WHERE ulid = ?`).get(ulid), undefined, 'never sent');
     assert.equal(unsentSharedCount(w.wr), 0, 'not counted as waiting');
     assert.equal(titleOf(w.wr, ulid), 'written offline', 'the note stays local');
+  } finally { await w.cleanup(); }
+});
+
+test('a creation refused for a structural reason (a forged number) is filed new and never sent again (R-30)', async () => {
+  const w = await world();
+  try {
+    setProjectMember(w.office.store, w.n, w.sh.ulid, w.r, 'Contributor');
+    await w.cr.syncNow();
+    // A number the office never allocated: the creating group is refused (R-28), key null.
+    const ulid = newUlid();
+    addEntry(w.wr, { type: 'decision', title: 'forged number', summary: 's', project: 'SH', assigned: { ulid, id: 4242 } });
+    await w.cr.pushNow();
+    const rows = listRefused(w.wr);
+    assert.equal(rows.length, 1);
+    assert.deepEqual([rows[0].kind, rows[0].note_ulid, rows[0].key], ['new', ulid, null]);
+    assert.match(rows[0].reason, /number is given by the post office/);
+    assert.equal(w.office.store.prepare(`SELECT 1 FROM entries WHERE ulid = ?`).get(ulid), undefined, 'the office holds nothing of it');
+    assert.equal(unsentSharedCount(w.wr), 0, 'skipped by the send filter, not waiting');
+    const posts = () => w.office.requests.filter((q) => q.route === 'POST /v1/changes' && q.device === w.r).length;
+    const before = posts();
+    w.wr.prepare(`UPDATE entries SET title = 'forged number, edited' WHERE ulid = ?`).run(ulid);
+    await w.cr.syncNow();
+    assert.equal(posts(), before, 'never sent again, even after an edit');
+    assert.equal(listRefused(w.wr).length, 1);
+    assert.equal(titleOf(w.wr, ulid), 'forged number, edited', 'the note stays local');
   } finally { await w.cleanup(); }
 });
 

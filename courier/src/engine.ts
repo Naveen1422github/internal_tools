@@ -648,8 +648,9 @@ export class Courier {
    * transaction. One row per note of the group (R-24: one transaction can touch
    * several notes, e.g. supersede, and each note is recovered or discarded on
    * its own; rule 5). Cells of no note go with the office's note. A note whose
-   * creation is in a group refused for note.create is `new` (it stays local, no
-   * write-back, R7); anything else is an `edit`, reverted by the write-back on pull.
+   * creation (its created_at cell) is in a refused group is `new`, whatever the key
+   * (R-30: the office marks it dead the same way; it stays local, no write-back,
+   * R7); anything else is an `edit`, reverted by the write-back on pull.
    */
   private recordRefusals(batch: WireChange[], refused: Refusal[]): void {
     const groups = new Map<string, WireChange[]>();
@@ -675,7 +676,7 @@ export class Courier {
         const created = cells.some((w) => w.table === "entries" && w.cid === "created_at");
         recordRefusal(this.db, {
           noteUlid: u, projectUlid: u ? this.projectOf(u) : null,
-          kind: f.key === "note.create" && created ? "new" : "edit", key: f.key ?? null, reason, cells,
+          kind: created ? "new" : "edit", key: f.key ?? null, reason, cells,
         });
       }
     }
