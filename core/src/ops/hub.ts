@@ -4,6 +4,7 @@ import { hasSeries, liveEntry } from "../schema.js";
 import { ownerOfRef } from "../entry-write.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { formatEntryRef } from "../entry-ref.js";
+import { assertCanModule } from "../access/can.js";
 
 // T-011: one main note (hub) per module (E-657). All "is it linked?" logic
 // lives here. Rules:
@@ -69,6 +70,7 @@ export function setModuleHub(
   if (!hasUlidColumns(db)) throw new Error("main notes need migration 0005 or later");
   const mod = db.prepare(`SELECT slug FROM modules WHERE slug = ?`).get(args.slug);
   if (!mod) throw new Error(`module '${args.slug}' not found; create it with collab_module_init first`);
+  assertCanModule(db, args.slug, true); // R-31: setting or clearing the hub edits the module
 
   if (args.id === null) {
     db.prepare(`UPDATE modules SET hub = NULL WHERE slug = ?`).run(args.slug);

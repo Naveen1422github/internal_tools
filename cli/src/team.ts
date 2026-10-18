@@ -1,7 +1,7 @@
 import {
   closeDb, findProject, formatJoinCode, getDb, postOfficeTargetFromDb, requestJson, type PostOfficeTarget,
 } from "@collab-mcp/core";
-import type { CliResult, Io } from "./io.js";
+import { failPlain, type CliResult, type Io } from "./io.js";
 
 // `collab team ...` (RnR S1, R13): who is in a team project and what role they
 // hold, asked of the post office. The office decides; this only asks and prints.
@@ -122,8 +122,7 @@ export async function runTeam(args: string[], io: Io): Promise<CliResult> {
         return { code: 2 };
     }
   } catch (e) {
-    io.err(`collab: ${(e as Error).message.replace(/^\[collab(-mcp)?\] /, "")}`);
-    return { code: 1 };
+    return failPlain(io, e);
   } finally {
     closeDb();
   }

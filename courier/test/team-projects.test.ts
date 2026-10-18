@@ -118,7 +118,7 @@ test('Review Focus 3: the answer was lost after the office allocated: the retry 
     team(w.office);
     await w.ca.syncNow();
     const u = newUlid();
-    assert.equal(allocate(w.office.store, u, 'd', 'SH'), 1); // the office numbered it; the laptop never heard
+    assert.equal(allocate(w.office.store, u, null, 'SH'), 1); // the office numbered it; the laptop never heard
     const p = addEntry(w.wa, { ...note('lost answer'), project: 'SH', pendingUlid: u });
     assert.deepEqual([p.pending, p.ulid], [true, u]);
     await w.ca.numberPendingNow();
@@ -187,6 +187,11 @@ test('Review Focus 4: a pulled note names an unknown project: the pull learns it
   try {
     await w.ca.syncNow(); await w.cb.syncNow();
     team(w.office, 'ZZ', 'Zed');
+    // R14: B, just added to ZZ, is owed a replay (empty: ZZ is new), and the office holds
+    // ZZ's rows back from B's pulls until it is done. Run B's replay step alone
+    // (refreshAccess -> runReplays, as on the `access` doorbell) without the projects
+    // refresh, so the pull below is still what teaches B the project.
+    await (w.cb as any).enqueue(() => (w.cb as any).refreshAccess());
     await w.ca.syncNow();
     const z = await addEntryAsync(w.wa, note('zz one', { project: 'ZZ' }));
     await w.ca.pushNow();
@@ -212,7 +217,7 @@ test('a note that can never be numbered stays pending; everything else is sent a
     setAllocator({
       allocate: async (u, s) => {
         if (s === 'SH') throw Object.assign(new Error('the post office did not number this note in series SH: update the post office'), { retriable: false });
-        return allocate(w.office.store, u, 'fake', s);
+        return allocate(w.office.store, u, null, s); // the office machine (unguarded): the test is about the courier
       },
     });
     const sh = await addEntryAsync(w.wa, note('never numbered', { project: 'SH' }));
@@ -257,7 +262,8 @@ test('Review Focus 5: a team code that clashes with a local solo project is neve
     assert.equal(`${mine.series}-${mine.id}`, 'SH-1');
     const sh = team(w.office);
     await w.ca.syncNow();
-    const aNote = addEntry(w.wa, { ...note('A team SH one'), project: 'SH', assigned: { ulid: '00000000000000000000000001', id: 1 } });
+    const aUlid = '00000000000000000000000001'; // numbered by the office, as allocate does (R-28)
+    const aNote = addEntry(w.wa, { ...note('A team SH one'), project: 'SH', assigned: { ulid: aUlid, id: allocate(w.office.store, aUlid, null, 'SH') } });
     await w.ca.pushNow();
     assert.equal(atOffice(w.office, aNote.ulid)?.title, 'A team SH one');
     const bE = await addEntryAsync(w.wb, note('B E note', { module: 'portfolio' }));

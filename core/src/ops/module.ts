@@ -2,6 +2,7 @@ import type { DB } from "../db.js";
 import { hasSeries, liveEntry } from "../schema.js";
 import { getHubStatus, type HubState, type HubCoverage } from "./hub.js";
 import { ensureCrsqlite } from "../sync/extension.js";
+import { assertCanModule } from "../access/can.js";
 
 // ------------------------------------------------------------
 // Types
@@ -46,6 +47,10 @@ export interface ModuleCard {
 // lowercase alphanumeric + hyphens, 1-60 chars, no underscores, must start with alphanumeric.
 const SLUG_REGEX = /^[a-z0-9][a-z0-9-]{0,59}$/;
 
+function moduleExists(db: DB, slug: string): boolean {
+  return !!db.prepare(`SELECT 1 FROM modules WHERE slug = ?`).get(slug);
+}
+
 // ------------------------------------------------------------
 // initModule — idempotent via INSERT OR IGNORE
 // ------------------------------------------------------------
@@ -56,6 +61,9 @@ export function initModule(db: DB, args: InitModuleArgs): { slug: string } {
       `invalid slug '${args.slug}': must be lowercase alphanumeric or hyphens, 1-60 chars, no underscores, start with alphanumeric`
     );
   }
+  // R-31: an existing slug is left as it is (nothing written, nothing to judge).
+  if (moduleExists(db, args.slug)) return { slug: args.slug };
+  assertCanModule(db, args.slug, false);
 
   db.prepare(
     `
@@ -236,6 +244,7 @@ export function upsertModule(db: DB, args: UpsertModuleArgs): { slug: string } {
       `invalid slug '${args.slug}': must be lowercase alphanumeric or hyphens, 1-60 chars, no underscores, start with alphanumeric`
     );
   }
+  assertCanModule(db, args.slug, moduleExists(db, args.slug)); // R-31
   db.prepare(`
     INSERT INTO modules (slug, name, summary, description, current_goal, status)
     VALUES (?, ?, ?, ?, ?, ?)
@@ -261,6 +270,8 @@ export function deleteModule(
   if (refs.entry_count > 0 || refs.task_count > 0) {
     return { deleted: false, entry_count: refs.entry_count, task_count: refs.task_count };
   }
+  // R-31/R-35: the office judges a shared module's delete cell as module.edit; no row, no cell.
+  if (moduleExists(db, slug)) assertCanModule(db, slug, true);
   db.prepare("DELETE FROM modules WHERE slug=?").run(slug);
   return { deleted: true };
 }

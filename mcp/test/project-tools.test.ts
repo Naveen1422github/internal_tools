@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import { migrate, addEntry, createProject, addNotebook, initModule, enableSync, setSyncValue, planCopy, copyPlanLines, markProjectLeft, projectListLines, projectListRows, findProject, projectCreatedLines } from '@collab-mcp/core';
+import { writeAccessCache, migrate, addEntry, createProject, addNotebook, initModule, enableSync, setSyncValue, planCopy, copyPlanLines, markProjectLeft, projectListLines, projectListRows, findProject, projectCreatedLines } from '@collab-mcp/core';
 
 const SERVER = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'server.js');
 
@@ -348,5 +348,22 @@ test('collab_project_bind / unbind: local binding, list shows modules, precedenc
     const u = await call('collab_project_unbind', { module: 'demo' });
     assert.match(u.text, /no longer bound to NV/);
     assert.equal((await call('collab_add', { type: 'decision', title: 'back', summary: 's', module: 'demo' })).structured.series, 'SH');
+  });
+});
+
+test('R8: the MCP (actor "ai") still gets the role check: a Reader cannot add to a team project, before any network call', async () => {
+  await withServer(async ({ dbPath, call }) => {
+    const TM = '01JPR0JECTTM00000000000000';
+    const db = new Database(dbPath);
+    db.prepare(`INSERT INTO projects (ulid, name, code, mode, team) VALUES (?, 'team TM', 'TM', 'team', 'fp')`).run(TM);
+    writeAccessCache(db, { office: null, projects: [{ ulid: TM, code: 'TM', role: 'Reader', keys: ['note.view'], ai: {} }], replays: [] });
+    const before = (db.prepare(`SELECT COUNT(*) c FROM entries`).get() as { c: number }).c;
+    db.close();
+    const r = await call('collab_add', { type: 'gotcha', title: 'g', summary: 's', project: 'TM' });
+    assert.equal(r.isError, true, r.text);
+    assert.match(r.text, /You need "Create notes" \(note\.create\) in TM to do this/);
+    const db2 = new Database(dbPath);
+    try { assert.equal((db2.prepare(`SELECT COUNT(*) c FROM entries`).get() as { c: number }).c, before, 'nothing saved'); }
+    finally { db2.close(); }
   });
 });

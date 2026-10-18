@@ -1,5 +1,5 @@
 import { KIND_BY_TYPE, CATEGORY_BY_TYPE, SLUG_REGEX, getDb } from '@collab-mcp/core';
-import { runSearch } from './collab.js';
+import { runSearch, errStatus } from './collab.js';
 import http from 'node:http';
 
 // Test seam: a holder object so ESM consumers can inject a mock (the namespace
@@ -222,7 +222,7 @@ You can perform up to ${maxIters} search steps before answering. Keep searches f
       }
     } catch (err: any) {
       if (send) {
-        return send(500, { error: err.message });
+        return send(errStatus(err), { error: err.message });
       }
       throw err;
     }

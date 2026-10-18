@@ -2,19 +2,31 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import Database from 'better-sqlite3';
-import { addEntryAsync, updateEntry, initModule, migrate, migrateTo, enableSync, isCrsqliteLoaded, setAllocator, readOwnChanges, applyChanges, decodeChange, newUlid, type WireChange } from '@collab-mcp/core';
+import { addEntryAsync, createProject, updateEntry, initModule, migrate, migrateTo, enableSync, isCrsqliteLoaded, setAllocator, readOwnChanges, applyChanges, decodeChange, newUlid, type WireChange } from '@collab-mcp/core';
 import { tempStore, laptop } from './helpers.js';
+import { budget } from './perf.js'; // strict: COLLAB_PERF=1 npx tsx --test --test-concurrency=1 test/<file>.test.ts
 import { acceptChanges, fetchDeliveries, lastSeq } from '../src/deliveries.js';
-import { registerProject, openStore, closeStore, getMeta, type Store } from '../src/store.js';
-import { setProjectMember } from '../src/access.js';
+import { registerProject, openStore, closeStore, getMeta, allocate, type Store } from '../src/store.js';
+import { setProjectMember as grant, assignNewMemberOfficeRole } from '../src/access.js';
 
 const TABLES = ['entries', 'refs', 'entry_modules', 'entry_revisions'];
 
 function member(store: Store, id: string): void {
   store.prepare(`INSERT INTO po_members (device_id, name, joined_at) VALUES (?, ?, datetime('now'))`).run(id, id);
+  assignNewMemberOfficeRole(store, id); // as addMember does: the first is Office admin (S2: modules need office keys)
 }
+// Each team project's office: its notes take the series and number the office allocates (R-28).
+const offices = new Map<string, { store: Store; code: string }>();
 function project(store: Store, code: string, creator: string): string {
-  return registerProject(store, { ulid: newUlid(), name: `Project ${code}`, code }, creator).ulid;
+  const ulid = registerProject(store, { ulid: newUlid(), name: `Project ${code}`, code }, creator).ulid;
+  offices.set(ulid, { store, code });
+  return ulid;
+}
+/** A laptop note set into a team project: its series and the office's number, as allocate gives it. */
+function intoProject(db: Database.Database, u: string, projectUlid: string): void {
+  const o = offices.get(projectUlid);
+  if (o) db.prepare(`UPDATE entries SET series = ?, id = ? WHERE ulid = ?`).run(o.code, allocate(o.store, u, null, o.code), u);
+  db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(projectUlid, u);
 }
 let n = 0;
 /** A note with a ref, a module and revisions; `projectUlid` is set as a laptop would (a column change). */
@@ -24,7 +36,7 @@ async function note(db: Database.Database, title: string, projectUlid: string | 
     type: 'decision', title, summary: `${title} s`, description: `${title} body`, module: 'm',
     refs: [{ ref_type: 'file', ref_value: `${title}.ts` }],
   });
-  if (projectUlid) db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(projectUlid, r.ulid);
+  if (projectUlid) intoProject(db, r.ulid, projectUlid);
   updateEntry(db, { ulid: r.ulid, description: `${title} body, edited` }); // gives entry_revisions rows
   return r.ulid;
 }
@@ -37,6 +49,8 @@ function ownerOf(db: Store, w: WireChange): string | null {
   return (db.prepare(`SELECT entry_ulid FROM entry_revisions WHERE rev_id = ?`).get(k) as { entry_ulid: string }).entry_ulid;
 }
 const tablesOf = (ws: WireChange[]) => new Set(ws.map((w) => decodeChange(w).table));
+/** These tests are about stamping, not replay: the new member counts as already replayed (no barrier). */
+const setProjectMember: typeof grant = (db, ...a) => { grant(db, ...a); db.prepare(`DELETE FROM po_replays`).run(); };
 const fetchAll = (s: Store, d: string, after = 0) => fetchDeliveries(s, d, after, 5000);
 
 test('member of A never receives B rows: entries, refs, entry_modules, entry_revisions', async () => {
@@ -247,27 +261,32 @@ test('stamping 2000 changes adds < 5 ms', async () => {
   // One long-lived store fed consecutive 2000-change requests, as in production
   // (prepared statements warm). Requests cut through notes, so held rows and
   // releases are exercised: the worst case.
-  const RUNS = 9, WARM = 3;
+  const RUNS = 11, WARM = 3;
   const la = laptop();
   const { store, cleanup } = tempStore();
   try {
-    const A = newUlid();
+    member(store, 'd-a'); // S2: the sender's modules cells are judged against its office keys
+    // Each note is written as production writes it: its project in the INSERT, one laptop
+    // transaction (a solo project here: the office doesn't know it, so nothing is judged).
+    const A = createProject(la.db, { name: 'Perf', code: 'PF' }).ulid;
     let wire: WireChange[] = [];
     for (let i = 0; wire.length < 2000 * (RUNS + WARM); i++) {
-      await note(la.db, `perf ${i}`, i % 2 ? A : null);
+      setAllocator({ allocate: async () => ++n });
+      await addEntryAsync(la.db, { type: 'decision', title: `perf ${i}`, summary: `perf ${i} s`, description: `perf ${i} body`, module: 'm',
+        refs: [{ ref_type: 'file', ref_value: `perf ${i}.ts` }], project: i % 2 ? A : 'none' });
       if (i % 20 === 19) wire = readOwnChanges(la.db, 0);
     }
     const ms: number[] = [];
     for (let k = 0; k < RUNS + WARM; k++) {
       const timing = { stampMs: -1 };
       const r = acceptChanges(store, 'd-a', wire.slice(k * 2000, (k + 1) * 2000), { timing });
-      assert.equal(r.accepted, 2000);
+      assert.equal(r.accepted, 2000, JSON.stringify(r.refused));
       if (k >= WARM) ms.push(timing.stampMs);
     }
     assert.ok((store.prepare(`SELECT COUNT(*) n FROM po_deliveries WHERE project_ulid = ?`).get(A) as { n: number }).n > 0, 'it did real work');
     const median = [...ms].sort((x, y) => x - y)[Math.floor(ms.length / 2)];
     console.log(`2000 changes x ${RUNS}: R3 stamping median ${median.toFixed(2)} ms (runs ${ms.map((x) => x.toFixed(2)).join(', ')})`);
-    assert.ok(median < 5, `stamping added ${median.toFixed(2)} ms`);
+    assert.ok(median < budget(5), `stamping added ${median.toFixed(2)} ms (limit ${budget(5)})`);
   } finally { setAllocator(null); la.cleanup(); cleanup(); }
 });
 
@@ -280,7 +299,7 @@ test("the office's own merge rows of a team note are stamped too", async () => {
     setProjectMember(store, 'd-a', A, 'd-b', 'Editor');
     setAllocator({ allocate: async () => ++n });
     const r = await addEntryAsync(la.db, { type: 'decision', title: 't', summary: 's', description: 'p1\n\np2', module: 'm' });
-    la.db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(A, r.ulid);
+    intoProject(la.db, r.ulid, A);
     acceptChanges(store, 'd-a', readOwnChanges(la.db, 0));
     const got = fetchAll(store, 'd-b');
     lb.db.transaction(() => applyChanges(lb.db, got.changes.map(decodeChange)))();
@@ -369,4 +388,72 @@ test('a note written before 0009 (no project cell anywhere) still reaches everyo
     try { if (isCrsqliteLoaded(old)) old.prepare('SELECT crsql_finalize()').get(); old.close(); } catch { /* closed */ }
     t.cleanup(); cleanup();
   }
+});
+
+test('R-29: the stamps derived from the verdict equal the old path, batch by batch', async () => {
+  // Two offices fed the same batches: one stamps from classify's verdict (production), the
+  // other with the old pre-apply resolve. Deliveries, stamps, owners and refusals must match.
+  const s1 = tempStore(), s2 = tempStore();
+  const la = laptop(), lb = laptop();
+  const stores = [s1.store, s2.store];
+  try {
+    const A = newUlid();
+    for (const s of stores) {
+      for (const d of ['d-a', 'd-b']) member(s, d);
+      registerProject(s, { ulid: A, name: 'Project EQ', code: 'EQ' }, 'd-a');
+      setProjectMember(s, 'd-a', A, 'd-b', 'Contributor');
+    }
+    setAllocator({ allocate: async () => ++n });
+    /** A laptop note: a team note numbered by both offices alike, else E or a solo project. */
+    const make = async (db: Database.Database, title: string, project: string | null) => {
+      const r = await addEntryAsync(db, { type: 'decision', title, summary: `${title} s`, description: `${title} body`, module: 'm', refs: [{ ref_type: 'file', ref_value: `${title}.ts` }] });
+      if (project === A) {
+        const ids = stores.map((s) => allocate(s, r.ulid, null, 'EQ'));
+        assert.equal(ids[0], ids[1]);
+        db.prepare(`UPDATE entries SET series = 'EQ', id = ? WHERE ulid = ?`).run(ids[0], r.ulid);
+      }
+      if (project) db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(project, r.ulid);
+      return r.ulid;
+    };
+    const top = (db: Database.Database) => (db.prepare(`SELECT crsql_db_version() v`).get() as { v: number }).v;
+    const send = (origin: string, wire: WireChange[]) => {
+      const [x, y] = [acceptChanges(s1.store, origin, wire), acceptChanges(s2.store, origin, wire, { oldStampPath: true })];
+      assert.deepEqual(x.refused, y.refused, 'same refusals');
+      assert.deepEqual([x.accepted, x.duplicates], [y.accepted, y.duplicates]);
+      const rows = (s: Store) => s.prepare(`SELECT seq, origin, tbl, hex(pk) pk, cid, project_ulid FROM po_deliveries ORDER BY seq`).all();
+      assert.deepEqual(rows(s1.store), rows(s2.store), 'same deliveries and stamps');
+      const owners = (s: Store) => s.prepare(`SELECT ulid, device_id FROM po_note_owners ORDER BY ulid`).all();
+      assert.deepEqual(owners(s1.store), owners(s2.store), 'same owners');
+      return x;
+    };
+    const solo = newUlid(); // a project the office doesn't know
+    initModule(la.db, { slug: 'm', name: 'M' });
+    const t1 = await make(la.db, 'team 1', A), e1 = await make(la.db, 'e 1', null);
+    await make(la.db, 'solo 1', solo);
+    send('d-a', readOwnChanges(la.db, 0));
+    lb.db.transaction(() => applyChanges(lb.db, fetchAll(s1.store, 'd-b').changes.map(decodeChange)))();
+
+    // Mixed: an edit of d-a's note (refused for a Contributor), a new team note, an E edit, a solo note.
+    let v = top(lb.db);
+    updateEntry(lb.db, { ulid: t1, title: 'team 1, by b' });
+    const t2 = await make(lb.db, 'team 2', A);
+    updateEntry(lb.db, { ulid: e1, description: 'e 1 body, by b' });
+    await make(lb.db, 'solo 2', solo);
+    assert.equal(send('d-b', readOwnChanges(lb.db, v)).refused.length, 1, 'one refused group');
+
+    // All allowed: an edit of a held note (final stamp), a new note cut before its project cell ('?').
+    v = top(lb.db);
+    updateEntry(lb.db, { ulid: t2, title: 'team 2, edited' });
+    updateEntry(lb.db, { ulid: e1, title: 'e 1, by b' });
+    await make(lb.db, 'team 3', A);
+    const all = readOwnChanges(lb.db, v);
+    const cut = all.map(decodeChange).findLastIndex((c) => c.table === 'entries' && c.cid === 'project_ulid');
+    assert.ok(cut > 0);
+    assert.equal(send('d-b', all.slice(0, cut)).refused.length, 0);
+    assert.ok((s1.store.prepare(`SELECT COUNT(*) n FROM po_deliveries WHERE project_ulid = '?'`).get() as { n: number }).n > 0, "a half note is held ('?')");
+    send('d-b', all.slice(cut));
+    assert.equal((s1.store.prepare(`SELECT COUNT(*) n FROM po_deliveries WHERE project_ulid = '?'`).get() as { n: number }).n, 0, 'released');
+    // A resend of everything: duplicates only, the same on both.
+    send('d-b', readOwnChanges(lb.db, 0));
+  } finally { setAllocator(null); la.cleanup(); lb.cleanup(); s1.cleanup(); s2.cleanup(); }
 });

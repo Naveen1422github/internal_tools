@@ -6,6 +6,7 @@ import { runDoctor } from "./doctor.js";
 import { runProject } from "./project.js";
 import { runCopy } from "./copy.js";
 import { runTeam } from "./team.js";
+import { runRefused } from "./refused.js";
 
 export type { CliResult, Deps, Io } from "./io.js";
 
@@ -39,6 +40,9 @@ const USAGE = `usage: collab [--notebook <name>] <command>
   collab team office-role <member> <role> a member's role in the whole office
   collab team invite <name>               add a member to the office: prints their join code
   collab team revoke <member>             cut a member off from the office
+  collab refused list                     changes the post office refused, kept on this laptop
+  collab refused copy <id> --to <CODE>    copy one into a solo project
+  collab refused delete <id>              discard one
   collab copy --from <module|project> --to <project> [--author me] [--since <date>] [--yes]
                                           copy notes into a project: lists them, asks, then copies
   collab doctor [--json] [--fix]          check the whole setup and print the fix for each problem
@@ -93,6 +97,8 @@ export async function main(argv: string[], io: Io, deps: Deps = {}): Promise<Cli
       return runProject(rest, io);
     case "team":
       return runTeam(rest, io);
+    case "refused":
+      return runRefused(rest, io);
     case "copy":
       return runCopy(rest, io);
     case "doctor":

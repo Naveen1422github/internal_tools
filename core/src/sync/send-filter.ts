@@ -41,6 +41,8 @@ export interface NotePlace {
   deleted: boolean;
   /** The note's row exists here (false: hard-deleted, or a modules row). */
   exists: boolean;
+  /** The office refused its creation (refused_changes kind 'new', R7, ruling R-23): never sent until recovered or discarded. */
+  refused: boolean;
 }
 
 export function sendContext(db: DB): SendContext {
@@ -58,7 +60,12 @@ export function sendContext(db: DB): SendContext {
   return { shared, teamProjects, fingerprint };
 }
 
-const GONE: NotePlace = { module: null, project: null, pending: false, knownProject: true, deleted: false, exists: false };
+const GONE: NotePlace = { module: null, project: null, pending: false, knownProject: true, deleted: false, exists: false, refused: false };
+
+/** Migration 0013 has created refused_changes. Not cached, like hasSeries. */
+function hasRefusedChanges(db: DB): boolean {
+  return !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'refused_changes'`).get();
+}
 
 function notePlace(db: DB, ulid: string): NotePlace {
   const series = hasSeries(db);
@@ -67,11 +74,15 @@ function notePlace(db: DB, ulid: string): NotePlace {
             ${series ? "e.project_ulid" : "NULL"} AS project,
             e.id IS NULL AS pending,
             e.deleted_at IS NOT NULL AS deleted,
-            ${series ? "(e.project_ulid IS NULL OR EXISTS (SELECT 1 FROM projects p WHERE p.ulid = e.project_ulid))" : "1"} AS known
+            ${series ? "(e.project_ulid IS NULL OR EXISTS (SELECT 1 FROM projects p WHERE p.ulid = e.project_ulid))" : "1"} AS known,
+            ${hasRefusedChanges(db) ? "EXISTS (SELECT 1 FROM refused_changes r WHERE r.note_ulid = e.ulid AND r.kind = 'new')" : "0"} AS refused
        FROM entries e WHERE e.ulid = ?`,
-  ).get(ulid) as { module: string | null; project: string | null; pending: number; deleted: number; known: number } | undefined;
+  ).get(ulid) as { module: string | null; project: string | null; pending: number; deleted: number; known: number; refused: number } | undefined;
   if (!e) return GONE;
-  return { module: e.module, project: e.project, pending: e.pending === 1, knownProject: e.known === 1, deleted: e.deleted === 1, exists: true };
+  return {
+    module: e.module, project: e.project, pending: e.pending === 1, knownProject: e.known === 1, deleted: e.deleted === 1, exists: true,
+    refused: e.refused === 1,
+  };
 }
 
 /**
@@ -81,6 +92,9 @@ function notePlace(db: DB, ulid: string): NotePlace {
  *    team never gets (a solo project's note, rule 5);
  * 1. a modules row -> send iff its slug is shared;
  * 2. a change of no note here -> skip;
+ * 2b. a note whose creation the office refused (refused_changes kind 'new', R7)
+ *    -> skip: the person's to recover or discard, never resent, never counted as
+ *    waiting. A refused EDIT blocks nothing: later edits are judged again (R-23);
  * 3. a note in a project: a team project of this office -> pending ? hold : send;
  *    a project not in this notebook yet -> hold (pull learns it, then the
  *    project backfill sends it whole); solo, or another office's team -> skip;
@@ -114,6 +128,7 @@ function isCopiedToRef(db: DB, pk: Buffer): boolean {
 
 function verdictOf(p: NotePlace, ctx: SendContext): SendVerdict {
   if (!p.exists) return "skip";
+  if (p.refused) return "skip"; // before pending: a refused pending note is not "waiting" (R7)
   if (p.pending && p.deleted) return "skip";
   if (p.project) {
     if (ctx.teamProjects.has(p.project)) return p.pending ? "hold" : "send";

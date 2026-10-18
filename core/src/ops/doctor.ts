@@ -193,6 +193,11 @@ export function doctor(db: DB, opts: { cwd?: string; env?: NodeJS.ProcessEnv } =
   if (applied("0011_project_modules")) expectedTables.add("project_modules");
   // 0012 adds the local access_cache table (RnR permissions fetched from the post office).
   if (applied("0012_access_cache")) expectedTables.add("access_cache");
+  // 0013 adds the local refused_changes table (RnR R6: changes the post office refused).
+  if (applied("0013_refused_changes")) {
+    expectedTables.add("refused_changes");
+    expectedIndexes = union(expectedIndexes, new Set(["refused_new_once"]));
+  }
   // A shared DB carries cr-sqlite's own bookkeeping (crsql_*, <t>__crsql_clock/
   // _pks/_itrig...). Those are the extension's, not ours: not "extra".
   const shared = hasCrrTables(db);

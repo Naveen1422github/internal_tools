@@ -11,6 +11,7 @@ import { isSyncEnabled } from "./sync/state.js";
 import { postOfficeTargetFromDb } from "./sync/http-allocator.js";
 import { requestJson, type PostOfficeTarget } from "./sync/http.js";
 import { formatEntryRef } from "./entry-ref.js";
+import { assertCan } from "./access/can.js";
 
 export interface Project {
   ulid: string;
@@ -286,6 +287,7 @@ export function renameProject(db: DB, codeOrUlid: string, newName: string): Proj
   needs0009(db);
   const p = findProject(db, codeOrUlid);
   if (!p) throw notFound(db, codeOrUlid);
+  assertCan(db, p.ulid, "project.edit"); // R8
   const name = String(newName ?? "").trim();
   if (!name) throw new Error("[collab] a project needs a name");
   const clash = nameClash(db, name, p.ulid);

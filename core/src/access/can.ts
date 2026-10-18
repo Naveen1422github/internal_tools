@@ -1,0 +1,162 @@
+// file: core/src/access/can.ts
+// RnR S2 (R8, role layer): the laptop's permission check. Every core write op
+// asks before writing, so the CLI, web and MCP refuse what the person's role in
+// a team project doesn't allow, before any network call. UX and an AI guard
+// only: the post office stays the real enforcer (R4/R7).
+import type { DB } from "../db.js";
+import { keysOf, labelOf } from "./catalog.js";
+import { getSyncValue } from "../sync/state.js";
+import { SHARED_KEY } from "../sync/send-filter.js";
+
+export type Actor = "human" | "ai";
+export type CanResult = { ok: true } | { ok: false; reason: string };
+
+/** A write the person's role doesn't allow (R8). Same wording as the office's 403. */
+export class AccessDeniedError extends Error {
+  constructor(message: string, readonly key: string, readonly projectUlid: string | null) {
+    super(message);
+    this.name = "AccessDeniedError";
+  }
+}
+
+// Process-wide default actor, like setAllocator. The MCP server sets "ai".
+let defaultActor: Actor = "human";
+export function setDefaultActor(a: Actor): void { defaultActor = a; }
+export function getDefaultActor(): Actor { return defaultActor; }
+
+const ACTIVE = new Set([...keysOf("project"), ...keysOf("office")]);
+const OFFICE_KEYS = new Set(keysOf("office", { includeInactive: true }));
+
+/** The office's refusal sentence (post-office/src/access.ts, classify.ts). */
+export function refusalText(key: string, code: string): string {
+  return `You need "${labelOf(key)}" (${key}) in ${code} to do this`;
+}
+
+/** The office's refusal sentence for an office key (S1's requireOfficeKey). */
+export function officeRefusalText(key: string): string {
+  return `You need "${labelOf(key)}" (${key}) in this office to do this`;
+}
+
+// Prepared once per DB (like post-office's prep). No in-memory cache of the
+// answers: access_cache is written by the courier, another process. A prepare
+// that fails (an older migration: no projects / access_cache / clock table yet)
+// is not remembered, so a later migrate on the same handle is picked up.
+type Stmt = { get(...params: unknown[]): unknown };
+const SQL = {
+  team: `SELECT code FROM projects WHERE ulid = ? AND mode = 'team'`,
+  keyHeld: `SELECT EXISTS (SELECT 1 FROM json_each(keys) WHERE value = ?) AS has FROM access_cache WHERE scope_key = ?`,
+  noteProject: `SELECT project_ulid FROM entries WHERE ulid = ?`,
+  createdSite: `SELECT c.site_id FROM entries__crsql_pks p
+                  JOIN entries__crsql_clock c ON c.key = p.__crsql_key AND c.col_name = 'created_at'
+                 WHERE p.ulid = ?`,
+} as const;
+const stmts = new WeakMap<DB, Partial<Record<keyof typeof SQL, Stmt>>>();
+function prep(db: DB, name: keyof typeof SQL): Stmt | null {
+  let m = stmts.get(db);
+  if (!m) stmts.set(db, (m = {}));
+  const hit = m[name];
+  if (hit) return hit;
+  try {
+    return (m[name] = db.prepare(SQL[name]));
+  } catch {
+    return null;
+  }
+}
+
+/** The code of a team project, or null (solo, unknown, or before 0009). */
+function teamCode(db: DB, projectUlid: string): string | null {
+  const r = prep(db, "team")?.get(projectUlid) as { code: string } | undefined;
+  return r ? r.code : null;
+}
+
+/**
+ * May the person do `key` in this project? Solo, no project or E => ok without
+ * reading access_cache. A team project: one point read by scope_key; no row =>
+ * ok (S2-4: not cached yet, the office decides); an inactive key => refused
+ * (S2-2: it guards nothing yet). `actor` is accepted and ignored until S4.
+ */
+export function can(db: DB, projectUlid: string | null, key: string, actor: Actor = defaultActor): CanResult {
+  void actor; // R9/R10 (AI settings) come later: role layer only
+  if (OFFICE_KEYS.has(key)) return canInOffice(db, key);
+  if (!projectUlid) return { ok: true };
+  const code = teamCode(db, projectUlid);
+  if (code === null) return { ok: true };
+  if (!ACTIVE.has(key)) return { ok: false, reason: refusalText(key, code) };
+  const r = prep(db, "keyHeld")?.get(key, projectUlid) as { has: number } | undefined;
+  if (!r || r.has === 1) return { ok: true };
+  return { ok: false, reason: refusalText(key, code) };
+}
+
+/**
+ * R-31: an office key (module.create, module.edit, ...) is answered from the
+ * `office` row of access_cache, whatever the project. No row => ok (S2-4: not
+ * cached yet, or no office: the office decides).
+ */
+function canInOffice(db: DB, key: string): CanResult {
+  const r = prep(db, "keyHeld")?.get(key, "office") as { has: number } | undefined;
+  if (!r || (r.has === 1 && ACTIVE.has(key))) return { ok: true };
+  return { ok: false, reason: officeRefusalText(key) };
+}
+
+/** The modules this laptop shares with its office (the courier's list; empty when sharing is off). */
+function sharedModules(db: DB): Set<string> {
+  try { return new Set(JSON.parse(getSyncValue(db, SHARED_KEY) ?? "[]") as string[]); } catch { return new Set(); }
+}
+
+/**
+ * R-31: a module write the office will judge: module.create for a slug this laptop
+ * doesn't have yet, module.edit for one it has. Only a shared slug is judged: an
+ * unshared module row is never sent (send filter).
+ */
+export function assertCanModule(db: DB, slug: string, exists: boolean): void {
+  if (!sharedModules(db).has(slug)) return;
+  assertCan(db, null, exists ? "module.edit" : "module.create");
+}
+
+/** can() or throw AccessDeniedError. */
+export function assertCan(db: DB, projectUlid: string | null, key: string): void {
+  const r = can(db, projectUlid, key);
+  if (!r.ok) throw new AccessDeniedError(r.reason, key, projectUlid);
+}
+
+/** The project a note belongs to, or null (E, unknown, or before 0009). */
+export function projectOfNote(db: DB, ulid: string | null | undefined): string | null {
+  if (!ulid) return null;
+  const r = prep(db, "noteProject")?.get(ulid) as { project_ulid: string | null } | undefined;
+  return r?.project_ulid ?? null;
+}
+
+/**
+ * S2-6: a note is "own" when its created_at cell was written on this laptop
+ * (its clock row's site is local, ordinal 0). A UX guess only: the office's
+ * po_note_owners decides. No clock (sync off) or no clock row => own: nothing
+ * can have arrived from another device.
+ */
+export function isOwnNote(db: DB, ulid: string): boolean {
+  const r = prep(db, "createdSite")?.get(ulid) as { site_id: number } | undefined;
+  return !r || r.site_id === 0;
+}
+
+/** assertCan on the note's own project. */
+export function assertCanNote(db: DB, ulid: string | null | undefined, key: string): void {
+  assertCan(db, projectOfNote(db, ulid), key);
+}
+
+/** The key an edit of this note needs (S2-6) and its project, or null outside a team project. */
+function editKey(db: DB, ulid: string | null | undefined): { project: string; key: string } | null {
+  const project = projectOfNote(db, ulid);
+  if (!project || teamCode(db, project) === null) return null;
+  return { project, key: isOwnNote(db, ulid as string) ? "note.edit.own" : "note.edit.any" };
+}
+
+/** May the person edit this note? note.edit.own for an own note (S2-6), else note.edit.any; ok outside a team project. */
+export function canEdit(db: DB, ulid: string | null | undefined): CanResult {
+  const k = editKey(db, ulid);
+  return k ? can(db, k.project, k.key) : { ok: true };
+}
+
+/** An edit: note.edit.own for an own note (S2-6), else note.edit.any. Ownership is read only in a team project. */
+export function assertCanEdit(db: DB, ulid: string | null | undefined): void {
+  const k = editKey(db, ulid);
+  if (k) assertCan(db, k.project, k.key);
+}

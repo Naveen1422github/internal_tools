@@ -74,7 +74,12 @@ import {
   type Project,
   type NoteRef,
   type NoteKey,
+  setDefaultActor,
 } from "@collab-mcp/core";
+
+// R8: every core write from this server is the AI's. The role check still
+// applies; AI settings (R9/R10) come later.
+setDefaultActor("ai");
 
 // ------------------------------------------------------------
 // Server boot (spec P12): a setup problem starts the server DEGRADED instead

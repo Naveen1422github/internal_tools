@@ -133,7 +133,7 @@ test('migration 0010 -> 0011 keeps every note; latest = 0011', () => {
     assert.deepEqual(listBindings(t.db), []);
     assert.throws(() => bindModule(t.db, 'jarvis', 'JV'), /needs migration 0011/);
     migrate(t.db);
-    assert.equal(latestMigration(t.db), '0012_access_cache');
+    assert.equal(latestMigration(t.db), '0013_refused_changes');
     assert.equal((t.db.prepare(`SELECT COUNT(*) n FROM entries`).get() as any).n, 2);
     assert.equal(bindModule(t.db, 'jarvis', 'JV').to, 'JV');
   } finally { t.cleanup(); }

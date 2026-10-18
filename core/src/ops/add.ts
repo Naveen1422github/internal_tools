@@ -20,6 +20,7 @@ import {
   CATEGORY_BY_TYPE,
 } from "../constants.js";
 import { ensureCrsqlite } from "../sync/extension.js";
+import { assertCan, AccessDeniedError, refusalText } from "../access/can.js";
 
 export type { EntryType, Agent, RefType, Category };
 
@@ -178,6 +179,7 @@ export function addEntry(
   ensureCrsqlite(db);
   validateAddEntryArgs(args);
   const project = resolveProjectArg(db, args);
+  assertCan(db, project?.ulid ?? null, "note.create"); // R8
 
   // Repair a double-encoded description before anything downstream sees it --
   // including estimateTokens, which would otherwise count the escape sequences.
@@ -264,6 +266,15 @@ function reasonOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** The allocator's 403 (`refused: true`, Task 6), on the error or its allocateWithRetry cause; else null. */
+function refusalOf(e: unknown): { key: string; reason: string } | null {
+  for (const x of [e, (e as { cause?: unknown } | null)?.cause]) {
+    const r = x as { refused?: unknown; key?: unknown; reason?: unknown } | null;
+    if (r && r.refused === true) return { key: typeof r.key === "string" ? r.key : "note.create", reason: String(r.reason ?? "") };
+  }
+  return null;
+}
+
 /**
  * The entry point for every async caller. Checks the input FIRST (E-713), then:
  * a solo project or an unshared notebook => identical to addEntry (local
@@ -277,6 +288,7 @@ export async function addEntryAsync(db: DB, args: AddEntryArgs): Promise<AddEntr
   ensureCrsqlite(db);
   validateAddEntryArgs(args);
   const project = resolveProjectArg(db, args, true);
+  assertCan(db, project?.ulid ?? null, "note.create"); // R8: before any network call
   if (args.project === undefined) args = { ...args, project: project ? project.ulid : "none" };
   if (project && !isTeamProject(project)) return addEntry(db, args); // solo: never the office (rule 4)
   if (!project && !isSyncEnabled(db)) return addEntry(db, args);      // unshared notebook: as today
@@ -288,6 +300,9 @@ export async function addEntryAsync(db: DB, args: AddEntryArgs): Promise<AddEntr
   try {
     id = await allocateWithRetry(allocator, ulid, series, SAVE_ATTEMPT);
   } catch (e) {
+    // S2-5: the office refused the number (403): nothing is saved. The office's words, else the same sentence built here.
+    const r = refusalOf(e);
+    if (r) throw new AccessDeniedError(r.reason.startsWith("You need") ? r.reason : refusalText(r.key, series), r.key, project?.ulid ?? null);
     return withReason(addEntry(db, { ...args, pendingUlid: ulid }), reasonOf(e));
   }
   return addEntry(db, { ...args, assigned: { ulid, id } });

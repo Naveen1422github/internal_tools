@@ -1,5 +1,5 @@
 import { applyCopy, closeDb, copyPlanLines, copyResultLines, getDb, planCopy } from "@collab-mcp/core";
-import type { CliResult, Io } from "./io.js";
+import { failPlain, type CliResult, type Io } from "./io.js";
 
 // `collab copy` (spec P8, rule 7): list, ask, then copy. The lines come from
 // core (copyPlanLines / copyResultLines), the same ones collab_copy prints.
@@ -39,7 +39,7 @@ export async function runCopy(args: string[], io: Io): Promise<CliResult> {
     for (const l of copyResultLines(r)) io.out(l);
     return { code: 0 };
   } catch (e) {
-    return fail(io, (e as Error).message);
+    return failPlain(io, e);
   } finally {
     closeDb();
   }

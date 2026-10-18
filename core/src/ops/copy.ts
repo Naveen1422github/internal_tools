@@ -15,6 +15,7 @@ import { resolveAuthor } from "../author.js";
 import { findProject, isLeftProject, isTeamProject, notFound, listProjects, type Project } from "../projects.js";
 import { resolveAllocator, allocateWithRetry, SAVE_ATTEMPT } from "../sync/allocator.js";
 import { ensureCrsqlite } from "../sync/extension.js";
+import { assertCan } from "../access/can.js";
 import { newUlid } from "../ulid.js";
 import type { RefType } from "../constants.js";
 
@@ -200,6 +201,12 @@ export async function applyCopy(db: DB, plan: CopyPlan): Promise<CopyResult> {
 
   const target = findProject(db, now.target.ulid)!;
   const code = target.code;
+  // R8, before any number is asked: copying out of a team project needs
+  // note.copy.out there (a module source holds E notes: no project); a team
+  // target needs note.create. The copied-to breadcrumbs on the originals are
+  // not gated here (an open Task 3 question).
+  if (now.source.project_ulid) assertCan(db, now.source.project_ulid, "note.copy.out");
+  assertCan(db, target.ulid, "note.create");
 
   // Numbers for a team target, asked BEFORE the transaction (never inside it).
   // Solo: no allocator, no network, ever (rule 4).

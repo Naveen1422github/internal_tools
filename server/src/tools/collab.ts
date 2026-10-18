@@ -4,10 +4,13 @@ import {
   addEntry, addEntryAsync, deleteEntry, supersede, doctor,
   editEntry, EntryNotFoundError, reassignModule, upsertModule, deleteModule,
   liveEntry, ftsJoin, readSyncOverview, NeedsMergeError, formatEntryRef, ReadOnlyNoteError,
-  getEntryByUlid, isUlid, getEntryByRef, parseNoteRef, hasSeries, type NoteRef,
+  AccessDeniedError, getEntryByUlid, isUlid, getEntryByRef, parseNoteRef, hasSeries, type NoteRef,
 } from '@collab-mcp/core';
 
 const db = getDb();
+
+// A role refusal (R8) is the person's answer, not a crash: 403 with the plain message.
+export const errStatus = (err: unknown, fallback = 500) => (err instanceof AccessDeniedError ? 403 : fallback);
 
 // Stage B1: a note number in a query or body. An integer (or a bare "760")
 // means the E series; strings like "SH-12" name a project note.
@@ -103,7 +106,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       const rows = runSearch(db, { q, type, module, agent, kind, category, since });
       send(200, { results: rows });
     } catch (err: any) {
-      send(500, { error: err.message });
+      send(errStatus(err), { error: err.message });
     }
   },
 
@@ -135,7 +138,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
         FROM entries WHERE deprecated=0 AND ${live} ORDER BY created_at DESC LIMIT 10
       `).all();
       send(200, { total, by_category, by_type, by_status, top_modules, recent });
-    } catch (err: any) { send(500, { error: err.message }); }
+    } catch (err: any) { send(errStatus(err), { error: err.message }); }
   },
 
   'GET /api/collab/dispatches': async (req, res, send) => {
@@ -184,7 +187,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
 
       send(200, { results: rows, stats: totals });
     } catch (err: any) {
-      send(500, { error: err.message });
+      send(errStatus(err), { error: err.message });
     }
   },
 
@@ -207,7 +210,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       if (!entry) return send(404, { error: 'Not found' });
       send(200, entry);
     } catch (err: any) {
-      send(500, { error: err.message });
+      send(errStatus(err), { error: err.message });
     }
   },
 
@@ -257,7 +260,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       if (err instanceof EntryNotFoundError) return send(404, { error: err.message });
       if (err instanceof NeedsMergeError) return send(409, { error: err.message }); // V9: settle it on /merge/:id
       if (err instanceof ReadOnlyNoteError) return send(403, { error: err.message }); // a team you left (stage B2, P11)
-      send(500, { error: err.message });
+      send(errStatus(err), { error: err.message });
     }
   },
 
@@ -271,7 +274,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     } catch (err: any) {
       const status = /no entry found/.test(err.message) ? 404
         : /must be a positive integer/.test(err.message) ? 400
-        : 500;
+        : errStatus(err);
       send(status, { error: err.message });
     }
   },
@@ -298,7 +301,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       send(200, { ok: true, superseded: r.superseded, by: r.by });
     } catch (err: any) {
       // Core: "'by' entry E-… does not exist" / "the following 'ids' do not exist: …".
-      const status = err instanceof ReadOnlyNoteError ? 403 : /does not exist|do not exist|cannot be one of/.test(err.message) ? 400 : 500;
+      const status = err instanceof ReadOnlyNoteError ? 403 : /does not exist|do not exist|cannot be one of/.test(err.message) ? 400 : errStatus(err);
       send(status, { error: err.message });
     }
   },
@@ -318,7 +321,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       const { updated } = reassignModule(db, refs, module);
       send(200, { ok: true, updated, module });
     } catch (err: any) {
-      send(err instanceof ReadOnlyNoteError ? 403 : /does not exist/.test(err.message) ? 400 : 500, { error: err.message });
+      send(err instanceof ReadOnlyNoteError ? 403 : /does not exist/.test(err.message) ? 400 : errStatus(err), { error: err.message });
     }
   },
 
@@ -328,7 +331,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       const rows = db.prepare('SELECT * FROM tasks ORDER BY created_at DESC').all();
       send(200, { results: rows });
     } catch (err: any) {
-      send(500, { error: err.message });
+      send(errStatus(err), { error: err.message });
     }
   },
 
@@ -357,7 +360,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
         send(200, { ok: true, id: nextId });
       }
     } catch (err: any) {
-      send(500, { error: err.message });
+      send(errStatus(err), { error: err.message });
     }
   },
 
@@ -370,7 +373,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       const shared = overview.enabled ? new Set(overview.sharedModules) : null;
       send(200, { results: shared ? rows.map((r: any) => ({ ...r, shared: shared.has(r.slug) })) : rows });
     } catch (err: any) {
-      send(500, { error: err.message });
+      send(errStatus(err), { error: err.message });
     }
   },
 
@@ -383,7 +386,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       upsertModule(db, { slug, name, summary, description, current_goal, status });
       send(200, { ok: true, slug });
     } catch (err: any) {
-      send(500, { error: err.message });
+      send(errStatus(err), { error: err.message });
     }
   },
 
@@ -397,7 +400,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       const r = db.prepare('UPDATE tasks SET status=? WHERE id=?').run(status, id);
       if (r.changes === 0) return send(404, { error: `task ${id} not found` });
       send(200, { ok: true, id, status });
-    } catch (err: any) { send(500, { error: err.message }); }
+    } catch (err: any) { send(errStatus(err), { error: err.message }); }
   },
 
   'POST /api/collab/task/assign': async (req, res, send, body) => {
@@ -410,7 +413,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       const r = db.prepare('UPDATE tasks SET assignee=? WHERE id=?').run(assignee || null, id);
       if (r.changes === 0) return send(404, { error: `task ${id} not found` });
       send(200, { ok: true, id, assignee: assignee || null });
-    } catch (err: any) { send(500, { error: err.message }); }
+    } catch (err: any) { send(errStatus(err), { error: err.message }); }
   },
 
   'POST /api/collab/task/delete': async (req, res, send, body) => {
@@ -418,7 +421,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     try {
       db.prepare('DELETE FROM tasks WHERE id=?').run(body.id);
       send(200, { ok: true });
-    } catch (err: any) { send(500, { error: err.message }); }
+    } catch (err: any) { send(errStatus(err), { error: err.message }); }
   },
 
   // --- MODULE ACTIONS (delete / card) ---
@@ -434,7 +437,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
         });
       }
       send(200, { ok: true });
-    } catch (err: any) { send(500, { error: err.message }); }
+    } catch (err: any) { send(errStatus(err), { error: err.message }); }
   },
 
   'GET /api/collab/module-card': async (req, res, send) => {
@@ -465,14 +468,14 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
         ORDER BY created_at DESC LIMIT 5
       `).all(slug);
       send(200, { module, active_tasks, recent_decisions, top_gotchas, recent_handoffs });
-    } catch (err: any) { send(500, { error: err.message }); }
+    } catch (err: any) { send(errStatus(err), { error: err.message }); }
   },
 
   // --- DOCTOR (core is the single implementation; E-685 #5) ---
   // fts.integrity runs an FTS 'integrity-check' INSERT, so it needs a read-write
   // connection: getDb() opens read-write (better-sqlite3 default).
   'POST /api/collab/doctor': async (req, res, send) => {
-    try { send(200, doctor(db)); } catch (err: any) { send(500, { error: err.message }); }
+    try { send(200, doctor(db)); } catch (err: any) { send(errStatus(err), { error: err.message }); }
   },
 
   // --- EXPORT (json | markdown) ---
@@ -524,6 +527,6 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
         'Content-Disposition': `attachment; filename="collab-export-${new Date().toISOString().slice(0,10)}.md"`,
       });
       res.end(lines.join('\n'));
-    } catch (err: any) { send(500, { error: err.message }); }
+    } catch (err: any) { send(errStatus(err), { error: err.message }); }
   },
 };

@@ -4,12 +4,12 @@
     {
       "name": "schema.tables",
       "severity": "ok",
-      "detail": "20 expected tables present"
+      "detail": "21 expected tables present"
     },
     {
       "name": "schema.indexes",
       "severity": "ok",
-      "detail": "25 expected indexes present"
+      "detail": "26 expected indexes present"
     },
     {
       "name": "schema.triggers",

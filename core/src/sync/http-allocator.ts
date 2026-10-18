@@ -42,6 +42,11 @@ export class HttpAllocator implements Allocator {
     const e = new Error(`the post office answered ${r.status}${r.body?.error ? `: ${r.body.error}` : ""}`);
     // A 4xx means the request itself is wrong; asking again cannot help.
     if (r.status >= 400 && r.status < 500) Object.assign(e, { retriable: false });
+    // R7: a member without note.create. The caller keeps the note as a refusal
+    // (refused_changes), with the office's own words as the reason.
+    if (r.status === 403) {
+      Object.assign(e, { refused: true, key: typeof r.body?.key === "string" ? r.body.key : "note.create", reason: String(r.body?.error ?? e.message) });
+    }
     throw e;
   }
 }

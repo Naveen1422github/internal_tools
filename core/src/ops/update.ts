@@ -2,12 +2,13 @@ import type { DB } from "../db.js";
 import { estimateTokens } from "../db.js";
 import type { RefInput } from "./add.js";
 import { hasUlidPrimaryKey } from "../schema.js";
-import { ownerOf, ownerOfRef, ownerOfUlid, insertRefs, deleteRef } from "../entry-write.js";
+import { ownerOfRef, ownerOfUlid, insertRefs, deleteRef } from "../entry-write.js";
 import { snapshotForRevision, finishRevision } from "../revisions.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { assertHeads, NeedsMergeError } from "./merge.js";
 import { formatEntryRef } from "../entry-ref.js";
 import { assertNoteWritable } from "../projects.js";
+import { assertCanEdit, assertCanNote } from "../access/can.js";
 
 // ------------------------------------------------------------
 // Types
@@ -87,6 +88,7 @@ export function updateEntry(db: DB, args: UpdateEntryArgs): UpdateEntryResult {
     const owner = args.ulid !== undefined ? ownerOfUlid(db, args.ulid) : ownerOfRef(db, { series, id: args.id as number });
     if (!owner) throw new Error(`no entry found with id ${label}`);
     assertNoteWritable(db, owner.ulid); // a left team's note is read-only (stage B2, P11)
+    assertCanEdit(db, owner.ulid); // R8
     params.ulid = owner.ulid as string;
     ownerId = owner.id;
     where = "ulid = @ulid";
@@ -113,14 +115,15 @@ export function updateEntry(db: DB, args: UpdateEntryArgs): UpdateEntryResult {
  * person saw; if the set changed meanwhile, nothing is written (VersionsChangedError).
  * Folds every pending head into one revision and clears the flag; replicates like any edit.
  */
-export function resolveNeedsMerge(db: DB, id: number, expectedHeads: string[]): { id: number } {
+export function resolveNeedsMerge(db: DB, id: number, expectedHeads: string[], series = "E"): { id: number } {
   ensureCrsqlite(db);
-  const owner = ownerOf(db, id);
-  if (!owner || !owner.ulid) throw new Error(`no entry found with id ${id}`);
+  const owner = ownerOfRef(db, { series, id }); // series: S2 (a bare number = E, as before)
+  if (!owner || !owner.ulid) throw new Error(`no entry found with id ${series === "E" ? id : formatEntryRef(id, series)}`);
   assertNoteWritable(db, owner.ulid);
+  assertCanNote(db, owner.ulid, "merge.resolve"); // R8
   db.transaction(() => {
     const before = snapshotForRevision(db, owner.ulid as string);
-    if (!before || before.needs_merge !== 1) throw new Error(`${formatEntryRef(id)} is not waiting for a merge`);
+    if (!before || before.needs_merge !== 1) throw new Error(`${formatEntryRef(id, series)} is not waiting for a merge`);
     assertHeads(db, id, owner.ulid as string, expectedHeads);
     finishRevision(db, before);
   })();
@@ -175,6 +178,7 @@ export function updateEntryRefs(db: DB, args: UpdateEntryRefsArgs): UpdateEntryR
     throw new Error(`no entry found with id ${args.ulid ?? (series === "E" ? args.id : formatEntryRef(args.id, series))}`);
   }
   assertNoteWritable(db, owner.ulid);
+  assertCanEdit(db, owner.ulid); // R8
 
   const added: RefInput[] = [];
   const removed: RefInput[] = [];
