@@ -412,11 +412,13 @@ async function perfRuns(refusedNotes: number, RUNS = 11, WARM = 10) {
 }
 const median = (xs: number[]) => [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 2)];
 
-test('an all-allowed 2000-change batch: classify + stamp < 5 ms', async () => {
+// Target 5 ms (spec rule 6); the gate fails only above 6 ms, so a quiet run near the
+// target doesn't flake (owner's ruling 2026-10-19, COLLAB-189 decision 1b).
+test('an all-allowed 2000-change batch: classify + stamp targets 5 ms, fails above 6 ms', async () => {
   const runs = await perfRuns(0);
   const ms = runs.map((r) => r.classifyMs + r.stampMs);
-  console.log(`2000 allowed changes x ${runs.length}: classify+stamp median ${median(ms).toFixed(2)} ms (runs ${runs.map((r) => `${r.classifyMs.toFixed(2)}+${r.stampMs.toFixed(2)}`).join(', ')})`);
-  assert.ok(median(ms) < budget(5), `R4+R3 took ${median(ms).toFixed(2)} ms (limit ${budget(5)})`);
+  console.log(`2000 allowed changes x ${runs.length}: classify+stamp median ${median(ms).toFixed(2)} ms, target 5 (runs ${runs.map((r) => `${r.classifyMs.toFixed(2)}+${r.stampMs.toFixed(2)}`).join(', ')})`);
+  assert.ok(median(ms) < budget(6), `R4+R3 took ${median(ms).toFixed(2)} ms (target 5, limit ${budget(6)})`);
 });
 
 test('R6 write-back: < 0.25 ms per refused cell', async () => {

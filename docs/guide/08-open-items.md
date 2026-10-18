@@ -5,16 +5,16 @@ As of 2026-10-18.
 ## Next up
 
 1. **Rinku updates** to migration 0013: pull, rebuild, migrate. Until then his courier shows needs-update. (S2 is merged; COLLAB-189.)
-2. **Your rulings on S2** (see Open below).
-3. **RnR S3:** the team admin screens. Role editing must protect the Owner and Office admin names and stop people from managing someone above them.
+2. **RnR S3:** the team admin screens. Role editing must protect the Owner and Office admin names and stop people from managing someone above them.
+3. **After S3:** the office records a promoted project's note numbers, closing the number-squatting window (your ruling, COLLAB-190).
 4. **RnR S4:** AI Allow / Ask me / Deny and the approve/reject list.
 5. **Web UI part 3:** this-laptop controls (not designed yet).
 
-## Open after RnR S2 (your ruling, COLLAB-189)
+## Decided after RnR S2 (COLLAB-190)
 
-1. **Speed budget:** classify + stamp should take under 5 ms per 2000-change batch. Strict medians: 4.0-4.84 ms when the machine is quiet, 8.4-8.7 ms under load.
-2. **Should an Office member get `module.edit`?** Today Rinku's module push is refused.
-3. **Number squatting on a promoted project:** a short window where someone could grab a number.
+1. **Speed budget:** target stays 5 ms per 2000-change batch; the strict test fails only above 6 ms.
+2. **Office member and `module.edit`:** stays admin-only. Rinku can write notes in any module, but not change a module's settings.
+3. **Number squatting on a promoted project:** fixed after S3.
 
 ## Not built yet
 
