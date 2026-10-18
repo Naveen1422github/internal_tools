@@ -2,7 +2,7 @@
 import { labelOf, COPIED_TO_PREFIX, type RawChange } from "@collab-mcp/core";
 import type { Store } from "./store.js";
 import { projectKeys, officeKeys } from "./access.js";
-import { firstTextCell, textCells, prep, batchHints, revisionEntries } from "./deliveries.js";
+import { firstTextCell, textCells, prep, batchHints, revisionEntries, type Hints } from "./deliveries.js";
 
 // RnR S2: the change classifier. A pure judge: it reads, it never writes.
 //
@@ -30,7 +30,13 @@ import { firstTextCell, textCells, prep, batchHints, revisionEntries } from "./d
 export interface Refusal { site_id: string /* hex */; db_version: number; ulid: string | null; key: string | null; reason: string }
 /** groups: every group of the batch, null = accepted. groupOf: each raw's group. creations: new note -> its creating group. */
 /** noteProjects: each note -> its project as judged (null = none); R6 stamps write-backs with it. */
-export interface Verdict { groups: Map<string, Refusal | null>; groupOf: string[]; creations: Map<string, string>; noteProjects: Map<string, string | null> }
+/** keys/ulids: each raw's first pk cell and note (as resolve() finds them); hints: the batch's own cells; held: the office's project per held note (R-29: the stamp guess reuses them). */
+export interface Verdict {
+  groups: Map<string, Refusal | null>; groupOf: string[]; creations: Map<string, string>; noteProjects: Map<string, string | null>;
+  keys: Array<string | null>; ulids: Array<string | null>; hints: Hints; held: Map<string, HeldProject>;
+}
+/** A held note's project as R3 reads it: hp = its project cell arrived, hs = its series cell did; owner = po_note_owners'. */
+export interface HeldProject { project_ulid: string | null; hp: number; hs: number; owner: string | null }
 
 export function groupKey(r: RawChange): string {
   return r.site_id.toString("hex") + ":" + r.db_version;
@@ -69,6 +75,9 @@ interface Facts {
   needs_merge: number | null; hp: number; hs: number; owner: string | null; refused: number;
 }
 
+/** One (table, pk) of the batch: its runs of cells as [start, end) pairs; check = seen twice. */
+interface Row { pk: Buffer; runs: number[]; check: boolean }
+
 /** How one note of the batch is judged. */
 interface Note {
   refused: boolean;          // in po_refused_notes
@@ -105,10 +114,14 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
   const revSet = new Set<string>();
   // Fix 2: one (table, pk, cid) sent twice with different values is refused, not
   // merged here (hints take the last cell; cr-sqlite keeps the highest version).
-  // Rows by (table, pk), looked up once per run of equal pks; then cid -> first raw.
-  const rows = new Map<string, Map<string, number>>();
-  const rowOf: Array<Map<string, number>> = new Array(raws.length);
-  let row: Map<string, number> | undefined, twice = false;
+  // R-29: rows are found by (table, first pk cell), then pk bytes (refs and
+  // entry_modules share a first cell per note); cells are compared only for a row
+  // that comes back in a later run, or repeats a cid within its run.
+  const rows = new Map<string, Row[]>();
+  let row: Row | undefined, start = 0;
+  const runCids = new Set<string>();
+  const recheck: Row[] = [];
+  const endRun = (end: number) => { if (row) row.runs.push(start, end); };
   raws.forEach((r, i) => {
     if (r.db_version !== lastDbv || !lastSite!.equals(r.site_id)) {
       lastSite = r.site_id; lastDbv = r.db_version; g = groupKey(r);
@@ -116,18 +129,33 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     }
     groupOf[i] = g;
     if (!lastPk || r.table !== lastTable || !lastPk.equals(r.pk)) {
+      endRun(i);
       lastPk = r.pk; lastTable = r.table; lastKey = firstTextCell(r.pk);
-      const id = r.table + "\0" + r.pk.toString("latin1");
-      row = rows.get(id);
-      if (!row) rows.set(id, (row = new Map()));
+      const id = lastKey === null ? r.table + "\u0001" + r.pk.toString("latin1") : r.table + "\0" + lastKey;
+      const bucket = rows.get(id);
+      row = bucket?.find((x) => x.pk.equals(r.pk));
+      if (!row) {
+        row = { pk: r.pk, runs: [], check: false };
+        if (bucket) bucket.push(row); else rows.set(id, [row]);
+      } else if (!row.check) { row.check = true; recheck.push(row); } // back in a later run
+      start = i; runCids.clear();
     }
     keys[i] = lastKey;
-    rowOf[i] = row!;
-    const f = row!.get(r.cid);
-    if (f === undefined) row!.set(r.cid, i);
-    else if (f >= 0 && !same(raws[f].val, r.val)) { row!.set(r.cid, -1); twice = true; } // -1: sent with two values
+    if (runCids.size === runCids.add(r.cid).size && !row!.check) { row!.check = true; recheck.push(row!); } // a cid twice in one run
     if (r.table === "entry_revisions" && lastKey) revSet.add(lastKey);
   });
+  endRun(raws.length);
+  // The rows seen more than once: every cell of a (table, pk, cid) with two values is refused (TWICE).
+  const twice = new Set<number>();
+  for (const x of recheck) {
+    const first = new Map<string, number>(), bad = new Set<string>();
+    for (let k = 0; k < x.runs.length; k += 2) for (let i = x.runs[k]; i < x.runs[k + 1]; i++) {
+      const f = first.get(raws[i].cid);
+      if (f === undefined) first.set(raws[i].cid, i);
+      else if (!same(raws[f].val, raws[i].val)) bad.add(raws[i].cid);
+    }
+    if (bad.size) for (let k = 0; k < x.runs.length; k += 2) for (let i = x.runs[k]; i < x.runs[k + 1]; i++) if (bad.has(raws[i].cid)) twice.add(i);
+  }
   // A held revision belongs to the office's note, never to the batch's entry_ulid
   // cell (a forgery like the author cell); the batch says only for new revisions.
   const officeRev = revisionEntries(db, [...revSet]);
@@ -145,7 +173,11 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
 
   const wanted = [...new Set(ulids.filter((u): u is string => u !== null))];
   const facts = new Map<string, Facts>();
-  if (wanted.length) for (const f of prep(db, NOTE_FACTS).all(JSON.stringify(wanted)) as Facts[]) facts.set(f.ulid, f);
+  const heldProjects = new Map<string, HeldProject>();
+  if (wanted.length) for (const f of prep(db, NOTE_FACTS).all(JSON.stringify(wanted)) as Facts[]) {
+    facts.set(f.ulid, f);
+    if (f.held) heldProjects.set(f.ulid, f);
+  }
 
   // Team projects the office knows, with origin's keys in each (memoized).
   const projects = new Map<string, { code: string; keys: Set<string> } | null>();
@@ -280,7 +312,7 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
   };
   raws.forEach((r, i) => {
     if (keys[i] === null) { why[i] = UNREADABLE; return; } // fix 5: fail closed
-    if (twice && rowOf[i].get(r.cid) === -1) { why[i] = TWICE; return; }
+    if (twice.size && twice.has(i)) { why[i] = TWICE; return; }
     if (r.table === "modules") { judge(i, moduleKey(keys[i]!), null); return; }
     const u = ulids[i];
     if (!u) return;
@@ -322,7 +354,9 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
   // creating group is refused is dead, and its later groups are refused for that
   // (they may hold another note's creation, so judge again until nothing new dies).
   const dead = new Set<string>();
-  for (;;) {
+  let anyWhy = false;
+  for (let i = 0; i < why.length && !anyWhy; i++) anyWhy = why[i] !== null;
+  for (; anyWhy; ) { // nothing refused: every group stays null (R-29: no pass)
     for (const g of groups.keys()) groups.set(g, null);
     raws.forEach((r, i) => {
       const g = groupOf[i];
@@ -335,5 +369,5 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     for (const [u, g] of creations) if (groups.get(g) && !dead.has(u)) { dead.add(u); grew = true; }
     if (!grew) break;
   }
-  return { groups, groupOf, creations, noteProjects };
+  return { groups, groupOf, creations, noteProjects, keys, ulids, hints, held: heldProjects };
 }

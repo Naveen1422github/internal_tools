@@ -381,7 +381,7 @@ test('held "?" rows of a refused creation are purged, never released', async () 
  * plus edits of `refusedNotes` of the Owner's notes (refused, written back).
  * Returns per-run timings after WARM warm-ups (the JIT's, not the steady state).
  */
-async function perfRuns(refusedNotes: number, RUNS = 5, WARM = 10) {
+async function perfRuns(refusedNotes: number, RUNS = 11, WARM = 10) {
   const w = world();
   try {
     const theirs: string[] = [], mine: string[] = [];

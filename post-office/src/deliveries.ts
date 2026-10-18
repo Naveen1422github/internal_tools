@@ -5,7 +5,7 @@ import type Database from "better-sqlite3";
 import { StoreError, getMeta, setMeta, type Store } from "./store.js";
 import { divergentStatusOrType, flagNeedsMerge, mergeEntries } from "./merge.js";
 import { memberProjects } from "./access.js";
-import { classify, REFUSED_BEFORE, type Refusal } from "./classify.js";
+import { classify, REFUSED_BEFORE, type Refusal, type Verdict } from "./classify.js";
 import { writeBack } from "./writeback.js";
 
 export const OFFICE_ORIGIN = "post-office";
@@ -81,8 +81,13 @@ export function textCells(pk: Buffer): string[] | null {
   return out;
 }
 
-/** A delivery to stamp. `stamp` = what its project_ulid holds now (undefined = NULL); `key` = firstTextCell(pk) when known. */
-export interface DeliveryRow { seq: number; tbl: string; pk: Buffer; origin: string; held: number; stamp?: string | null; key?: string | null }
+/**
+ * A delivery to stamp. `stamp` = what its project_ulid holds now (undefined = NULL); `key` = firstTextCell(pk)
+ * and `ulid` = its note, when known (R-29: no second lookup). `final` = the stamp is the note's held project
+ * (the office had its project cell before this batch, and S2-1 refuses a move): not checked again.
+ * `owned` = po_note_owners already names its note's owner.
+ */
+export interface DeliveryRow { seq: number; tbl: string; pk: Buffer; origin: string; held: number; stamp?: string | null; key?: string | null; ulid?: string | null; final?: boolean; owned?: boolean }
 /** What a batch says about itself before it is applied: revision -> entry, entry -> project. */
 export interface Hints { rev: Map<string, string>; project: Map<string, string | null> }
 interface Resolved { seq: number; tbl: string; origin: string; held: number; key: string | null; ulid: string | null; stamp: string | null }
@@ -125,10 +130,11 @@ function resolve(db: Store, rows: DeliveryRow[], hints?: Hints): Resolved[] {
   });
   // With hints (the pre-apply guess) the store is asked only what the batch doesn't say.
   const revSet = new Set<string>();
-  rows.forEach((r, i) => { const k = keys[i]; if (r.tbl === "entry_revisions" && k && !hints?.rev.has(k)) revSet.add(k); });
+  rows.forEach((r, i) => { const k = keys[i]; if (r.tbl === "entry_revisions" && r.ulid === undefined && k && !hints?.rev.has(k)) revSet.add(k); });
   const revEntry = revisionEntries(db, [...revSet]);
   if (hints) for (const [r, u] of hints.rev) revEntry.set(r, u);
   const ulids = rows.map((r, i) => {
+    if (r.ulid !== undefined) return r.ulid;
     const k = keys[i];
     if (!k) return null;
     switch (r.tbl) {
@@ -143,7 +149,7 @@ function resolve(db: Store, rows: DeliveryRow[], hints?: Hints): Resolved[] {
   // for new columns): it has no project (rule 2). The courier sends all of one note's
   // entries cells in one POST, so a fresh insert cut before `series` does not reach here.
   const project = new Map<string, string | null>();
-  const wanted = [...new Set(ulids.filter((u): u is string => u !== null && !hints?.project.has(u)))];
+  const wanted = [...new Set(ulids.filter((u, i): u is string => u !== null && !rows[i].final && !hints?.project.has(u)))];
   if (wanted.length) {
     for (const e of prep(db, ENTRY_PROJECTS).all(JSON.stringify(wanted)) as Array<{ ulid: string; project_ulid: string | null; hp: number; hs: number }>) {
       project.set(e.ulid, e.hp ? e.project_ulid : e.hs ? "?" : null);
@@ -152,7 +158,7 @@ function resolve(db: Store, rows: DeliveryRow[], hints?: Hints): Resolved[] {
   if (hints) for (const [u, p] of hints.project) project.set(u, p);
   return rows.map((r, i) => {
     const u = ulids[i];
-    const stamp = r.tbl === "modules" ? null : u === null || !project.has(u) ? "?" : (project.get(u) as string | null);
+    const stamp = r.final ? r.stamp ?? null : r.tbl === "modules" ? null : u === null || !project.has(u) ? "?" : (project.get(u) as string | null);
     return { seq: r.seq, tbl: r.tbl, origin: r.origin, held: r.held, key: keys[i], ulid: u, stamp };
   });
 }
@@ -174,8 +180,30 @@ function writeStamps(db: Store, rows: Resolved[]): void {
  * it after the apply, in the same transaction: a wrong guess costs one UPDATE,
  * never a leak.
  */
-function guessStamps(db: Store, raws: RawChange[]): Resolved[] {
-  return resolve(db, raws.map((r) => ({ seq: 0, tbl: r.table, pk: r.pk, origin: "", held: 0 })), batchHints(raws));
+function guessStamps(db: Store, raws: RawChange[]): Array<Resolved & { final: boolean; owned?: boolean }> {
+  return resolve(db, raws.map((r) => ({ seq: 0, tbl: r.table, pk: r.pk, origin: "", held: 0 })), batchHints(raws)).map((r) => ({ ...r, final: false }));
+}
+
+/**
+ * R-29: the same guess from classify's own reading, for a batch it accepted whole
+ * (a refused group's cells must not hint, so a partly refused batch takes the path
+ * above). No second pk decode, hints pass or office query. A note the office held
+ * with its project cell keeps that project (S2-1 refuses a move): its stamp is final.
+ */
+function guessFromVerdict(raws: RawChange[], v: Verdict): Array<Resolved & { final: boolean; owned?: boolean }> {
+  return raws.map((r, i) => {
+    const u = v.ulids[i];
+    let stamp: string | null = "?", final = false, owned = false;
+    if (r.table === "modules") stamp = null;
+    else if (u !== null) {
+      if (v.hints.project.has(u)) stamp = v.hints.project.get(u)!;
+      else {
+        const h = v.held.get(u);
+        if (h) { stamp = h.hp ? h.project_ulid : h.hs ? "?" : null; final = !!h.hp; owned = h.owner !== null; }
+      }
+    }
+    return { seq: 0, tbl: r.table, origin: "", held: 0, key: r.table === "modules" ? null : v.keys[i], ulid: u, stamp, final, owned };
+  });
 }
 
 /** The batch's own revision -> entry and entry -> project cells (the last project cell wins). */
@@ -216,13 +244,17 @@ export function stampProjects(db: Store, seqs: number[], inHand?: DeliveryRow[])
   const held = (prep(db, `SELECT seq, tbl, pk, origin, 1 AS held FROM po_deliveries WHERE project_ulid = '?' ORDER BY seq`).all() as DeliveryRow[])
     .filter((r) => !mine.has(r.seq)); // a row of this batch guessed '?' is checked as fresh
   const all = [...held, ...fresh];
-  const rows = resolve(db, all);
-  writeStamps(db, rows.filter((r, i) => !r.held && r.stamp !== (all[i].stamp ?? null)));
+  // R-29: a final stamp is the guess, already recorded: only the other rows are resolved again.
+  const open = fresh.some((r) => r.final) ? all.filter((r) => !r.final) : all;
+  const rows = resolve(db, open);
+  writeStamps(db, rows.filter((r, i) => !r.held && r.stamp !== (open[i].stamp ?? null)));
 
   const owners = new Map<string, string>();
-  for (const r of rows) {
-    if (r.tbl === "entries" && r.stamp !== "?" && r.ulid && r.origin !== OFFICE_ORIGIN && !owners.has(r.ulid)) owners.set(r.ulid, r.origin);
-  }
+  const own = (tbl: string, stamp: string | null, ulid: string | null, origin: string) => {
+    if (tbl === "entries" && stamp !== "?" && ulid && origin !== OFFICE_ORIGIN && !owners.has(ulid)) owners.set(ulid, origin);
+  };
+  for (const r of rows) own(r.tbl, r.stamp, r.ulid, r.origin);
+  if (open !== all) for (const r of fresh) if (r.final && !r.owned) own(r.tbl, r.stamp ?? null, r.ulid ?? null, r.origin);
   if (owners.size) {
     prep(db,
       `INSERT OR IGNORE INTO po_note_owners (ulid, device_id)
@@ -306,7 +338,7 @@ function refuseCreations(db: Store, origin: string, dead: Map<string, Refusal>):
  * skips R3, `timing` receives the time R3, R4 and R6 took.
  */
 export function acceptChanges(
-  db: Store, origin: string, wire: WireChange[], opts: { stamp?: boolean; timing?: AcceptTiming } = {},
+  db: Store, origin: string, wire: WireChange[], opts: { stamp?: boolean; timing?: AcceptTiming; oldStampPath?: boolean } = {},
 ): AcceptResult {
   if (!Array.isArray(wire)) throw new StoreError("changes must be a list");
   let all: RawChange[];
@@ -356,7 +388,8 @@ export function acceptChanges(
     const classifyMs = performance.now() - t0;
 
     t0 = performance.now();
-    const guess = stamp ? guessStamps(db, raws) : null;
+    // `oldStampPath`: the equivalence test's reference (R-29), never set in production.
+    const guess = !stamp ? null : raws === all && !opts.oldStampPath ? guessFromVerdict(raws, verdict) : guessStamps(db, raws);
     let stampMs = performance.now() - t0;
     const rec = prep(db, RECORD_STAMPED);
     const fresh: RawChange[] = [];
@@ -366,7 +399,10 @@ export function acceptChanges(
       const x = rec.run(origin, r.table, r.pk, r.cid, r.val, r.col_version, r.db_version, r.site_id, r.cl, r.seq, p);
       if (x.changes === 1) {
         fresh.push(r);
-        stamped.push({ seq: Number(x.lastInsertRowid), tbl: r.table, pk: r.pk, origin, held: 0, stamp: p, key: guess ? guess[i].key : undefined });
+        const gi = guess?.[i];
+        stamped.push(gi && !opts.oldStampPath
+          ? { seq: Number(x.lastInsertRowid), tbl: r.table, pk: r.pk, origin, held: 0, stamp: p, key: gi.key, ulid: gi.ulid, final: gi.final, owned: gi.owned }
+          : { seq: Number(x.lastInsertRowid), tbl: r.table, pk: r.pk, origin, held: 0, stamp: p, key: gi?.key });
       }
     });
     const diverged = new Set<string>();

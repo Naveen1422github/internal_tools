@@ -1,7 +1,7 @@
 // file: post-office/src/access.ts
 import { keysOf, labelOf, sanitizeKeys, newUlid, STARTER_OFFICE_ROLES, STARTER_PROJECT_ROLES, type Scope } from "@collab-mcp/core";
 import { StoreError, getMeta, setMeta, type Store } from "./store.js";
-import { OFFICE_ORIGIN, lastSeq } from "./deliveries.js";
+import { OFFICE_ORIGIN, lastSeq, prep } from "./deliveries.js";
 
 // RnR (R1, R13): the office owns who may do what. Tables live in PO_SCHEMA.
 const OWNER = "Owner";
@@ -25,18 +25,16 @@ function liveMember(db: Store, deviceId: string): boolean {
 
 // ---------------------------------------------------------------- reads
 export function projectKeys(db: Store, deviceId: string, projectUlid: string): Set<string> {
-  const r = db
-    .prepare(
-      `SELECT r.keys FROM po_project_members x JOIN po_roles r ON r.ulid = x.role_ulid
-        WHERE x.project_ulid = ? AND x.device_id = ? AND ${LIVE}`,
-    )
-    .get(projectUlid, deviceId) as { keys: string } | undefined;
+  // R-29: prepared once per store (classify asks once per project per batch).
+  const r = prep(db,
+    `SELECT r.keys FROM po_project_members x JOIN po_roles r ON r.ulid = x.role_ulid
+      WHERE x.project_ulid = ? AND x.device_id = ? AND ${LIVE}`,
+  ).get(projectUlid, deviceId) as { keys: string } | undefined;
   return grant("project", r?.keys);
 }
 
 export function officeKeys(db: Store, deviceId: string): Set<string> {
-  const r = db
-    .prepare(`SELECT r.keys FROM po_office_members x JOIN po_office_roles r ON r.ulid = x.role_ulid WHERE x.device_id = ? AND ${LIVE}`)
+  const r = prep(db, `SELECT r.keys FROM po_office_members x JOIN po_office_roles r ON r.ulid = x.role_ulid WHERE x.device_id = ? AND ${LIVE}`)
     .get(deviceId) as { keys: string } | undefined;
   return grant("office", r?.keys);
 }

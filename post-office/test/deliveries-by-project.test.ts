@@ -261,7 +261,7 @@ test('stamping 2000 changes adds < 5 ms', async () => {
   // One long-lived store fed consecutive 2000-change requests, as in production
   // (prepared statements warm). Requests cut through notes, so held rows and
   // releases are exercised: the worst case.
-  const RUNS = 9, WARM = 3;
+  const RUNS = 11, WARM = 3;
   const la = laptop();
   const { store, cleanup } = tempStore();
   try {
@@ -388,4 +388,72 @@ test('a note written before 0009 (no project cell anywhere) still reaches everyo
     try { if (isCrsqliteLoaded(old)) old.prepare('SELECT crsql_finalize()').get(); old.close(); } catch { /* closed */ }
     t.cleanup(); cleanup();
   }
+});
+
+test('R-29: the stamps derived from the verdict equal the old path, batch by batch', async () => {
+  // Two offices fed the same batches: one stamps from classify's verdict (production), the
+  // other with the old pre-apply resolve. Deliveries, stamps, owners and refusals must match.
+  const s1 = tempStore(), s2 = tempStore();
+  const la = laptop(), lb = laptop();
+  const stores = [s1.store, s2.store];
+  try {
+    const A = newUlid();
+    for (const s of stores) {
+      for (const d of ['d-a', 'd-b']) member(s, d);
+      registerProject(s, { ulid: A, name: 'Project EQ', code: 'EQ' }, 'd-a');
+      setProjectMember(s, 'd-a', A, 'd-b', 'Contributor');
+    }
+    setAllocator({ allocate: async () => ++n });
+    /** A laptop note: a team note numbered by both offices alike, else E or a solo project. */
+    const make = async (db: Database.Database, title: string, project: string | null) => {
+      const r = await addEntryAsync(db, { type: 'decision', title, summary: `${title} s`, description: `${title} body`, module: 'm', refs: [{ ref_type: 'file', ref_value: `${title}.ts` }] });
+      if (project === A) {
+        const ids = stores.map((s) => allocate(s, r.ulid, null, 'EQ'));
+        assert.equal(ids[0], ids[1]);
+        db.prepare(`UPDATE entries SET series = 'EQ', id = ? WHERE ulid = ?`).run(ids[0], r.ulid);
+      }
+      if (project) db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(project, r.ulid);
+      return r.ulid;
+    };
+    const top = (db: Database.Database) => (db.prepare(`SELECT crsql_db_version() v`).get() as { v: number }).v;
+    const send = (origin: string, wire: WireChange[]) => {
+      const [x, y] = [acceptChanges(s1.store, origin, wire), acceptChanges(s2.store, origin, wire, { oldStampPath: true })];
+      assert.deepEqual(x.refused, y.refused, 'same refusals');
+      assert.deepEqual([x.accepted, x.duplicates], [y.accepted, y.duplicates]);
+      const rows = (s: Store) => s.prepare(`SELECT seq, origin, tbl, hex(pk) pk, cid, project_ulid FROM po_deliveries ORDER BY seq`).all();
+      assert.deepEqual(rows(s1.store), rows(s2.store), 'same deliveries and stamps');
+      const owners = (s: Store) => s.prepare(`SELECT ulid, device_id FROM po_note_owners ORDER BY ulid`).all();
+      assert.deepEqual(owners(s1.store), owners(s2.store), 'same owners');
+      return x;
+    };
+    const solo = newUlid(); // a project the office doesn't know
+    initModule(la.db, { slug: 'm', name: 'M' });
+    const t1 = await make(la.db, 'team 1', A), e1 = await make(la.db, 'e 1', null);
+    await make(la.db, 'solo 1', solo);
+    send('d-a', readOwnChanges(la.db, 0));
+    lb.db.transaction(() => applyChanges(lb.db, fetchAll(s1.store, 'd-b').changes.map(decodeChange)))();
+
+    // Mixed: an edit of d-a's note (refused for a Contributor), a new team note, an E edit, a solo note.
+    let v = top(lb.db);
+    updateEntry(lb.db, { ulid: t1, title: 'team 1, by b' });
+    const t2 = await make(lb.db, 'team 2', A);
+    updateEntry(lb.db, { ulid: e1, description: 'e 1 body, by b' });
+    await make(lb.db, 'solo 2', solo);
+    assert.equal(send('d-b', readOwnChanges(lb.db, v)).refused.length, 1, 'one refused group');
+
+    // All allowed: an edit of a held note (final stamp), a new note cut before its project cell ('?').
+    v = top(lb.db);
+    updateEntry(lb.db, { ulid: t2, title: 'team 2, edited' });
+    updateEntry(lb.db, { ulid: e1, title: 'e 1, by b' });
+    await make(lb.db, 'team 3', A);
+    const all = readOwnChanges(lb.db, v);
+    const cut = all.map(decodeChange).findLastIndex((c) => c.table === 'entries' && c.cid === 'project_ulid');
+    assert.ok(cut > 0);
+    assert.equal(send('d-b', all.slice(0, cut)).refused.length, 0);
+    assert.ok((s1.store.prepare(`SELECT COUNT(*) n FROM po_deliveries WHERE project_ulid = '?'`).get() as { n: number }).n > 0, "a half note is held ('?')");
+    send('d-b', all.slice(cut));
+    assert.equal((s1.store.prepare(`SELECT COUNT(*) n FROM po_deliveries WHERE project_ulid = '?'`).get() as { n: number }).n, 0, 'released');
+    // A resend of everything: duplicates only, the same on both.
+    send('d-b', readOwnChanges(lb.db, 0));
+  } finally { setAllocator(null); la.cleanup(); lb.cleanup(); s1.cleanup(); s2.cleanup(); }
 });

@@ -431,6 +431,36 @@ test('fix 2: two cells for one (table, pk, cid) with different values refuse eve
   } finally { w.done(); }
 });
 
+test('R-29 fix 2: rows sharing a first pk cell are told apart; a cid twice in one run is caught', async () => {
+  const w = await world();
+  try {
+    let u = '';
+    const made = await cells(w.la.db, async () => {
+      u = (await addEntryAsync(w.la.db, { type: 'decision', title: 'two refs', summary: 's', module: 'm',
+        refs: [{ ref_type: 'file', ref_value: 'a.ts' }, { ref_type: 'file', ref_value: 'b.ts' }] })).ulid;
+      teamNumber(w.la.db, u, w.A);
+      w.la.db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(w.A, u);
+    });
+    const refs = made.filter((c) => c.table === 'refs');
+    const pks = [...new Set(refs.map((c) => c.pk.toString('hex')))];
+    assert.equal(pks.length, 2, 'two refs rows of one note (same first pk cell)');
+    const [r1, r2] = pks.map((h) => refs.filter((c) => c.pk.toString('hex') === h));
+    const cid = r1.find((c) => r2.some((d) => d.cid === c.cid))!.cid;
+    const rest = made.filter((c) => c.table !== 'refs');
+    // Row 2 comes back in a later run with another value for the same cid: another row, no conflict.
+    const apart = [...r1, ...rest, ...r2.map((c) => (c.cid === cid ? { ...c, val: 'other value' } : c))];
+    assert.ok(allowed(classify(w.store, 'd-own', apart)));
+    // The same cid twice inside one run, with two values: refused.
+    const c1 = r1.find((c) => c.cid === cid)!;
+    const doubled = [...r1, { ...c1, val: 'forged' }, ...rest, ...r2];
+    const v = classify(w.store, 'd-own', doubled);
+    assert.deepEqual([v.groups.get(groupKey(c1))?.key, v.groups.get(groupKey(c1))?.reason], [null, TWICE]);
+    // Row 1 back in a later run with another value: refused too.
+    const later = [...r1, ...rest, ...r2, { ...c1, val: 'forged' }];
+    assert.equal(classify(w.store, 'd-own', later).groups.get(groupKey(c1))?.reason, TWICE);
+  } finally { w.done(); }
+});
+
 test("fix 3: only a pending note's first number passes unjudged; other id or series changes are refused", async () => {
   const w = await world();
   try {
@@ -560,10 +590,10 @@ test('fix 6: a held note whose project cell is still arriving keeps its recorded
 });
 
 test('classify 2000 cells within the Task 1 budget', async () => {
-  // R-2: the classifier's own < 5 ms per 2000 cells, median of 5, each on a fresh
+  // R-2: the classifier's own < 5 ms per 2000 cells, median of 11, each on a fresh
   // batch (as S1's stamping harness). It runs on every batch, so it is measured
   // warm: the first calls are the JIT's, not the steady state.
-  const RUNS = 5, WARM = 10;
+  const RUNS = 11, WARM = 10;
   const w = await world();
   try {
     const old: string[] = [];
