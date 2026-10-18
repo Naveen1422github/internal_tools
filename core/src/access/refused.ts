@@ -95,17 +95,35 @@ const NULLABLE = new Set(["description", "agent", "module"]); // a cleared field
 /**
  * The refs rows alive in the refused cells for this note: (entry_ulid, ref_type,
  * ref_value) from each refs pk. A removal (even cl) and a copy-out marker are not
- * additions (the marker belongs to the source note).
+ * additions (the marker belongs to the source note). The pk is decoded here, not
+ * with crsql_unpack_columns: copy works without the extension loaded.
  */
-function refusedRefs(db: DB, cells: WireChange[], noteUlid: string): Array<{ ref_type: string; ref_value: string }> {
+function refusedRefs(cells: WireChange[], noteUlid: string): Array<{ ref_type: string; ref_value: string }> {
   const out: Array<{ ref_type: string; ref_value: string }> = [];
-  const unpack = db.prepare(`SELECT cell FROM crsql_unpack_columns(?)`);
   for (const c of cells) {
     if (c.table !== "refs" || c.cl % 2 === 0) continue;
-    const pk = (unpack.all(Buffer.from(c.pk, "base64")) as Array<{ cell: unknown }>).map((x) => x.cell);
-    if (pk.length !== 3 || pk[0] !== noteUlid || typeof pk[1] !== "string" || typeof pk[2] !== "string") continue;
-    if (isCopiedToValue(pk[2])) continue;
+    const pk = textCellsOf(Buffer.from(c.pk, "base64"));
+    if (!pk || pk.length !== 3 || pk[0] !== noteUlid || isCopiedToValue(pk[2])) continue;
     out.push({ ref_type: pk[1], ref_value: pk[2] });
+  }
+  return out;
+}
+
+/** Every cell of a cr-sqlite packed pk when all are text, else null: [count], then per cell [(lenBytes << 3) | 3][length][utf8]. */
+function textCellsOf(pk: Buffer): string[] | null {
+  if (pk.length < 1) return null;
+  const out: string[] = [];
+  let at = 1;
+  for (let c = 0; c < pk[0]; c++) {
+    if (at >= pk.length) return null;
+    const tag = pk[at], n = tag >> 3;
+    if ((tag & 7) !== 3 || n < 1 || n > 4 || pk.length < at + 1 + n) return null;
+    let len = 0;
+    for (let i = 0; i < n; i++) len = len * 256 + pk[at + 1 + i];
+    at += 1 + n;
+    if (pk.length < at + len) return null;
+    out.push(pk.toString("utf8", at, at + len));
+    at += len;
   }
   return out;
 }
@@ -151,7 +169,7 @@ export async function copyRefused(db: DB, id: string, toCode: string): Promise<{
     const refs = db.prepare(`SELECT ref_type, ref_value FROM refs WHERE entry_ulid = ?`).all(r.note_ulid) as NonNullable<AddEntryArgs["refs"]>;
     // R-32b: the refs the refused cells added (the laptop's copy was reverted since) travel too.
     const have = new Set(refs.map((x) => x.ref_type + "\0" + x.ref_value));
-    for (const x of refusedRefs(db, r.cells, r.note_ulid)) {
+    for (const x of refusedRefs(r.cells, r.note_ulid)) {
       if (!have.has(x.ref_type + "\0" + x.ref_value)) { have.add(x.ref_type + "\0" + x.ref_value); refs.push(x as (typeof refs)[number]); }
     }
     if (refs.length) args.refs = refs;
