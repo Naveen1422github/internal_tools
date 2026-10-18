@@ -4,7 +4,7 @@
  * the person can copy the change into a solo project or discard it.
  */
 import type { DB } from "../db.js";
-import type { WireChange } from "../sync/changes.js";
+import { entryUlidOf, type WireChange } from "../sync/changes.js";
 import { newUlid } from "../ulid.js";
 import { addEntryAsync, type AddEntryArgs } from "../ops/add.js";
 import { ensureCrsqlite } from "../sync/extension.js";
@@ -83,7 +83,8 @@ export function discardRefused(db: DB, id: string): void {
   })();
 }
 
-const FIELDS = ["type", "title", "summary", "description", "agent", "module"] as const;
+const FIELDS = ["type", "title", "summary", "description", "agent", "module", "category", "status"] as const;
+const NULLABLE = new Set(["description", "agent", "module"]); // a cleared field is the user's intent
 
 /** Copy the refused note into a solo project (local note overlaid with the refused cells), then drop the refusal. */
 export async function copyRefused(db: DB, id: string, toCode: string): Promise<{ id: number; series: string }> {
@@ -93,12 +94,18 @@ export async function copyRefused(db: DB, id: string, toCode: string): Promise<{
   if (isTeamProject(target)) {
     throw new Error(`[collab] ${target.code} is a team project. Copy this note into a solo project instead (\`collab project list\` shows which are solo).`);
   }
+  ensureCrsqlite(db);
   const local = (r.note_ulid
-    ? db.prepare(`SELECT type, title, summary, description, agent, module FROM entries WHERE ulid = ?`).get(r.note_ulid)
+    ? db.prepare(`SELECT type, title, summary, description, agent, module, category, status FROM entries WHERE ulid = ?`).get(r.note_ulid)
     : undefined) as Record<string, unknown> | undefined;
   const fields: Record<string, unknown> = { ...(local ?? {}) };
-  for (const c of r.cells) {
-    if (c.table === "entries" && (FIELDS as readonly string[]).includes(c.cid) && typeof c.val === "string") fields[c.cid] = c.val;
+  // Only this note's cells; oldest first so the latest version wins.
+  const mine = r.cells
+    .filter((c) => c.table === "entries" && (FIELDS as readonly string[]).includes(c.cid) && entryUlidOf(db, "entries", Buffer.from(c.pk, "base64")) === r.note_ulid)
+    .sort((a, b) => a.col_version - b.col_version || a.seq - b.seq);
+  for (const c of mine) {
+    if (typeof c.val === "string") fields[c.cid] = c.val;
+    else if (c.val === null && NULLABLE.has(c.cid)) fields[c.cid] = null;
   }
   const args: AddEntryArgs = {
     type: (fields.type as AddEntryArgs["type"]) ?? "decision",
@@ -108,8 +115,20 @@ export async function copyRefused(db: DB, id: string, toCode: string): Promise<{
   };
   if (fields.description) args.description = String(fields.description);
   if (fields.agent) args.agent = fields.agent as AddEntryArgs["agent"];
-  if (fields.module) args.module = String(fields.module);
+  if (fields.category) args.category = fields.category as AddEntryArgs["category"];
+  if (fields.status === "draft" || fields.status === "active") args.status = fields.status;
+  if (r.note_ulid) {
+    // Rule 5: the note's refs and every module travel with it.
+    const mods = db.prepare(`SELECT module, is_primary FROM entry_modules WHERE entry_ulid = ? ORDER BY is_primary DESC, module`).all(r.note_ulid) as Array<{ module: string; is_primary: number }>;
+    const primary = fields.module ? String(fields.module) : mods.find((m) => m.is_primary)?.module;
+    if (primary) args.module = primary;
+    const extra = mods.map((m) => m.module).filter((m) => m !== primary);
+    if (extra.length) args.modules = extra;
+    const refs = db.prepare(`SELECT ref_type, ref_value FROM refs WHERE entry_ulid = ?`).all(r.note_ulid) as AddEntryArgs["refs"];
+    if (refs && refs.length) args.refs = refs;
+  } else if (fields.module) args.module = String(fields.module);
   const res = await addEntryAsync(db, args);
+  // A crash between the copy and this discard leaves a duplicate: it errs toward keeping data.
   discardRefused(db, id);
   return { id: res.id as number, series: target.code };
 }

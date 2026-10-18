@@ -10,11 +10,14 @@ import { addEntry } from '../src/ops/add.js';
 import { createProject } from '../src/projects.js';
 import type { WireChange } from '../src/sync/changes.js';
 
-const cell = (cid: string, val: string): WireChange =>
-  ({ table: 'entries', pk: 'AA==', cid, val, col_version: 1, db_version: 1, site_id: 'AA==', cl: 1, seq: 0 });
+// A cell of entries row `ulid` (pk packed the way cr-sqlite does).
+function cell(db: DB, ulid: string, cid: string, val: string | null, col_version = 1): WireChange {
+  const pk = (db.prepare(`SELECT crsql_pack_columns(?) AS p`).get(ulid) as { p: Buffer }).p;
+  return { table: 'entries', pk: pk.toString('base64'), cid, val, col_version, db_version: 1, site_id: 'AA==', cl: 1, seq: 0 };
+}
 
 function setup() {
-  const t = freshDb();
+  const t = freshDb({ shared: true }); // cell pks need the cr-sqlite functions
   migrate(t.db);
   const note = addEntry(t.db, { type: 'decision', title: 'Local title', summary: 'Local summary', project: 'none' });
   return { t, note };
@@ -50,7 +53,7 @@ test('copyRefused of an edit builds the note from the refused cells into a solo 
   try {
     createProject(t.db, { name: 'Solo Box', code: 'SB' });
     const id = recordRefusal(t.db, { noteUlid: note.ulid, projectUlid: null, kind: 'edit', key: 'note.edit', reason: 'no',
-      cells: [cell('title', 'Refused title'), cell('description', 'Refused body')] });
+      cells: [cell(t.db, note.ulid, 'title', 'Refused title'), cell(t.db, note.ulid, 'description', 'Refused body')] });
     const res = await copyRefused(t.db, id, 'SB');
     assert.equal(res.series, 'SB');
     const row = t.db.prepare(`SELECT title, summary, description FROM entries WHERE series = 'SB' AND id = ?`).get(res.id) as
@@ -92,5 +95,40 @@ test('discardRefused of an edit keeps the local note', () => {
     const id = recordRefusal(t.db, { noteUlid: note.ulid, projectUlid: null, kind: 'edit', key: null, reason: 'no', cells: [] });
     discardRefused(t.db, id);
     assert.equal(count(t.db, 'entries', 'ulid', note.ulid), 1);
+  } finally { t.cleanup(); }
+});
+
+test('copyRefused of a new note keeps its refs, modules, category and status; the original is gone', async () => {
+  const { t } = setup();
+  try {
+    createProject(t.db, { name: 'Solo Box', code: 'SB' });
+    const n = addEntry(t.db, { type: 'decision', title: 'Keep me', summary: 's', project: 'none', status: 'draft', module: 'alpha', modules: ['beta'],
+      refs: [{ ref_type: 'file', ref_value: 'a/b.ts' }] });
+    const id = recordRefusal(t.db, { noteUlid: n.ulid, projectUlid: null, kind: 'new', key: null, reason: 'no', cells: [] });
+    const res = await copyRefused(t.db, id, 'SB');
+    const row = t.db.prepare(`SELECT ulid, module, status, category FROM entries WHERE series = 'SB' AND id = ?`).get(res.id) as
+      { ulid: string; module: string; status: string; category: string };
+    assert.equal(row.module, 'alpha');
+    assert.equal(row.status, 'draft');
+    const mods = (t.db.prepare(`SELECT module FROM entry_modules WHERE entry_ulid = ? ORDER BY module`).all(row.ulid) as Array<{ module: string }>).map((m) => m.module);
+    assert.deepEqual(mods, ['alpha', 'beta']);
+    assert.equal(count(t.db, 'refs', 'entry_ulid', row.ulid), 1);
+    assert.equal(count(t.db, 'entries', 'ulid', n.ulid), 0);
+  } finally { t.cleanup(); }
+});
+
+test('copyRefused applies a cleared description, the latest version, and ignores other notes cells', async () => {
+  const { t } = setup();
+  try {
+    createProject(t.db, { name: 'Solo Box', code: 'SB' });
+    const n = addEntry(t.db, { type: 'decision', title: 'T', summary: 's', description: 'old body', project: 'none' });
+    const other = addEntry(t.db, { type: 'decision', title: 'Other', summary: 's', project: 'none' });
+    const id = recordRefusal(t.db, { noteUlid: n.ulid, projectUlid: null, kind: 'edit', key: null, reason: 'no', cells: [
+      cell(t.db, n.ulid, 'title', 'Newest', 3), cell(t.db, n.ulid, 'title', 'Older', 2),
+      cell(t.db, n.ulid, 'description', null, 2), cell(t.db, other.ulid, 'title', 'WRONG NOTE', 9)] });
+    const res = await copyRefused(t.db, id, 'SB');
+    const row = t.db.prepare(`SELECT title, description FROM entries WHERE series = 'SB' AND id = ?`).get(res.id) as { title: string; description: string | null };
+    assert.equal(row.title, 'Newest');
+    assert.equal(row.description, null);
   } finally { t.cleanup(); }
 });
