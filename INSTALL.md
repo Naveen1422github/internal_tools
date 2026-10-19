@@ -18,7 +18,7 @@ The person gives you one of these:
 
 - **A package file** `collab-mcp-collab-<version>.tgz`. Install it:
   ```
-  npm install -g <path-to>/collab-mcp-collab-<version>.tgz
+  npm install -g <full-path-to>/collab-mcp-collab-<version>.tgz
   ```
 - **The repository link.** Clone the `collabv1` branch (the default branch is older), build the package, then install the file it prints:
   ```
@@ -145,7 +145,7 @@ It prints `collab web: http://127.0.0.1:7473/`. Open that address in a browser. 
 
 ## Updating later (you)
 
-1. Install the new version the same way as step 1: `npm install -g <new .tgz>`, or, if you cloned the repository, `git pull` in `collab-src`, then `npm ci` (with `--force` off Windows), `npm run build`, `npm run package` and `npm install -g ./dist-package/<new .tgz>`.
+1. Install the new version the same way as step 1: `npm install -g <full path to the new .tgz>`, or, if you cloned the repository, `git pull` in `collab-src`, then `npm ci` (with `--force` off Windows), `npm run build`, `npm run package` and `npm install -g ./dist-package/<new .tgz>`.
 2. **Person**: reload the agent as in step 5. The notebook is upgraded automatically on first use, and a backup is saved next to it first.
 3. If `collab web` or the sync courier were running, restart them.
 4. Run `collab doctor`.
