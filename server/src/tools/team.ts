@@ -141,6 +141,13 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     await forward(send, 'DELETE', `/v1/office/members/${enc(b.device)}`);
   }),
 
+  // UI parity Task 7c: `collab sync share|unshare <module>` on the web. The office checks office.module.share.
+  'POST /api/sync/share': guarded(async (_req, send, b) => {
+    if (!isText(b.slug)) bad('Choose a module.');
+    if (typeof b.shared !== 'boolean') bad('"shared" must be true or false.');
+    await forward(send, 'POST', '/v1/modules', { slug: b.slug, shared: b.shared });
+  }),
+
   'POST /api/team/role/create': guarded(async (_req, send, b) => {
     const path = rolesPath(b);
     if (typeof b.name !== 'string') bad('Give the role a name.');

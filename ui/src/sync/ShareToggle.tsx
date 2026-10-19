@@ -1,0 +1,45 @@
+import { useEffect, useState } from 'react';
+import { moduleShare, teamOverview } from '../api/client';
+import { buttonClass } from '../components/Dialog';
+import { toast } from '../components/Toast';
+import { needSentence } from '../team/view';
+
+// UI parity Task 7c: `collab sync share|unshare <module>` on the web. These are
+// the office-wide (legacy E) modules. The office checks office.module.share;
+// without it the button is greyed with the office's sentence.
+
+const NOT_CONNECTED = "This notebook isn't connected to a post office.";
+
+export default function ShareToggle({ slug, shared, onChange }: { slug: string; shared: boolean; onChange: (shared: string[]) => void }) {
+  const [why, setWhy] = useState<string | null>('Checking the post office…');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    teamOverview()
+      .then((o) => {
+        if (!alive) return;
+        if (!o.connected) setWhy(NOT_CONNECTED);
+        else setWhy(o.office?.keys.includes('office.module.share') ? null : needSentence('office.module.share', 'this office'));
+      })
+      .catch((e) => { if (alive) setWhy((e as Error).message); });
+    return () => { alive = false; };
+  }, []);
+  const toggle = async () => {
+    setBusy(true);
+    try {
+      const r = await moduleShare(slug, !shared);
+      onChange(r.shared);
+      toast(shared ? `${slug} is no longer shared with the team.` : `${slug} is now shared with the whole team.`);
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="space-y-1">
+      <button type="button" onClick={toggle} disabled={!!why || busy} title={why ?? undefined} className={buttonClass}>
+        {shared ? 'Stop sharing' : 'Share with the team'}
+      </button>
+      {why && <p className="text-xs text-gray-500">{why}</p>}
+    </div>
+  );
+}

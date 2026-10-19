@@ -3,6 +3,7 @@ import { modules, moduleCard } from '../api/client';
 import { useUi } from '../store/ui';
 import { noteRefOf } from '../format';
 import { SHARED_LABEL, PRIVATE_LABEL } from '../sync/view';
+import ShareToggle from '../sync/ShareToggle';
 
 export default function Modules() {
   const { openDrawer } = useUi();
@@ -84,6 +85,20 @@ export default function Modules() {
                    <span className="text-sm font-mono text-gray-400">/{card.module.slug}</span>
                 </div>
                 <p className="text-gray-600 dark:text-gray-400 leading-relaxed text-sm">{card.module.goal}</p>
+                {(() => {
+                  // Only on a notebook that shares (the list then says shared or private for each module).
+                  const m = moduleList.find((x) => x.slug === card.module.slug);
+                  if (m?.shared === undefined) return null;
+                  return (
+                    <div className="mt-4">
+                      <ShareToggle
+                        slug={m.slug}
+                        shared={m.shared}
+                        onChange={(list) => setModuleList((ms) => ms.map((x) => (x.shared === undefined ? x : { ...x, shared: list.includes(x.slug) })))}
+                      />
+                    </div>
+                  );
+                })()}
               </header>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">

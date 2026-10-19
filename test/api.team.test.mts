@@ -301,6 +301,26 @@ test('revoke: refused without the key, and refused by rank (naming the first key
   assert.deepEqual([bad.status, bad.body], [400, { error: 'Choose a member.' }]);
 });
 
+// UI parity Task 7c: share and stop sharing a legacy module, as `collab sync share|unshare` does.
+test('module share: the office decides (office.module.share); its answer lists the shared modules', async () => {
+  const on = await srv.api('/api/sync/share', { slug: 'ledger', shared: true });
+  assert.equal(on.status, 200, JSON.stringify(on.body));
+  assert.ok(on.body.shared.includes('ledger'));
+  const off = await srv.api('/api/sync/share', { slug: 'ledger', shared: false });
+  assert.ok(!off.body.shared.includes('ledger'));
+  po.setOfficeRole(srv.office.store, null, srv.b.device, 'Office admin');
+  po.setOfficeRole(srv.office.store, null, srv.a.device, 'Office member');
+  try {
+    const no = await srv.api('/api/sync/share', { slug: 'ledger', shared: true });
+    assert.deepEqual([no.status, no.body], [403, { error: 'You need "Share modules" (office.module.share) in this office to do this' }]);
+  } finally {
+    po.setOfficeRole(srv.office.store, null, srv.a.device, 'Office admin');
+    po.setOfficeRole(srv.office.store, null, srv.b.device, 'Office member');
+  }
+  const bad = await srv.api('/api/sync/share', { slug: 'ledger', shared: 'yes' });
+  assert.deepEqual([bad.status, bad.body], [400, { error: '"shared" must be true or false.' }]);
+});
+
 // Last: the office stays down.
 test('office down -> 503 plain message', async () => {
   await srv.office.down();

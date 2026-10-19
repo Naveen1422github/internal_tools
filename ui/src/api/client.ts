@@ -348,3 +348,6 @@ export const copyPlan = (a: CopyArgs) => sendJson<CopyPlanView>('POST', '/api/pr
 /** `expect` and `target`: the list and project the person saw; if either changed, nothing is copied (409). */
 export const copyApply = (a: CopyArgs, expect: string[], target: string) =>
   sendJson<{ copied: Array<{ from: string; to: string; pending: boolean }>; lines: string[] }>('POST', '/api/projects/copy/apply', { ...a, expect, target });
+
+/** `collab sync share|unshare <module>`: answers the office's list of shared modules. */
+export const moduleShare = (slug: string, shared: boolean) => sendJson<{ shared: string[] }>('POST', '/api/sync/share', { slug, shared });
