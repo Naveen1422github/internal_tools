@@ -8,7 +8,8 @@ As of 2026-10-19.
 2. **RnR S3: done 2026-10-19** (the team admin screens; see file 5). **Rinku: rebuild only, no migration** (S3 has no 0014). The post office must be updated and restarted for the Team page to work.
 3. **After S3:** the office records a promoted project's note numbers, closing the number-squatting window (your ruling, COLLAB-190).
 4. **RnR S4:** AI Allow / Ask me / Deny, the AI settings tab and the approve/reject list.
-5. **Web UI part 3:** this-laptop controls (not designed yet).
+5. **Web UI part 3:** start and stop the courier from the web (start-at-login is already on Settings).
+6. **UI parity: built 2026-10-19** on `collab-ui-parity` (see file 5 and the plan `docs/superpowers/plans/2026-10-19-collab-ui-parity.md`). **No migration** on the laptop or the office: rebuild every package and restart the post office (it gains the rename route), the web server and the courier. Rinku: rebuild only.
 
 ## Decided after RnR S2 (COLLAB-190)
 
@@ -23,9 +24,9 @@ As of 2026-10-19.
 3. **Rank:** nobody manages a member or role holding a permission they lack (S3-1).
 4. **Locked built-ins:** Owner and Office admin are fixed; Office member keeps its name but its permissions can change; Editor, Contributor and Reader are editable (S3-2).
 5. **Custom roles can be deleted** once nobody holds them (S3-3).
-6. **Office roles are managed on the Team page;** revoking a device stays on the CLI (S3-7).
+6. **Office roles are managed on the Team page;** revoking a device stays on the CLI (S3-7). *Replaced by UI parity: Revoke is on the Team page.*
 7. **The matrix is roles × permissions**, a deliberate change from the spec (S3-8).
-8. **No "add a member" in the UI;** refused changes get their own page (S3-9, S3-10).
+8. **No "add a member" in the UI;** refused changes get their own page (S3-9, S3-10). *S3-9 replaced by UI parity: "Add a member" is on the Team page.*
 9. **Adding a device is checked like assigning its role:** you need every permission of the office role the new device gets (S3-14).
 
 ## Needs your ruling (found in S3)
@@ -56,7 +57,7 @@ As of 2026-10-19.
 | Copy gaps: retire originals, multi-source links, verbose output, retire a project, tag trust | found while using copy | COLLAB-178 |
 | "Save to collab" suggestion after research | low priority | T-009 |
 | Index hub integrity (`reachable ≠ found`) | in progress | T-011 |
-| Office advertises old IP | needs an "update address" command | E-767 |
+| Office advertises old IP | the laptop side is done: Settings → "The post office moved?" | E-767 |
 | Stray empty `internal-tools/collab.db` | ask before deleting | COLLAB-183 |
 
 ## Parked after RnR S2 (COLLAB-189)

@@ -104,6 +104,19 @@ Controls you may not use are shown disabled with the reason, not hidden. That is
 - The role rules (S3-2 to S3-6) are tested at the post office; the screens (S3-8 to S3-13) are tested in the UI suite.
 - The acceptance test (`test/rnr-s3-acceptance.test.mts`) runs the whole story with two laptops and one office.
 
+## UI parity — built 2026-10-19
+
+Your rule: you never need the command line for anything you do yourself. The AI may use the MCP tools; every action a person takes has a screen.
+
+- **Team page, people:**
+  - **Invite a person** (Office scope). It shows the one-time join code, with a Copy button, and says how it is used: `collab sync setup <code>` on their laptop, until Stage D gives joining a screen.
+  - **Add a member** to a team project, from the office's members. Only roles you could give are offered; the default is Reader.
+  - **Revoke** a device (Office scope), with a confirmation.
+  - These replace S3-7 ("revoke stays on the CLI") and S3-9 ("no add a member in the UI").
+- **Every one of them is checked at the post office**, with the same refusal sentence as S3. Greyed-out controls show the same sentence; they are a convenience only.
+- **Renaming a team project goes to the post office** and is checked there with "Edit project" (`project.edit`). Before, a laptop-only rename was put back by the courier on its next sync. So `project.edit` is no longer laptop-checked; only `note.copy.out` carries the S3-13 note now.
+- **What the AI may do (MCP):** promote and rename projects, list a team, list refused changes and keep one in a solo project. It may **not** change roles or members, invite, revoke, or discard a refused change: the office can't tell your AI from you yet (see below), so a person does those in the UI until S4.
+
 ## The AI part (stage S4, not built yet)
 
 - Each permission has three AI settings: **Allow** (the AI just does it), **Ask me** (the AI saves a draft that waits for your approve/reject in the web UI) or **Deny**.
