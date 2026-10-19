@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   projectBind, projectCreate, projectPromote, projectRename, projectUnbind, projectsList, teamOverview,
   type ProjectList, type ProjectRow, type TeamOverview,
@@ -57,20 +57,33 @@ export default function Projects() {
   const [open, setOpen] = useState<Open>(null);
 
   const load = useCallback(async () => {
-    try { setList(await projectsList()); setFatal(null); } catch (e) { setFatal((e as Error).message); }
+    try { setList(await projectsList()); setFatal(null); } catch (e) {
+      setFatal((e as Error).message);
+      // With a list already on screen, say it may be out of date rather than replace it.
+      if (listRef.current) toast((e as Error).message, 'error');
+    }
   }, []);
-  const loadOffice = useCallback(() => {
-    teamOverview()
-      .then((o) => setOffice(o.connected ? { state: 'ok', overview: o } : { state: 'none' }))
-      .catch((e) => setOffice({ state: 'down', message: (e as Error).message }));
+  const listRef = useRef<ProjectList | null>(null);
+  listRef.current = list;
+  // Only the newest answer counts: two quick reloads can finish out of order.
+  const officeAsk = useRef(0);
+  const loadOffice = useCallback(async () => {
+    const n = ++officeAsk.current;
+    try {
+      const o = await teamOverview();
+      if (n === officeAsk.current) setOffice(o.connected ? { state: 'ok', overview: o } : { state: 'none' });
+    } catch (e) {
+      if (n === officeAsk.current) setOffice({ state: 'down', message: (e as Error).message });
+    }
   }, []);
   useEffect(() => { load(); loadOffice(); }, [load, loadOffice]);
 
   const after = async (message: string) => {
     setOpen(null);
     toast(message);
+    // A new team project brings new keys: read them before its row is judged against them.
+    await loadOffice();
     await load();
-    loadOffice(); // a new team project brings new keys
   };
 
   const heading = <h1 className="text-2xl font-bold tracking-tight">Projects</h1>;
@@ -235,7 +248,7 @@ function CreateDialog({ teamWhy, onCancel, onDone }: { teamWhy: string | null; o
         <p id="project-code-help" className="text-xs text-gray-500">Its notes are numbered with it: {code.trim() || 'SH'}-1, {code.trim() || 'SH'}-2, … It never changes.</p>
       </div>
       <fieldset className="space-y-2 text-sm">
-        <legend className="mb-1">Kind</legend>
+        <legend className="mb-1">Mode</legend>
         <label className="flex items-start gap-2">
           <input type="radio" name="kind" checked={!team} onChange={() => setTeam(false)} className="mt-1" />
           <span><span className="font-medium">Solo</span><span className="block text-xs text-gray-500">Numbered on this laptop and never sent. Works offline.</span></span>

@@ -157,4 +157,50 @@ describe('Projects page', () => {
     await screen.findByText('Module billing is no longer bound to NV.');
     expect(disabled((await rowOf('OL')).getByRole('combobox', { name: 'Bind a module to OL' }))).toBe(true);
   });
+
+  it('promote: a project with no notes starts at CODE-1; an already-team answer says so', async () => {
+    page(() => {
+      api.projectsList.mockResolvedValue({ ...LIST(), projects: [row({ ulid: 'u-em', name: 'Empty', code: 'EM', highest: 0 })] });
+      api.projectPromote.mockResolvedValue({ project: { code: 'EM' }, already: true });
+    });
+    const em = await rowOf('EM');
+    await waitFor(() => expect(disabled(em.getByRole('button', { name: 'Make team project' }))).toBe(false));
+    fireEvent.click(em.getByRole('button', { name: 'Make team project' }));
+    dialog().getByText(/Its notes keep their numbers; new notes start at EM-1 at the post office/);
+    fireEvent.click(dialog().getByRole('button', { name: 'Make team project' }));
+    await screen.findByText("Project EM is already a team project of this notebook's post office.");
+    expect(api.projectsList).toHaveBeenCalledTimes(2);
+  });
+
+  it('dialog: Escape and Cancel close it and nothing is sent; focus starts in the first field', async () => {
+    page();
+    fireEvent.click(await screen.findByRole('button', { name: 'New project' }));
+    expect(document.activeElement).toBe(dialog().getByLabelText('Name'));
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+    fireEvent.click(dialog().getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.projectCreate).not.toHaveBeenCalled();
+  });
+
+  it('dialog: while a request runs, Escape does not close it and the button can\'t be pressed twice', async () => {
+    let finish: (v: unknown) => void = () => {};
+    page(() => api.projectRename.mockReturnValue(new Promise((r) => { finish = r; })));
+    fireEvent.click((await rowOf('NV')).getByRole('button', { name: 'Rename' }));
+    fireEvent.change(dialog().getByLabelText('New name'), { target: { value: 'Navigator' } });
+    fireEvent.click(dialog().getByRole('button', { name: 'Rename' }));
+    await waitFor(() => expect(disabled(dialog().getByRole('button', { name: 'Working…' }))).toBe(true));
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    screen.getByRole('dialog');
+    fireEvent.click(dialog().getByRole('button', { name: 'Working…' }));
+    expect(api.projectRename).toHaveBeenCalledTimes(1);
+    finish({ project: { code: 'NV', name: 'Navigator' } });
+    await screen.findByText('Project NV is now named Navigator.');
+  });
+
+  it('while the office answers, team controls say so', async () => {
+    page(() => api.teamOverview.mockReturnValue(new Promise(() => {})));
+    (await rowOf('NV')).getByText('Checking the post office…');
+  });
 });

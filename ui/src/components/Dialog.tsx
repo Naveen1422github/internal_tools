@@ -23,6 +23,16 @@ export interface DialogProps {
   cancelLabel?: string;
 }
 
+/** aria-modal: Tab and Shift+Tab stay inside the dialog. */
+function trapTab(e: React.KeyboardEvent, box: HTMLElement | null) {
+  const items = box ? [...box.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])')]
+    .filter((el) => !(el as HTMLButtonElement).disabled) : [];
+  if (items.length === 0) return;
+  const first = items[0], last = items[items.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}
+
 export default function Dialog({
   title, children, confirmLabel, confirmTone = 'primary', confirmDisabled, error, busy, onConfirm, onCancel, cancelLabel,
 }: DialogProps) {
@@ -40,13 +50,16 @@ export default function Dialog({
     if (onConfirm && !confirmDisabled && !busy) onConfirm();
   };
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onCancel(); }}>
       <div
         ref={box}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onCancel(); } }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') { e.stopPropagation(); if (!busy) onCancel(); return; }
+          if (e.key === 'Tab') trapTab(e, box.current);
+        }}
         className="w-full max-w-lg max-h-full overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 p-5 shadow-xl"
       >
         <form onSubmit={submit} className="space-y-4">
@@ -54,7 +67,7 @@ export default function Dialog({
           {children}
           {error && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p>}
           <div className="flex justify-end gap-2">
-            <button type="button" ref={cancel} onClick={onCancel} className={buttonClass}>{cancelLabel ?? (confirmLabel ? 'Cancel' : 'Close')}</button>
+            <button type="button" ref={cancel} onClick={onCancel} disabled={busy} className={buttonClass}>{cancelLabel ?? (confirmLabel ? 'Cancel' : 'Close')}</button>
             {confirmLabel && (
               <button type="submit" disabled={confirmDisabled || busy} className={confirmTone === 'danger' ? dangerClass : primaryClass}>
                 {busy ? 'Working…' : confirmLabel}

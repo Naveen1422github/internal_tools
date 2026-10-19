@@ -20,7 +20,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <button onClick={() => setPaletteOpen(true)} className="text-sm text-gray-500 hover:text-gray-900 dark:hover:text-gray-100 font-medium">Search ⌘K</button>
           <button onClick={toggleAiPanel} className="text-sm text-gray-500 hover:text-gray-900 dark:hover:text-gray-100 font-medium">AI Assistant</button>
         </header>
-        <div className="flex-1 min-h-0 overflow-y-auto p-6">{children}</div>
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6">{children}</div>
       </main>
       {aiPanelOpen && <AiPanel />}
       <CommandPalette />
