@@ -154,16 +154,19 @@ test('built-in roles by their ULID: Office member\'s keys change; Owner and Offi
 test('bad input is a 400 with a plain message, before any office call', async () => {
   const seen = srv.office.requests.length;
   const cases: Array<[string, any, RegExp]> = [
-    ['/api/team/member/set', { scope: 'team', device: 'x', role: 'Reader' }, /scope must be "project" or "office"/],
-    ['/api/team/member/set', { scope: 'project', project: 'TM', device: 'x', role: 'Reader' }, /project must be the ULID/],
-    ['/api/team/member/set', { scope: 'office', role: 'Reader' }, /device must be/],
-    ['/api/team/member/set', { scope: 'office', device: 'x', role: ' ' }, /role must be the name/],
-    ['/api/team/member/remove', { device: 'x' }, /project must be the ULID/],
-    ['/api/team/role/create', { scope: 'office', name: 'X', keys: 'office.project.create' }, /keys must be a list/],
-    ['/api/team/role/create', { scope: 'office', keys: [] }, /name must be text/],
-    ['/api/team/role/update', { scope: 'office', role: 'Office admin', name: 'X' }, /role must be the ULID/],
-    ['/api/team/role/update', { scope: 'office', role: core.newUlid() }, /nothing to change/],
-    ['/api/team/role/delete', { scope: 'project', project: tm.ulid }, /role must be the ULID/],
+    ['/api/team/member/set', { scope: 'team', device: 'x', role: 'Reader' }, /^The scope must be "project" or "office"\.$/],
+    ['/api/team/member/set', { scope: 'project', project: 'TM', device: 'x', role: 'Reader' }, /^Choose a team project\.$/],
+    ['/api/team/member/set', { scope: 'office', role: 'Reader' }, /^Choose a member\.$/],
+    ['/api/team/member/set', { scope: 'office', device: 'x', role: ' ' }, /^Choose a role\.$/],
+    ['/api/team/member/remove', { device: 'x' }, /^Choose a team project\.$/],
+    ['/api/team/role/create', { scope: 'office', name: 'X', keys: 'office.project.create' }, /^Permissions must be a list/],
+    ['/api/team/role/create', { scope: 'office', keys: [] }, /^Give the role a name\.$/],
+    ['/api/team/role/update', { scope: 'office', role: 'Office admin', name: 'X' }, /^Choose a role\.$/],
+    ['/api/team/role/update', { scope: 'office', role: core.newUlid() }, /^Nothing to change/],
+    ['/api/team/role/delete', { scope: 'project', project: tm.ulid }, /^Choose a role\.$/],
+    // "." and ".." would be collapsed by the office's URL parser into another path.
+    ['/api/team/member/set', { scope: 'office', device: '..', role: 'Office member' }, /^Choose a member\.$/],
+    ['/api/team/member/remove', { project: tm.ulid, device: '.' }, /^Choose a member\.$/],
   ];
   for (const [route, body, msg] of cases) {
     const r = await srv.api(route, body);

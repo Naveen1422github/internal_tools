@@ -53,7 +53,10 @@ export async function startTeamServer() {
     await new Promise((resolve) => server.close(() => resolve()));
     await office.close();
     for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
-    fs.rmSync(root, { recursive: true, force: true });
+    // Windows refuses to delete an open SQLite file: close the server's notebook first.
+    const { closeDb } = await import('@collab-mcp/core');
+    closeDb();
+    try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* a file still open: the temp dir is left behind */ }
   };
   return { baseUrl, key, db, api, office, a, b, root, close };
 }

@@ -21,6 +21,8 @@ const UNREACHABLE = "The post office can't be reached right now.";
 
 const enc = encodeURIComponent;
 const isText = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
+// A device id is one path segment: "." and ".." survive encodeURIComponent and the office's URL parser collapses them.
+const isDevice = (v: unknown): v is string => isText(v) && v !== '.' && v !== '..';
 const isId = (v: unknown): v is string => typeof v === 'string' && isUlid(v);
 
 class BadRequest extends Error {}
@@ -59,21 +61,21 @@ const guarded = (fn: (req: http.IncomingMessage, send: Send, body: any) => Promi
   };
 
 function scopeOf(b: any): 'project' | 'office' {
-  if (b.scope !== 'project' && b.scope !== 'office') bad('scope must be "project" or "office"');
+  if (b.scope !== 'project' && b.scope !== 'office') bad('The scope must be "project" or "office".');
   return b.scope;
 }
 function projectOf(b: any): string {
-  if (!isId(b.project)) bad('project must be the ULID of a team project');
+  if (!isId(b.project)) bad('Choose a team project.');
   return b.project;
 }
 /** Where a scope's roles live at the office. */
 const rolesPath = (b: any) => (scopeOf(b) === 'office' ? '/v1/office/roles' : `/v1/projects/${enc(projectOf(b))}/roles`);
 function keysOf(v: unknown): string[] {
-  if (!Array.isArray(v) || !v.every((k) => typeof k === 'string')) bad('keys must be a list of permission names');
+  if (!Array.isArray(v) || !v.every((k) => typeof k === 'string')) bad('Permissions must be a list of permission keys.');
   return v as string[];
 }
 function roleIdOf(b: any): string {
-  if (!isId(b.role)) bad('role must be the ULID of a role');
+  if (!isId(b.role)) bad('Choose a role.');
   return b.role;
 }
 
@@ -94,7 +96,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
 
   'GET /api/team/project': guarded(async (req, send) => {
     const ulid = new URL(req.url!, 'http://x').searchParams.get('ulid');
-    if (!isId(ulid)) bad('ulid must be the ULID of a team project');
+    if (!isId(ulid)) bad('Choose a team project.');
     await forward(send, 'GET', `/v1/projects/${enc(ulid!)}/members`);
   }),
 
@@ -103,8 +105,8 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
   'POST /api/team/member/set': guarded(async (_req, send, b) => {
     const scope = scopeOf(b);
     const project = scope === 'project' ? projectOf(b) : null;
-    if (!isText(b.device)) bad('device must be a device id');
-    if (!isText(b.role)) bad('role must be the name of a role');
+    if (!isDevice(b.device)) bad('Choose a member.');
+    if (!isText(b.role)) bad('Choose a role.');
     const path = project ? `/v1/projects/${enc(project)}/members/${enc(b.device)}` : `/v1/office/members/${enc(b.device)}`;
     await forward(send, 'PUT', path, { role: b.role });
   }),
@@ -112,22 +114,22 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
   // Project scope only: revoking a device stays on the CLI (S3-7).
   'POST /api/team/member/remove': guarded(async (_req, send, b) => {
     const project = projectOf(b);
-    if (!isText(b.device)) bad('device must be a device id');
+    if (!isDevice(b.device)) bad('Choose a member.');
     await forward(send, 'DELETE', `/v1/projects/${enc(project)}/members/${enc(b.device)}`);
   }),
 
   'POST /api/team/role/create': guarded(async (_req, send, b) => {
     const path = rolesPath(b);
-    if (typeof b.name !== 'string') bad('name must be text');
+    if (typeof b.name !== 'string') bad('Give the role a name.');
     await forward(send, 'POST', path, { name: b.name, keys: keysOf(b.keys) });
   }),
 
   'POST /api/team/role/update': guarded(async (_req, send, b) => {
     const path = `${rolesPath(b)}/${enc(roleIdOf(b))}`;
     const change: { name?: string; keys?: string[] } = {};
-    if (b.name !== undefined) { if (typeof b.name !== 'string') bad('name must be text'); change.name = b.name; }
+    if (b.name !== undefined) { if (typeof b.name !== 'string') bad('Give the role a name.'); change.name = b.name; }
     if (b.keys !== undefined) change.keys = keysOf(b.keys);
-    if (change.name === undefined && change.keys === undefined) bad('nothing to change: give a name or keys');
+    if (change.name === undefined && change.keys === undefined) bad('Nothing to change: give a new name or permissions.');
     await forward(send, 'PUT', path, change);
   }),
 
