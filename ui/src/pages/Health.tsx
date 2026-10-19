@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react';
-import { doctor, reassignModule, setupDoctor, upsertEntry, type SetupGroup, type SetupMark, type SetupReport } from '../api/client';
+import {
+  doctor, doctorFix, notebooksList, reassignModule, setupDoctor, upsertEntry,
+  type NotebooksView, type SetupGroup, type SetupMark, type SetupReport,
+} from '../api/client';
+import { toast } from '../components/Toast';
 import { formatEntryRef } from '../format';
 
 const SETUP_GROUPS: Array<[SetupGroup, string]> = [
@@ -13,8 +17,24 @@ const MARK: Record<SetupMark, { sign: string; tone: string }> = {
   skipped: { sign: '-', tone: 'text-gray-400' },
 };
 
-/** The whole-setup report: the same lines and words as `collab doctor` in a terminal (spec P10). */
-function SetupSection({ report, error }: { report: SetupReport | null; error: string | null }) {
+type Report = SetupReport & { fixable?: string[] };
+
+/**
+ * The whole-setup report: the same lines and words as `collab doctor` in a terminal (spec P10).
+ * A check `collab doctor --fix` can repair safely gets a Fix button (UI parity Task 7b).
+ */
+function SetupSection({ report, error, onReport }: { report: Report | null; error: string | null; onReport: (r: Report) => void }) {
+  const [fixing, setFixing] = useState<string | null>(null);
+  const fix = async (id: string) => {
+    setFixing(id);
+    try {
+      const r = await doctorFix(id);
+      toast(r.text, r.ok ? 'success' : 'error');
+      onReport(r.report);
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    } finally { setFixing(null); }
+  };
   if (error) return <p className="text-sm text-red-600">Setup check failed: {error}</p>;
   if (!report) return <p className="text-sm text-gray-500 animate-pulse">Checking setup...</p>;
   return (
@@ -32,6 +52,12 @@ function SetupSection({ report, error }: { report: SetupReport | null; error: st
                   <span className={`inline-block w-4 font-bold ${MARK[c.mark].tone}`}>{MARK[c.mark].sign}</span>
                   <span>{c.text}</span>
                   {c.fix && <div className="ml-4 text-xs text-gray-500">fix: <code>{c.fix}</code></div>}
+                  {report.fixable?.includes(c.id) && (
+                    <button type="button" onClick={() => fix(c.id)} disabled={fixing !== null}
+                      className="ml-4 mt-1 rounded-md border border-gray-300 dark:border-gray-700 px-2 py-0.5 text-xs hover:bg-gray-100 dark:hover:bg-gray-900 disabled:opacity-50">
+                      {fixing === c.id ? 'Fixing…' : 'Fix'}
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -45,10 +71,40 @@ function SetupSection({ report, error }: { report: SetupReport | null; error: st
   );
 }
 
+/** The notebooks on this computer (`collab notebook list`), marking the open one (`which`). */
+function NotebooksSection() {
+  const [view, setView] = useState<NotebooksView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { notebooksList().then(setView).catch((e) => setError((e as Error).message)); }, []);
+  if (error) return <p className="text-sm text-red-600">{error}</p>;
+  if (!view) return null;
+  return (
+    <section className="border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-gray-950 p-4 space-y-3">
+      <h2 className="font-bold text-sm uppercase tracking-widest">Notebooks</h2>
+      <p className="text-sm">Open now: {view.open.described} <span className="break-all text-gray-500">({view.open.path})</span></p>
+      {view.error && <p className="text-sm text-red-600">{view.error}</p>}
+      {view.notebooks.length > 0 && (
+        <ul className="space-y-1 text-sm">
+          {view.notebooks.map((n) => (
+            <li key={n.name} className="flex flex-wrap items-baseline gap-x-2">
+              <span className="font-medium">{n.name}</span>
+              {n.open && <span className="rounded-full bg-gray-200 dark:bg-gray-800 px-2 text-xs">Open</span>}
+              {n.default && <span className="rounded-full bg-gray-200 dark:bg-gray-800 px-2 text-xs">Default</span>}
+              {n.missing && <span className="text-xs text-red-600">File missing</span>}
+              <span className="break-all text-xs text-gray-500">{n.path}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-xs text-gray-500">The web server works on one notebook. To open another, restart it with that notebook.</p>
+    </section>
+  );
+}
+
 export default function Health() {
   const [checks, setChecks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [setup, setSetup] = useState<SetupReport | null>(null);
+  const [setup, setSetup] = useState<Report | null>(null);
   const [setupError, setSetupError] = useState<string | null>(null);
 
   const fetchHealth = () => {
@@ -106,7 +162,8 @@ export default function Health() {
         </button>
       </div>
 
-      <SetupSection report={setup} error={setupError} />
+      <SetupSection report={setup} error={setupError} onReport={setSetup} />
+      <NotebooksSection />
 
       <div className="space-y-6 pb-12">
         {checks.map((check, i) => (

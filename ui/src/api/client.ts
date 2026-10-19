@@ -149,7 +149,17 @@ export interface SetupReport {
   exitCode: 0 | 1 | 2;
   notebook: { name: string | null; path: string; source: string; described: string } | null;
 }
-export const setupDoctor = () => getJson<SetupReport>(`/api/doctor/setup`);
+export const setupDoctor = () => getJson<SetupReport & { fixable?: string[] }>(`/api/doctor/setup`);
+/** One of `collab doctor --fix`'s safe repairs; `text` is --fix's own line. */
+export const doctorFix = (id: string) =>
+  sendJson<{ ok: boolean; text: string; report: SetupReport & { fixable?: string[] } }>('POST', '/api/doctor/fix', { id });
+/** `collab notebook list` and `which`, read-only. */
+export interface NotebooksView {
+  open: { name: string | null; path: string; described: string };
+  notebooks: Array<{ name: string; path: string; default: boolean; open: boolean; missing: boolean }>;
+  error?: string;
+}
+export const notebooksList = () => sendJson<NotebooksView>('GET', '/api/notebooks');
 
 // --- Tasks ---
 export const tasks = () => getJson<{ results: any[] }>(`/api/collab/tasks`);
