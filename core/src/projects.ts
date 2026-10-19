@@ -315,6 +315,7 @@ export async function renameProject(db: DB, codeOrUlid: string, newName: string)
     throw new ProjectClashError(`[collab] this notebook already has a project named "${clash.name}" (${clash.code}). ${FIXES}`);
   }
   if (p.mode === "team") {
+    if (p.left_at) throw new ReadOnlyNoteError(`[collab] ${p.code} (${p.name}) is a team you left: it is read-only and can't be renamed`);
     const target = officeOf(db);
     if (p.team !== target.fingerprint) throw new Error(`[collab] ${p.code} is a team project of another post office; one office per notebook (E-820)`);
     const nothing = "nothing was changed";

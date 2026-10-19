@@ -94,7 +94,7 @@ Controls you may not use are shown disabled with the reason, not hidden. That is
 | S3-10 | **Refused changes have their own page**, because a refusal can come from any project. |
 | S3-11 | **"Team" shows in the sidebar** only when this notebook is connected to a post office and is in a team project or holds an office role. Solo-only notebooks see nothing new. |
 | S3-12 | **Fresh answers:** the Team page asks the post office on every load. Offline, it says the post office can't be reached; nothing stale is shown. Once the sidebar has shown "Team" it keeps it, so you can open the page and see why. |
-| S3-13 | **Laptop-checked permissions** (`note.copy.out`, `project.edit`) carry the note "Checked on this laptop. It limits your AI, but it is not a security boundary." |
+| S3-13 | **Laptop-checked permissions** (`note.copy.out`; `project.edit` until UI parity moved it to the post office) carry the note "Checked on this laptop. It limits your AI, but it is not a security boundary." |
 | S3-14 | **No escalation (your ruling):** you can give, create or extend a role only with permissions you hold yourself. |
 | S3-15 | **Your own role (your ruling):** With Manage roles, you can lower your own role but not raise it; the last Owner can't lower themselves. |
 

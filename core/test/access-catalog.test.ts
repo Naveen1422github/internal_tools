@@ -14,7 +14,7 @@ test('catalog: every key unique, scoped, labelled', () => {
 });
 test('checkedOn: laptop keys', () => {
   const laptop = CATALOG.flatMap(a => a.permissions).filter(p => p.checkedOn === 'laptop').map(p => p.key).sort();
-  assert.deepEqual(laptop, ['note.copy.out', 'project.delete', 'project.edit', 'project.make_solo']);
+  assert.deepEqual(laptop, ['note.copy.out', 'project.delete', 'project.make_solo']); // project.edit: office since UI parity D1
 });
 test('sanitizeKeys drops unknown, wrong-scope and duplicate keys', () => {
   assert.deepEqual(sanitizeKeys('project', ['note.view', 'note.view', 'ticket.close', 'office.member.add', 7]), ['note.view']);

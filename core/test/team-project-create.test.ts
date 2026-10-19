@@ -203,6 +203,20 @@ test('rename a team project: the office is asked first; its refusal changes noth
     answer = { status: 404, error: 'no such endpoint: PUT /v1/projects/x' };
     await assert.rejects(renameProject(t.db, 'SH', 'Nope'), /can't rename team projects yet: update it first; nothing was changed/);
 
+    answer = { status: 404, error: 'no such team project' };
+    await assert.rejects(renameProject(t.db, 'SH', 'Nope'), (e: any) =>
+      e instanceof OfficeRefusedError && e.status === 404 && e.officeError === 'no such team project' && /answered 404: no such team project; nothing was changed/.test(e.message));
+
+    answer = { status: 200 };
+    assert.equal((await renameProject(t.db, 'SH', 'SUPPORT DESK')).name, 'SUPPORT DESK', 'a change of case of its own name');
+
+    t.db.prepare(`UPDATE projects SET left_at = datetime('now') WHERE code = 'SH'`).run();
+    const sent = puts.length;
+    await assert.rejects(renameProject(t.db, 'SH', 'Gone'), /is a team you left: it is read-only and can't be renamed/);
+    t.db.prepare(`UPDATE projects SET left_at = NULL, team = 'another-office' WHERE code = 'SH'`).run();
+    await assert.rejects(renameProject(t.db, 'SH', 'Elsewhere'), /team project of another post office/);
+    assert.equal(puts.length, sent, 'neither asked the office');
+
     createProject(t.db, { name: 'Navi', code: 'NV' });
     const before = puts.length;
     assert.equal((await renameProject(t.db, 'NV', 'Navigator')).name, 'Navigator');

@@ -342,7 +342,7 @@ export function renameOfficeProject(db: Store, projectUlid: string, newName: unk
       const isMember = !!db.prepare(`SELECT 1 FROM po_project_members WHERE project_ulid = ? AND device_id = ?`).get(byName.ulid, actor);
       throw new StoreError(isMember ? `this team already has a project named "${name}" (${byName.code})` : "that project name is taken", 409);
     }
-    db.prepare(`UPDATE po_projects SET name = ? WHERE ulid = ?`).run(name, projectUlid);
+    if (db.prepare(`UPDATE po_projects SET name = ? WHERE ulid = ?`).run(name, projectUlid).changes === 0) throw new StoreError("no such team project", 404);
     return db.prepare(`SELECT ulid, name, code, created_at FROM po_projects WHERE ulid = ?`).get(projectUlid) as OfficeProject;
   }).immediate();
 }
