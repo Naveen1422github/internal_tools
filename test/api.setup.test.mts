@@ -48,7 +48,9 @@ test('GET /api/doctor/setup returns the setup report', async () => {
       return { status: r.status, body: await r.json() };
     };
     assert.deepEqual(await post('/api/doctor/fix', { id: 'notebook.migrate' }), { status: 400, body: { error: "That check can't be fixed from here." } });
-    assert.deepEqual(await post('/api/doctor/fix', { id: 'toString' }), { status: 400, body: { error: "That check can't be fixed from here." } });
+    for (const id of ['toString', '__proto__', 1, ['install.addon'], null]) {
+      assert.deepEqual(await post('/api/doctor/fix', { id }), { status: 400, body: { error: "That check can't be fixed from here." } }, String(id));
+    }
     if (!report.fixable.includes('programs.stale')) {
       assert.deepEqual(await post('/api/doctor/fix', { id: 'programs.stale' }), { status: 409, body: { error: 'Nothing to fix: the check is fine now.' } });
     }

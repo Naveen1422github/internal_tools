@@ -33,6 +33,8 @@ function SetupSection({ report, error, onReport }: { report: Report | null; erro
       onReport(r.report);
     } catch (e) {
       toast((e as Error).message, 'error');
+      // The check may be fine by now (409): show the report as it is.
+      setupDoctor().then(onReport).catch(() => {});
     } finally { setFixing(null); }
   };
   if (error) return <p className="text-sm text-red-600">Setup check failed: {error}</p>;

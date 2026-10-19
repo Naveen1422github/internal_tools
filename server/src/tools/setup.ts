@@ -1,8 +1,7 @@
 import http from 'node:http';
 import { existsSync } from 'node:fs';
-import path from 'node:path';
 import {
-  runSetupDoctor, fixableIds, runSafeFix, SAFE_FIXES, readNotebookConfig, lastResolution, describeResolution,
+  runSetupDoctor, fixableIds, runSafeFix, SAFE_FIXES, readNotebookConfig, lastResolution, describeResolution, samePath,
   type SafeFixId, type NotebookConfig,
 } from '@collab-mcp/core';
 
@@ -30,13 +29,14 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
 
   // `collab notebook list` and `collab notebook which`, read-only (switching needs a restart).
   'GET /api/notebooks': async (_req, _res, send) => {
-    const r = lastResolution()!;
+    const r = lastResolution();
+    if (!r) return send(503, { error: 'No notebook is open yet.' });
     const open = { name: r.name, path: r.path, described: describeResolution(r) };
     let cfg: NotebookConfig;
     try { cfg = readNotebookConfig(); } catch (e) { return send(200, { open, notebooks: [], error: (e as Error).message.replace(/^\[collab\] /, '') }); }
     const notebooks = Object.keys(cfg.notebooks).sort().map((name) => {
       const p = cfg.notebooks[name].path;
-      return { name, path: p, default: cfg.default === name, open: path.resolve(p) === path.resolve(r.path), missing: !existsSync(p) };
+      return { name, path: p, default: cfg.default === name, open: samePath(p, r.path), missing: !existsSync(p) };
     });
     send(200, { open, notebooks });
   },

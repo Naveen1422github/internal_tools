@@ -55,4 +55,18 @@ describe('Health page: setup report', () => {
     expect(within(items[0]).getByText('Default')).toBeTruthy();
     expect(within(items[1]).getByText('File missing')).toBeTruthy();
   });
+
+  it('a failed fix shows --fix\'s line as an error that stays; a refused one reloads the report', async () => {
+    api.doctorFix.mockResolvedValueOnce({ ok: false, text: 'could not fix: sync add-on (offline)', report: { checks: [], errors: 0, warnings: 0, exitCode: 0, notebook: null, fixable: [] } });
+    render(<MemoryRouter><Health /><Toaster /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Fix' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('could not fix: sync add-on (offline)');
+    cleanup();
+    api.doctorFix.mockRejectedValueOnce(Object.assign(new Error('Nothing to fix: the check is fine now.'), { status: 409 }));
+    const before = api.setupDoctor.mock.calls.length;
+    render(<MemoryRouter><Health /><Toaster /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Fix' }));
+    await screen.findAllByText('Nothing to fix: the check is fine now.');
+    await waitFor(() => expect(api.setupDoctor.mock.calls.length).toBe(before + 2));
+  });
 });
