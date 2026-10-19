@@ -284,3 +284,28 @@ export const refusedList = () => sendJson<RefusedList>('GET', '/api/refused');
 /** `to` is a solo project's code; answers the new note's ref, e.g. "MY-4". */
 export const refusedCopy = (id: string, to: string) => sendJson<{ ref: string }>('POST', '/api/refused/copy', { id, to });
 export const refusedDelete = (id: string) => sendJson<{ ok: true }>('POST', '/api/refused/delete', { id });
+
+// --- Projects (UI parity): the same core operations as `collab project ...` ---
+export interface Project {
+  ulid: string; name: string; code: string; mode: 'solo' | 'team'; team: string | null; created_at: string;
+  /** A team project this laptop left: read-only. */
+  left_at: string | null;
+}
+export interface ProjectRow extends Project {
+  notes: number;
+  /** Notes waiting for a number from the post office. */
+  pending: number;
+  /** Modules bound to this project on this laptop. */
+  modules: string[];
+  /** Solo only: the highest number ever used, so a promote continues after it. */
+  highest?: number;
+}
+export interface ProjectList { projects: ProjectRow[]; modules: string[]; office_url: string | null }
+export const projectsList = () => sendJson<ProjectList>('GET', '/api/projects');
+export const projectCreate = (b: { name: string; code: string; team: boolean }) =>
+  sendJson<{ project: Project; lines: string[] }>('POST', '/api/projects/create', b);
+export const projectPromote = (code: string) =>
+  sendJson<{ project: Project; next?: string; already?: true }>('POST', '/api/projects/promote', { code });
+export const projectRename = (code: string, name: string) => sendJson<{ project: Project }>('POST', '/api/projects/rename', { code, name });
+export const projectBind = (module: string, code: string) => sendJson<{ line: string }>('POST', '/api/projects/bind', { module, code });
+export const projectUnbind = (module: string) => sendJson<{ line: string }>('POST', '/api/projects/unbind', { module });

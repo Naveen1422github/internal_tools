@@ -5,6 +5,7 @@ import EntryDrawer from './EntryDrawer';
 import AiPanel from './AiPanel';
 import KeyMissingNotice from './KeyMissingNotice';
 import SyncBar from './SyncBar';
+import Toaster from './Toast';
 import { useUi } from '../store/ui';
 
 export default function AppShell({ children }: { children: ReactNode }) {
@@ -24,6 +25,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
       {aiPanelOpen && <AiPanel />}
       <CommandPalette />
       <EntryDrawer />
+      <Toaster />
     </div>
   );
 }

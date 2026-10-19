@@ -9,6 +9,7 @@ import NeedsMerge from './pages/NeedsMerge';
 import Merge from './pages/Merge';
 import Team from './pages/Team';
 import Refused from './pages/Refused';
+import Projects from './pages/Projects';
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/knowledge" element={<Knowledge />} />
         <Route path="/modules" element={<Modules />} />
+        <Route path="/projects" element={<Projects />} />
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/health" element={<Health />} />
         <Route path="/needs-merge" element={<NeedsMerge />} />

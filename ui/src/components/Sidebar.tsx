@@ -6,6 +6,7 @@ const links = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/knowledge', label: 'Knowledge' },
   { to: '/modules', label: 'Modules' },
+  { to: '/projects', label: 'Projects' }, // UI parity D8: always, solo projects need no office
   { to: '/tasks', label: 'Tasks' },
   { to: '/health', label: 'Health' },
 ];
