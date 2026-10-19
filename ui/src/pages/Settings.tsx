@@ -81,6 +81,8 @@ function AutostartSection({ view, onSaved }: { view: SettingsView; onSaved: () =
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const why = !view.courier_available ? "The sync program isn't installed with this web server."
+    : view.autostart === null && view.courier_notebook && view.courier_notebook !== view.open_notebook
+      ? `This laptop's sync runs for another notebook (${view.courier_notebook}). Change start-at-login from that notebook's web page.`
     : view.autostart === null ? "This laptop isn't set up for sync yet, so there is nothing to start at login." : null;
   const toggle = async () => {
     setBusy(true); setError(null);

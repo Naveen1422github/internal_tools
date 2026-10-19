@@ -51,6 +51,24 @@ test('autostart without a courier set up: a plain 409, nothing registered', asyn
   assert.equal(bad.status, 400);
 });
 
+test('a courier set up for another notebook: its start-at-login is not shown as this one\'s, nor changed from here', async () => {
+  const courier = await import('../courier/src/setup.ts');
+  const dir = process.env.COLLAB_COURIER_DIR!;
+  courier.writeCourierConfig(dir, { dbPath: path.join(srv.root, 'elsewhere.db'), postOffice: 'https://keep.example:1', device: 'd', autostart: true, backup: null });
+  try {
+    const r = await srv.api('/api/settings');
+    assert.deepEqual([r.body.autostart, r.body.courier_notebook], [null, path.join(srv.root, 'elsewhere.db')]);
+    const t = await srv.api('/api/settings/autostart', { on: false });
+    assert.equal(t.status, 409);
+    assert.match(t.body.error, /^This laptop's sync runs for another notebook/);
+    const url = core.getSyncValue(srv.db, core.SYNC_KEYS.url);
+    assert.equal((await srv.api('/api/settings/address', { url })).status, 200);
+    assert.equal(courier.readCourierConfig(dir).postOffice, 'https://keep.example:1', "the other notebook's courier config is untouched");
+  } finally {
+    (await import('node:fs')).rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // Last: the office stays down.
 test('office down: the name is unavailable, the rest still shows', async () => {
   await srv.office.down();

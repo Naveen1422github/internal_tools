@@ -52,7 +52,9 @@ export async function setPostOfficeAddress(dir: string, rawUrl: string, opts: { 
     if (!opts.db) { try { db.prepare("SELECT crsql_finalize()").get(); } catch { /* closing anyway */ } db.close(); }
   }
   // The courier reads its own config on start: keep it in step when it serves this notebook.
-  if (cfg && (!opts.dbPath || samePath(cfg.dbPath, opts.dbPath))) writeCourierConfig(dir, { ...cfg, postOffice: url });
+  // A caller's own notebook (opts.db) updates the config only when it is provably the courier's.
+  const courierNotebook = opts.db ? !!opts.dbPath && !!cfg && samePath(cfg.dbPath, opts.dbPath) : !!cfg;
+  if (cfg && courierNotebook) writeCourierConfig(dir, { ...cfg, postOffice: url });
   return { ok: true, url };
 }
 

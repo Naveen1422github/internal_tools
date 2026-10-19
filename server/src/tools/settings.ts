@@ -4,7 +4,7 @@
 // sync autostart`). The last two are the courier's own functions, loaded at run
 // time the way the CLI loads the courier (D11): no new package dependency.
 import http from 'node:http';
-import { getDb, thisLaptop, postOfficeTargetFromDb, requestJson, lastResolution } from '@collab-mcp/core';
+import { getDb, thisLaptop, postOfficeTargetFromDb, requestJson, lastResolution, samePath } from '@collab-mcp/core';
 import { UNREACHABLE } from './office-errors.js';
 
 const db = getDb();
@@ -29,7 +29,8 @@ async function nameAtOffice(device: string | null): Promise<{ name: string | nul
   try {
     const r = await requestJson(target, 'GET', '/v1/status', undefined, { timeoutMs: 4000 });
     if (r.status !== 200) return { name: null, error: String(r.body?.error ?? `The post office answered ${r.status}.`) };
-    const me = (r.body.members as Array<{ device_id: string; name: string }>).find((m) => m.device_id === device);
+    const members = (Array.isArray(r.body?.members) ? r.body.members : []) as Array<{ device_id: string; name: string }>;
+    const me = members.find((m) => m.device_id === device);
     return { name: me?.name ?? null, error: null };
   } catch {
     return { name: null, error: `Name unavailable: ${UNREACHABLE[0].toLowerCase()}${UNREACHABLE.slice(1)}` };
@@ -43,12 +44,14 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     const c = await courier();
     const cfg = c ? c.readCourierConfig(c.courierDir()) : null;
     const open = lastResolution()?.path ?? null;
+    // The courier on this machine syncs one notebook: its start-at-login belongs to that one.
+    const mine = !!cfg && !!open && samePath(cfg.dbPath, open);
     send(200, {
       ...me,
       name,
       name_error: error,
       // Start-at-login belongs to the courier set up on this machine; null: not set up (or another notebook's).
-      autostart: cfg ? cfg.autostart : null,
+      autostart: mine ? cfg!.autostart : null,
       courier_notebook: cfg ? cfg.dbPath : null,
       courier_available: !!c,
       open_notebook: open,
@@ -68,6 +71,11 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     if (typeof body?.on !== 'boolean') return send(400, { error: '"on" must be true or false.' });
     const c = await courier();
     if (!c) return send(501, { error: NO_COURIER });
+    const cfg = c.readCourierConfig(c.courierDir());
+    const open = lastResolution()?.path;
+    if (cfg && !(open && samePath(cfg.dbPath, open))) {
+      return send(409, { error: `This laptop's sync runs for another notebook (${cfg.dbPath}). Change start-at-login from that notebook's web page.` });
+    }
     let lines: string[] | null;
     try { lines = c.setAutostart(c.courierDir(), body.on); } catch (e) { return send(500, { error: (e as Error).message }); }
     if (!lines) return send(409, { error: "This laptop isn't set up for sync yet, so there is nothing to start at login." });
