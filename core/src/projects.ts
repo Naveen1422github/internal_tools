@@ -151,17 +151,29 @@ function officeOf(db: DB): PostOfficeTarget {
 async function registerAtOffice(
   target: PostOfficeTarget, body: { ulid: string; name: string; code: string; seed: number }, doing: string, nothing: string,
 ): Promise<void> {
+  await askOffice(target, "POST", "/v1/projects", body, doing, nothing,
+    `[collab] the post office at ${target.url} keeps no team projects yet: update it first; ${nothing}`);
+}
+
+/**
+ * One project call to the office, with its refusals as typed errors (UI parity D7).
+ * `old404` is the sentence for an office too old to have the route; any other 404
+ * (a project you are not in, R7a) keeps the office's own words.
+ */
+async function askOffice(
+  target: PostOfficeTarget, method: "POST" | "PUT", path: string, body: unknown, doing: string, nothing: string, old404: string,
+): Promise<void> {
   let r;
   try {
-    r = await requestJson(target, "POST", "/v1/projects", body, { timeoutMs: 5000 });
+    r = await requestJson(target, method, path, body, { timeoutMs: 5000 });
   } catch (e) {
     throw new OfficeUnreachableError(`[collab] ${doing} needs the post office; ${nothing}. The post office at ${target.url} could not be reached: ${(e as Error).message}`, e);
   }
   if (r.status === 200) return;
   if (r.status === 409) throw new ProjectClashError(`[collab] the post office refused: ${r.body?.error ?? "a clash"}. ${FIXES}`);
   const said = typeof r.body?.error === "string" ? r.body.error : null;
-  if (r.status === 404) {
-    throw new OfficeRefusedError(`[collab] the post office at ${target.url} keeps no team projects yet: update it first; ${nothing}`, 404, said);
+  if (r.status === 404 && (method === "POST" || !said || /^no such endpoint/.test(said))) {
+    throw new OfficeRefusedError(old404, 404, said);
   }
   throw new OfficeRefusedError(`[collab] the post office at ${target.url} answered ${r.status}${said ? `: ${said}` : ""}; ${nothing}`, r.status, said);
 }
@@ -285,16 +297,29 @@ export function clearProjectLeft(db: DB, ulid: string, fingerprint: string): boo
   ).run(ulid, fingerprint).changes > 0;
 }
 
-export function renameProject(db: DB, codeOrUlid: string, newName: string): Project {
+/**
+ * Rename a project (its code never changes). A team project's name lives at
+ * its post office, which checks project.edit (UI parity D1): it is renamed
+ * there first, or the courier would put the office's name back on the next
+ * sync. A solo project never touches the office.
+ */
+export async function renameProject(db: DB, codeOrUlid: string, newName: string): Promise<Project> {
   needs0009(db);
   const p = findProject(db, codeOrUlid);
   if (!p) throw notFound(db, codeOrUlid);
-  assertCan(db, p.ulid, "project.edit"); // R8
+  assertCan(db, p.ulid, "project.edit"); // R8: the quick answer here; the office decides for a team project
   const name = String(newName ?? "").trim();
   if (!name) throw new Error("[collab] a project needs a name");
   const clash = nameClash(db, name, p.ulid);
   if (clash) {
     throw new ProjectClashError(`[collab] this notebook already has a project named "${clash.name}" (${clash.code}). ${FIXES}`);
+  }
+  if (p.mode === "team") {
+    const target = officeOf(db);
+    if (p.team !== target.fingerprint) throw new Error(`[collab] ${p.code} is a team project of another post office; one office per notebook (E-820)`);
+    const nothing = "nothing was changed";
+    await askOffice(target, "PUT", `/v1/projects/${encodeURIComponent(p.ulid)}`, { name }, "renaming a team project", nothing,
+      `[collab] the post office at ${target.url} can't rename team projects yet: update it first; ${nothing}`);
   }
   db.prepare(`UPDATE projects SET name = ?, updated_at = datetime('now') WHERE ulid = ?`).run(name, p.ulid);
   return findProject(db, p.ulid)!;

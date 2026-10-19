@@ -11,6 +11,10 @@ function at0009<T>(fn: (db: any) => T): T {
   const t = freshDb();
   try { migrate(t.db); return fn(t.db); } finally { t.cleanup(); }
 }
+async function at0009Async(fn: (db: any) => Promise<void>): Promise<void> {
+  const t = freshDb();
+  try { migrate(t.db); await fn(t.db); } finally { t.cleanup(); }
+}
 
 test('create supporthub/sh: code stored SH, mode solo, a valid ulid', () => {
   at0009((db) => {
@@ -50,17 +54,17 @@ test('createProject refuses team mode and points at the team commands (stage C)'
   });
 });
 
-test('rename keeps ulid and code, clash-checks the new name', () => {
-  at0009((db) => {
+test('rename keeps ulid and code, clash-checks the new name', async () => {
+  await at0009Async(async (db) => {
     const a = createProject(db, { name: 'alpha', code: 'AL' });
     createProject(db, { name: 'beta', code: 'BE' });
-    const r = renameProject(db, 'al', 'Alpha Two');
+    const r = await renameProject(db, 'al', 'Alpha Two');
     assert.equal(r.ulid, a.ulid);
     assert.equal(r.code, 'AL');
     assert.equal(r.name, 'Alpha Two');
-    assert.throws(() => renameProject(db, 'AL', 'BETA'), ProjectClashError);
-    assert.equal(renameProject(db, a.ulid, 'alpha two').name, 'alpha two', 'renaming to itself in another case is fine');
-    assert.throws(() => renameProject(db, 'ZZ', 'x'), ProjectNotFoundError);
+    await assert.rejects(renameProject(db, 'AL', 'BETA'), ProjectClashError);
+    assert.equal((await renameProject(db, a.ulid, 'alpha two')).name, 'alpha two', 'renaming to itself in another case is fine');
+    await assert.rejects(renameProject(db, 'ZZ', 'x'), ProjectNotFoundError);
   });
 });
 
@@ -75,12 +79,12 @@ test('list by name; find by code (any case) or ulid', () => {
   });
 });
 
-test('a pre-0009 notebook: every function says it needs migration 0009', () => {
+test('a pre-0009 notebook: every function says it needs migration 0009', async () => {
   const t = freshDb();
   try {
     migrateTo(t.db, '0008');
     assert.throws(() => createProject(t.db as any, { name: 'a', code: 'AB' }), /needs migration 0009/);
-    assert.throws(() => renameProject(t.db as any, 'AB', 'b'), /needs migration 0009/);
+    await assert.rejects(renameProject(t.db as any, 'AB', 'b'), /needs migration 0009/);
     assert.throws(() => listProjects(t.db as any), /needs migration 0009/);
     assert.throws(() => findProject(t.db as any, 'AB'), /needs migration 0009/);
   } finally { t.cleanup(); }

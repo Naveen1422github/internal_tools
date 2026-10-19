@@ -95,7 +95,7 @@ export async function runProject(args: string[], io: Io): Promise<CliResult> {
       case "rename": {
         const [code, ...nameWords] = words(rest);
         if (!code || nameWords.length === 0) { io.err("usage: collab project rename <code> <new name>"); return { code: 2 }; }
-        const p = renameProject(getDb(), code, nameWords.join(" "));
+        const p = await renameProject(getDb(), code, nameWords.join(" "));
         io.out(`Project ${p.code} is now named ${p.name}.`);
         return { code: 0 };
       }

@@ -175,3 +175,37 @@ test('typed errors: a revoked key is an OfficeUnreachableError whose cause is Ac
     assert.equal(findProject(t.db, 'SH'), null);
   } finally { await gone.close(); t.cleanup(); }
 });
+
+// UI parity D1: a team project's name lives at the office.
+test('rename a team project: the office is asked first; its refusal changes nothing; solo never asks', async () => {
+  const { OfficeRefusedError } = await import('../src/sync/errors.js');
+  const { renameProject } = await import('../src/projects.js');
+  const puts: any[] = [];
+  let answer: { status: number; error?: string } = { status: 200 };
+  const o = await stubServer((req, res, body) => {
+    if (req.method === 'POST' && req.url === '/v1/projects') { res.end(JSON.stringify({ project: JSON.parse(body) })); return; }
+    if (req.method === 'PUT' && req.url?.startsWith('/v1/projects/')) {
+      puts.push({ url: req.url, body: JSON.parse(body) });
+      res.writeHead(answer.status); res.end(JSON.stringify(answer.error ? { error: answer.error } : { project: {} })); return;
+    }
+    res.writeHead(404); res.end('{}');
+  });
+  const t = shared(o.url, o.fingerprint);
+  try {
+    const p = await createTeamProject(t.db, { name: 'Support hub', code: 'SH' });
+    assert.equal((await renameProject(t.db, 'SH', '  Support desk ')).name, 'Support desk');
+    assert.deepEqual(puts, [{ url: `/v1/projects/${p.ulid}`, body: { name: 'Support desk' } }]);
+
+    answer = { status: 403, error: 'You need "Edit project" (project.edit) in SH to do this' };
+    await assert.rejects(renameProject(t.db, 'SH', 'Nope'), (e: any) => e instanceof OfficeRefusedError && e.status === 403 && e.officeError === answer.error);
+    assert.equal(findProject(t.db, 'SH')!.name, 'Support desk');
+
+    answer = { status: 404, error: 'no such endpoint: PUT /v1/projects/x' };
+    await assert.rejects(renameProject(t.db, 'SH', 'Nope'), /can't rename team projects yet: update it first; nothing was changed/);
+
+    createProject(t.db, { name: 'Navi', code: 'NV' });
+    const before = puts.length;
+    assert.equal((await renameProject(t.db, 'NV', 'Navigator')).name, 'Navigator');
+    assert.equal(puts.length, before, 'a solo rename never asks the office');
+  } finally { await o.close(); t.cleanup(); }
+});
