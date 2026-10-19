@@ -26,6 +26,7 @@ As of 2026-10-19.
 6. **Office roles are managed on the Team page;** revoking a device stays on the CLI (S3-7).
 7. **The matrix is roles × permissions**, a deliberate change from the spec (S3-8).
 8. **No "add a member" in the UI;** refused changes get their own page (S3-9, S3-10).
+9. **Adding a device is checked like assigning its role:** you need every permission of the office role the new device gets (S3-14).
 
 ## Needs your ruling (found in S3)
 
@@ -36,6 +37,9 @@ As of 2026-10-19.
 | 3 | A role held only by a removed device can never be deleted | The CLI can't give a removed device another role, so the role stays forever. The page says why. |
 | 4 | Losing "View notes" through a role edit shows the "team you left" wording | The person is still a member, but their laptop says `<CODE> (<name>) is a team you left: its notes are read-only`. |
 | 5 | Root `npm test` on Linux runs only the golden file | `sh` expands the unquoted `test/**/*.test.mts`. Windows is fine. On Linux run `npx tsx --test 'test/**/*.test.mts'`. |
+| 6 | The plan says S3-2 and S3-3 differently about deleting Editor, Contributor and Reader | The code follows S3-3: these built-ins can never be deleted, even when nobody holds them. |
+| 7 | Renaming Editor, Contributor or Reader is permanent | The old name can't be taken back, so `collab team set … Editor` then fails in that project. |
+| 8 | A revoke refusal names projects the caller may not be in (since S1) | "this is the only Owner of SH…" is shown even to a caller who isn't in SH (R7a). |
 
 ## Not built yet
 

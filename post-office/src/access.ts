@@ -265,7 +265,8 @@ export function syncReplays(db: Store, deviceId: string, projectUlid: string, be
 //   revoked devices included, points at it (a dangling role_ulid drops out of every JOIN).
 // - S3-4: a request names active keys only; the stored inactive ones (task.*) are kept.
 // - S3-6: names are trimmed, 1-40 characters, unique case-insensitively in the
-//   project, and never a starter name (a starter role may keep or take back one).
+//   project, and never a starter name (a starter role may keep its own, in any
+//   case; once renamed away, nobody can take it back).
 // `actor = null` = the office machine's CLI: no keys checked, the structural rules still hold.
 const ROLE_NAME_MAX = 40;
 /** One fold for every name comparison (S3-6): NFC first, so "É" and "E\u0301" meet; full Unicode case, not SQLite's ASCII-only lower(). */
@@ -441,7 +442,7 @@ export function deleteProjectRole(db: Store, actor: string | null, projectUlid: 
 //   office counts admins by name (liveOfficeAdmins, isSoleOfficeAdmin) and "one
 //   Office admin always" means nothing if its keys could shrink. Office member's
 //   name and existence are fixed, because a new device is given the role found by
-//   that exact name (assignNewMemberOfficeRole, a case-sensitive match: a rename,
+//   that exact name (newMemberOfficeRole, a case-sensitive match: a rename,
 //   even of case, would break every join); its keys can change.
 // - S3-3/S3-4/S3-6 as for project roles; names are unique within the office.
 // No replays move: no office key is note.view (replays follow project keys only).

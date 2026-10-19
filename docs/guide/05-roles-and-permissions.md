@@ -83,7 +83,7 @@ Controls you may not use are shown disabled with the reason, not hidden. That is
 | # | Rule |
 |---|---|
 | S3-1 | **Rank:** you can change or remove a member, or edit or delete a role, only if you hold every permission their role holds. The refusal names the first one you lack. |
-| S3-2 | **Locked built-ins:** Owner and Office admin can't be renamed, changed or deleted. Office member can't be renamed or deleted, but its permissions can change. Editor, Contributor and Reader are fully editable. |
+| S3-2 | **Locked built-ins:** Owner and Office admin can't be renamed, changed or deleted. Office member can't be renamed or deleted, but its permissions can change. Editor, Contributor and Reader are fully editable but can't be deleted. |
 | S3-3 | **Deleting a role:** only custom roles, and only when nobody holds it. Removed devices count: then the message says "...including N removed device(s). It can't be deleted while a removed device still holds it." |
 | S3-4 | **Switched-off permissions are kept:** saving a role keeps its stored `task.*` keys. Unknown or switched-off keys in a request are refused, not dropped. |
 | S3-5 | **A role edit moves history:** whoever gains "View notes" through it receives the project's history; whoever loses it gets a read-only project and nothing new. |
@@ -93,10 +93,10 @@ Controls you may not use are shown disabled with the reason, not hidden. That is
 | S3-9 | **No "add a member" in the UI.** Use `collab team set <member> <CODE> <role>`. |
 | S3-10 | **Refused changes have their own page**, because a refusal can come from any project. |
 | S3-11 | **"Team" shows in the sidebar** only when this notebook is connected to a post office and is in a team project or holds an office role. Solo-only notebooks see nothing new. |
-| S3-12 | **Fresh answers:** the Team page asks the post office on every load. Offline, it says the post office can't be reached; nothing stale is shown. |
+| S3-12 | **Fresh answers:** the Team page asks the post office on every load. Offline, it says the post office can't be reached; nothing stale is shown. Once the sidebar has shown "Team" it keeps it, so you can open the page and see why. |
 | S3-13 | **Laptop-checked permissions** (`note.copy.out`, `project.edit`) carry the note "Checked on this laptop. It limits your AI, but it is not a security boundary." |
 | S3-14 | **No escalation (your ruling):** you can give, create or extend a role only with permissions you hold yourself. |
-| S3-15 | **Your own role (your ruling):** you can lower it but not raise it. The last Owner (or last Office admin) can't lower themselves. |
+| S3-15 | **Your own role (your ruling):** With Manage roles, you can lower your own role but not raise it; the last Owner can't lower themselves. |
 
 ### How it was checked
 
