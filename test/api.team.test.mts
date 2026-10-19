@@ -263,24 +263,34 @@ test('invite without office.member.add -> the office\'s 403 sentence; nobody is 
     assert.equal(count(), before);
   } finally {
     po.setOfficeRole(srv.office.store, null, srv.a.device, 'Office admin');
+    po.setOfficeRole(srv.office.store, null, srv.b.device, 'Office member');
   }
 });
 
-test('revoke: a lower-ranked device is refused naming the key; a successful revoke cuts the device off', async () => {
+test('revoke: refused without the key, and refused by rank (naming the first key you lack); a successful revoke cuts the device off', async () => {
   const victim = await srv.api('/api/team/invite', { name: 'Temp' });
   const jc = core.parseJoinCode(victim.body.join_code);
   const joined = await core.requestJson({ url: jc.url, fingerprint: jc.fingerprint }, 'POST', '/v1/join', { device: jc.device, secret: jc.secret });
   const temp = { url: jc.url, fingerprint: jc.fingerprint, auth: { device: jc.device, key: joined.body.key }, schema: core.latestMigration(srv.db) };
   assert.equal((await core.requestJson(temp, 'GET', '/v1/status')).status, 200);
-  // b holds Office admin meanwhile, so a can be an Office member (who can't revoke anyone).
+  // b holds Office admin meanwhile, so a can hold lesser office roles.
   po.setOfficeRole(srv.office.store, null, srv.b.device, 'Office admin');
-  po.setOfficeRole(srv.office.store, null, srv.a.device, 'Office member');
   try {
+    po.setOfficeRole(srv.office.store, null, srv.a.device, 'Office member');
     const no = await srv.api('/api/team/revoke', { device: jc.device });
     assert.equal(no.status, 403);
     assert.deepEqual(no.body, { error: 'You need "Revoke office members" (office.member.revoke) in this office to do this' });
+    // Rank (S3-1): a may revoke, but Temp's role holds office.module.share, which a's role lacks.
+    po.createOfficeRole(srv.office.store, null, { name: 'Sharer', keys: ['office.project.create', 'office.module.share'] });
+    po.createOfficeRole(srv.office.store, null, { name: 'Remover', keys: ['office.project.create', 'office.member.revoke'] });
+    po.setOfficeRole(srv.office.store, null, jc.device, 'Sharer');
+    po.setOfficeRole(srv.office.store, null, srv.a.device, 'Remover');
+    const rank = await srv.api('/api/team/revoke', { device: jc.device });
+    assert.equal(rank.status, 403);
+    assert.deepEqual(rank.body, { error: 'You need "Share modules" (office.module.share) in this office to do this' });
   } finally {
     po.setOfficeRole(srv.office.store, null, srv.a.device, 'Office admin');
+    po.setOfficeRole(srv.office.store, null, srv.b.device, 'Office member');
   }
   const ok = await srv.api('/api/team/revoke', { device: jc.device });
   assert.deepEqual([ok.status, ok.body], [200, { ok: true }]);
@@ -289,7 +299,6 @@ test('revoke: a lower-ranked device is refused naming the key; a successful revo
   assert.equal(missing.status, 404);
   const bad = await srv.api('/api/team/revoke', { device: '..' });
   assert.deepEqual([bad.status, bad.body], [400, { error: 'Choose a member.' }]);
-  po.setOfficeRole(srv.office.store, null, srv.b.device, 'Office member');
 });
 
 // Last: the office stays down.
