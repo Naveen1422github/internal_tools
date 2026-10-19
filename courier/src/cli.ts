@@ -6,7 +6,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import {
-  resolveDbPath, loadCrsqlite, getSyncValue, setSyncValue, SYNC_KEYS, connectPinned, PinMismatchError,
+  resolveDbPath, loadCrsqlite, getSyncValue,
   postOfficeTargetFromDb, unsentSharedCount, requestJson, type PostOfficeTarget,
   describeMemberState, TEAM_STATUS_NOTE,
   startupProblem, startHeartbeat, runtimeDirFor, readBuildInfo, nameForPath,
@@ -14,8 +14,8 @@ import {
 import { Courier, type CourierStatus } from "./engine.js";
 import { COURIER_KEYS } from "./keys.js";
 import { courierDir as defaultCourierDir, courierFiles } from "./paths.js";
-import { autostartPlan, installAutostart, removeAutostart, type AutostartContext, type AutostartDeps } from "./autostart.js";
-import { setup, uninstall, readCourierConfig, writeCourierConfig, type CourierConfig } from "./setup.js";
+import { autostartPlan, type AutostartContext, type AutostartDeps } from "./autostart.js";
+import { setup, uninstall, readCourierConfig, type CourierConfig } from "./setup.js";
 import { setPostOfficeAddress, setAutostart } from "./settings.js";
 
 export interface Io { out(line: string): void; err(line: string): void }

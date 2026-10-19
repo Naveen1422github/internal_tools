@@ -4,6 +4,9 @@ import { useUi } from '../store/ui';
 import { getEntry, entryByUlid, upsertEntry, supersede, deleteEntry, type Entry, type EntryRef, type LinkTarget } from '../api/client';
 import Drawer from './Drawer';
 import CopyNote from './CopyNote';
+import Dialog from './Dialog';
+import NotePicker from './NotePicker';
+import { toast } from './Toast';
 import Markdown from './Markdown';
 import { useSyncOverview } from '../sync/useSyncOverview';
 import { shareLabel, saveNote, SHARED_LABEL, PRIVATE_LABEL } from '../sync/view';
@@ -26,6 +29,9 @@ export default function EntryDrawer() {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<Partial<Entry>>({});
   const [copying, setCopying] = useState(false);
+  // UI parity Task 12: dialogs, not the browser's prompt/confirm.
+  const [superseding, setSuperseding] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const sync = useSyncOverview();
 
   useEffect(() => {
@@ -51,49 +57,36 @@ export default function EntryDrawer() {
     if (!entry) return;
     try {
       // A note's project is fixed once it exists (copy it to move it): never sent with an edit.
-      const { project: _project, project_ulid: _projectUlid, ...edit } = editData;
-      const res = await upsertEntry({ ...edit, id: noteRefOf(entry) });
+      const edit = { ...editData };
+      delete edit.project;
+      delete edit.project_ulid;
+      const res = await upsertEntry({ ...(edit as Omit<Partial<Entry>, 'project'>), id: noteRefOf(entry) });
       if (res.ok) {
         setIsEditing(false);
         const updated = await reload(entry);
         setEntry(updated);
+        toast('Saved.');
       }
     } catch (err: any) {
-      alert(err.message);
+      toast(err.message, 'error');
     }
   };
 
-  const handleSupersede = async () => {
+  const handleSupersede = async (by: Entry) => {
     if (!entry) return;
-    const by = prompt('Enter the number of the note that supersedes this one (e.g. 214, E-00214 or SH-12):');
-    if (!by) return;
-    const byRef = parseNoteRef(by);
-    if (!byRef) return alert('Invalid note number: use 214, #214, E-00214, or a project note like SH-12');
-
-    if (confirm(`Supersede ${formatEntryRef(entry.id, entry.series)} by ${formatNoteRef(byRef)}?`)) {
-      try {
-        const res = await supersede([noteRefOf(entry)], openable(byRef));
-        if (res.ok) {
-          const updated = await reload(entry);
-          setEntry(updated);
-        }
-      } catch (err: any) {
-        alert(err.message);
-      }
+    const res = await supersede([noteRefOf(entry)], noteRefOf(by));
+    if (res.ok) {
+      setEntry(await reload(entry));
+      toast(`${formatEntryRef(entry.id, entry.series)} is superseded by ${formatEntryRef(by.id, by.series)}.`);
     }
   };
 
   const handleDelete = async () => {
     if (!entry) return;
-    if (confirm('Are you sure? It is usually better to supersede an entry to keep history.')) {
-      try {
-        const res = await deleteEntry(noteRefOf(entry));
-        if (res.ok) {
-          closeDrawer();
-        }
-      } catch (err: any) {
-        alert(err.message);
-      }
+    const res = await deleteEntry(noteRefOf(entry));
+    if (res.ok) {
+      toast(`${formatEntryRef(entry.id, entry.series)} deleted.`);
+      closeDrawer();
     }
   };
 
@@ -264,12 +257,24 @@ export default function EntryDrawer() {
                <>
                  <button onClick={() => setIsEditing(true)} className="w-full py-2 px-4 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded text-sm font-medium transition-colors">Edit Entry</button>
                  <button onClick={() => setCopying(true)} disabled={!entry.ulid || !!entry.deleted_at} className="w-full py-2 px-4 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded text-sm font-medium transition-colors disabled:opacity-50">Copy to another project</button>
-                 <button onClick={handleSupersede} className="w-full py-2 px-4 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded text-sm font-medium transition-colors">Supersede</button>
-                 <button onClick={handleDelete} className="w-full py-2 px-4 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded text-sm font-medium transition-colors">Delete</button>
+                 <button onClick={() => setSuperseding(true)} className="w-full py-2 px-4 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded text-sm font-medium transition-colors">Supersede</button>
+                 <button onClick={() => setDeleting(true)} className="w-full py-2 px-4 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded text-sm font-medium transition-colors">Delete</button>
                </>
              )}
           </div>
           {copying && <CopyNote entry={entry} onClose={() => setCopying(false)} />}
+          {superseding && <SupersedeDialog entry={entry} onSupersede={handleSupersede} onClose={() => setSuperseding(false)} />}
+          {deleting && (
+            <ActionDialog
+              title={`Delete ${formatEntryRef(entry.id, entry.series)}`}
+              confirmLabel="Delete"
+              danger
+              onConfirm={handleDelete}
+              onClose={() => setDeleting(false)}
+            >
+              <p className="text-sm">Delete “{entry.title}”? It is usually better to supersede a note, which keeps its history.</p>
+            </ActionDialog>
+          )}
         </div>
       )}
     </Drawer>
@@ -307,4 +312,37 @@ function TargetLink({ target, fallback, label, onOpen, className }: {
   }
   const text = `${formatEntryRef(target.id, target.series)}${target.title ? ` · ${target.title}` : ''}${target.deleted ? ' (deleted)' : ''}`;
   return <button onClick={() => onOpen({ ulid: target.ulid })} className={className}>{text}</button>;
+}
+
+/** A dialog whose action may be refused: the refusal stays in it, word for word. */
+function ActionDialog({ title, confirmLabel, danger, confirmDisabled, onConfirm, onClose, children }: {
+  title: string; confirmLabel: string; danger?: boolean; confirmDisabled?: boolean;
+  onConfirm: () => Promise<void>; onClose: () => void; children: React.ReactNode;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = async () => {
+    setBusy(true); setError(null);
+    try { await onConfirm(); onClose(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <Dialog title={title} confirmLabel={confirmLabel} confirmTone={danger ? 'danger' : 'primary'} confirmDisabled={confirmDisabled}
+      busy={busy} error={error} onConfirm={run} onCancel={onClose}>
+      {children}
+    </Dialog>
+  );
+}
+
+/** Supersede: pick the note that replaces this one (a note picker, not a typed number), then confirm. */
+function SupersedeDialog({ entry, onSupersede, onClose }: { entry: Entry; onSupersede: (by: Entry) => Promise<void>; onClose: () => void }) {
+  const [by, setBy] = useState<Entry | null>(null);
+  const me = formatEntryRef(entry.id, entry.series);
+  return (
+    <ActionDialog title={`Supersede ${me}`} confirmLabel="Supersede" confirmDisabled={!by} onConfirm={() => onSupersede(by!)} onClose={onClose}>
+      <NotePicker label="The note that replaces it" exclude={entry.ulid ?? me} value={by} onChange={setBy} />
+      <p className="text-sm">
+        {by ? `${me} will be marked as superseded by ${formatEntryRef(by.id, by.series)} (“${by.title}”). It stays readable.` : 'Choose the newer note.'}
+      </p>
+    </ActionDialog>
+  );
 }

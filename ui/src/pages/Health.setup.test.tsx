@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 
 const api = vi.hoisted(() => ({
   doctor: vi.fn(async () => ({ ok: true, checks: [] })),
+  modules: vi.fn(async () => ({ results: [{ slug: 'billing' }] })),
   reassignModule: vi.fn(),
   upsertEntry: vi.fn(),
   setupDoctor: vi.fn(async () => ({
@@ -68,5 +69,28 @@ describe('Health page: setup report', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Fix' }));
     await screen.findAllByText('Nothing to fix: the check is fine now.');
     await waitFor(() => expect(api.setupDoctor.mock.calls.length).toBe(before + 2));
+  });
+
+  it('bulk reassign and fix summary use dialogs, not browser prompts (UI parity Task 12)', async () => {
+    api.doctor.mockResolvedValue({ ok: false, checks: [
+      { name: 'Notes without a module', severity: 'warn', detail: 'd', items: [{ id: 4, title: 'Loose' }] },
+      { name: 'Missing summary', severity: 'warn', detail: 'd', items: [{ id: 5, title: 'Short' }] },
+    ] } as any);
+    api.reassignModule.mockResolvedValue({ ok: true });
+    api.upsertEntry.mockResolvedValue({ ok: true });
+    render(<MemoryRouter><Health /><Toaster /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: /Bulk Reassign 1 Entries/i }));
+    let dialog = within(screen.getByRole('dialog'));
+    await waitFor(() => expect((dialog.getByLabelText('Module') as HTMLSelectElement).options.length).toBe(2));
+    fireEvent.change(dialog.getByLabelText('Module'), { target: { value: 'billing' } });
+    fireEvent.click(dialog.getByRole('button', { name: 'Move' }));
+    await waitFor(() => expect(api.reassignModule).toHaveBeenCalledWith([4], 'billing'));
+    fireEvent.click(within((await screen.findByText('Short')).closest('tr')!).getByRole('button', { name: 'Fix' }));
+    dialog = within(screen.getByRole('dialog'));
+    fireEvent.change(dialog.getByLabelText('Summary'), { target: { value: 'x'.repeat(201) } });
+    expect((dialog.getByRole('button', { name: 'Save summary' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(dialog.getByLabelText('Summary'), { target: { value: 'A real summary' } });
+    fireEvent.click(dialog.getByRole('button', { name: 'Save summary' }));
+    await waitFor(() => expect(api.upsertEntry).toHaveBeenCalledWith({ id: 5, summary: 'A real summary' }));
   });
 });

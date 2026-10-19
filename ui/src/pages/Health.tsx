@@ -4,6 +4,8 @@ import {
   type NotebooksView, type SetupGroup, type SetupMark, type SetupReport,
 } from '../api/client';
 import { toast } from '../components/Toast';
+import Dialog from '../components/Dialog';
+import { modules as listModules } from '../api/client';
 import { formatEntryRef } from '../format';
 
 const SETUP_GROUPS: Array<[SetupGroup, string]> = [
@@ -124,27 +126,11 @@ export default function Health() {
     fetchHealth();
   }, []);
 
-  const handleBulkReassign = async (ids: number[]) => {
-    const mod = prompt('Enter module slug to assign (e.g. workspace-redesign):');
-    if (!mod) return;
-    try {
-      const res = await reassignModule(ids, mod);
-      if (res.ok) fetchHealth();
-    } catch (err: any) {
-      alert(err.message);
-    }
-  };
-
-  const handleFixSummary = async (id: number) => {
-    const summary = prompt('Enter summary (max 200 chars):');
-    if (!summary) return;
-    try {
-      const res = await upsertEntry({ id, summary });
-      if (res.ok) fetchHealth();
-    } catch (err: any) {
-      alert(err.message);
-    }
-  };
+  // UI parity Task 12: dialogs, not the browser's prompt/alert.
+  const [reassigning, setReassigning] = useState<number[] | null>(null);
+  const [fixingSummary, setFixingSummary] = useState<number | null>(null);
+  const handleBulkReassign = (ids: number[]) => setReassigning(ids);
+  const handleFixSummary = (id: number) => setFixingSummary(id);
 
   if (loading && checks.length === 0 && !setup && !setupError) return <div className="p-8 text-gray-500 animate-pulse">Running system diagnostics...</div>;
 
@@ -164,6 +150,12 @@ export default function Health() {
         </button>
       </div>
 
+      {reassigning && (
+        <ReassignDialog ids={reassigning} onClose={() => setReassigning(null)} onDone={(n, mod) => { toast(`${n} note(s) moved to module ${mod}.`); fetchHealth(); }} />
+      )}
+      {fixingSummary !== null && (
+        <SummaryDialog id={fixingSummary} onClose={() => setFixingSummary(null)} onDone={() => { toast('Summary saved.'); fetchHealth(); }} />
+      )}
       <SetupSection report={setup} error={setupError} onReport={setSetup} />
       <NotebooksSection />
 
@@ -249,5 +241,58 @@ export default function Health() {
         )}
       </div>
     </div>
+  );
+}
+
+const fieldClass = 'w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-sm';
+
+/** Reassign notes to a module (was a browser prompt for its slug). */
+function ReassignDialog({ ids, onClose, onDone }: { ids: number[]; onClose: () => void; onDone: (n: number, module: string) => void }) {
+  const [list, setList] = useState<string[]>([]);
+  const [module, setModule] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { listModules().then((r) => setList(r.results.map((m: { slug: string }) => m.slug))).catch(() => {}); }, []);
+  const save = async () => {
+    setBusy(true); setError(null);
+    try {
+      const r = await reassignModule(ids, module);
+      if (r.ok) { onClose(); onDone(ids.length, module); }
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <Dialog title={`Move ${ids.length} note(s) to a module`} confirmLabel="Move" confirmDisabled={!module} busy={busy} error={error} onConfirm={save} onCancel={onClose}>
+      <label className="block space-y-1 text-sm">
+        <span>Module</span>
+        <select value={module} onChange={(e) => setModule(e.target.value)} className={fieldClass}>
+          <option value="">Choose a module…</option>
+          {list.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+      </label>
+    </Dialog>
+  );
+}
+
+/** Write a missing summary (was a browser prompt). */
+function SummaryDialog({ id, onClose, onDone }: { id: number; onClose: () => void; onDone: () => void }) {
+  const [summary, setSummary] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const tooLong = summary.length > 200;
+  const save = async () => {
+    setBusy(true); setError(null);
+    try {
+      const r = await upsertEntry({ id, summary: summary.trim() });
+      if (r.ok) { onClose(); onDone(); }
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <Dialog title={`Summary for ${formatEntryRef(id)}`} confirmLabel="Save summary" confirmDisabled={!summary.trim() || tooLong} busy={busy} error={error} onConfirm={save} onCancel={onClose}>
+      <label className="block space-y-1 text-sm">
+        <span>Summary</span>
+        <textarea value={summary} onChange={(e) => setSummary(e.target.value)} rows={3} className={fieldClass} />
+      </label>
+      <p className={`text-right text-xs ${tooLong ? 'font-bold text-red-600' : 'text-gray-500'}`}>{summary.length}/200</p>
+    </Dialog>
   );
 }

@@ -58,9 +58,11 @@ const copyModulesOf = () => (db.prepare(
 export const routes: Record<string, (req: http.IncomingMessage, res: http.ServerResponse, send: Send, body: any) => Promise<any>> = {
   // `collab project list`, as rows. The web server has no folder, so there is no "current" project.
   'GET /api/projects': guarded((send) => {
-    const projects = projectListRows(db, null).map(({ current: _current, ...p }) => (
-      p.mode === 'solo' ? { ...p, highest: highestNumberOf(db, p.code) } : p
-    ));
+    const projects = projectListRows(db, null).map((row) => {
+      const p: Omit<typeof row, 'current'> & { current?: boolean } = { ...row };
+      delete p.current;
+      return p.mode === 'solo' ? { ...p, highest: highestNumberOf(db, p.code) } : p;
+    });
     send(200, {
       projects, modules: modulesOf(), copy_modules: copyModulesOf(),
       office_url: getSyncValue(db, SYNC_KEYS.url) ?? null,

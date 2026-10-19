@@ -35,8 +35,9 @@ export default function DraftCard({ draft }: { draft: Partial<Entry>; validation
     setSaving(true);
     setSaveError(null);
     try {
-      const { project: _project, ...draft } = edited;
-      const res = await upsertEntry(draft);
+      const draft = { ...edited };
+      delete draft.project; // the AI's draft names its project through the server's default, never an object
+      const res = await upsertEntry(draft as Omit<Partial<Entry>, 'project'>);
       if (res.ok) setSaved({ id: res.id, series: res.series, ulid: res.ulid });
     } catch (e: any) {
       setSaveError(e?.message || 'Save failed.');
