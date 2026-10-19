@@ -35,6 +35,7 @@ function AddDialog({ project, viewerKeys, roster, act, onClose }: {
   const [device, setDevice] = useState('');
   const [role, setRole] = useState(grantable.find((r) => r.name === DEFAULT_ROLE)?.name ?? grantable[0]?.name ?? '');
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -46,16 +47,22 @@ function AddDialog({ project, viewerKeys, roster, act, onClose }: {
   }, [roster]);
 
   const add = async () => {
-    setBusy(true);
-    // The page's act reads the members again, or shows the office's refusal in its banner.
-    await act(() => teamSetMember({ scope: 'project', project: project.ulid, device, role }));
+    setBusy(true); setError(null);
+    try {
+      await teamSetMember({ scope: 'project', project: project.ulid, device, role });
+    } catch (e) {
+      // The office's refusal, word for word, in the dialog; the choices stay.
+      setError((e as Error).message); setBusy(false);
+      return;
+    }
     setBusy(false);
-    onClose(); // a refusal is in the page's banner, which the dialog would cover
+    onClose();
+    await act(async () => {}); // read the members again
   };
 
   const select = 'w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-sm';
   return (
-    <Dialog title={`Add a member to ${project.code}`} confirmLabel="Add" confirmDisabled={!device || !role} busy={busy} error={loadError} onConfirm={add} onCancel={onClose}>
+    <Dialog title={`Add a member to ${project.code}`} confirmLabel="Add" confirmDisabled={!device || !role} busy={busy} error={loadError ?? error} onConfirm={add} onCancel={onClose}>
       {candidates === null && !loadError && <p className="text-sm text-gray-500">Loading the office's members…</p>}
       {candidates?.length === 0 && (
         <p className="text-sm">Everyone in the office is already in {project.code}. Invite a new person from Team → Office.</p>

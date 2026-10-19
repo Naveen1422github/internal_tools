@@ -57,14 +57,15 @@ export default function Members(props: TeamTabProps) {
 
   const revoke = async (m: TeamMember) => {
     setRevoking(null);
-    await act(() => teamRevoke(m.device_id));
+    // After a revoke the row is about to go: land on the table instead of a button that vanishes.
+    if (await act(() => teamRevoke(m.device_id))) table.current?.focus();
   };
 
   return (
     <div className="space-y-4">
       {project
         ? <AddMember project={project} viewerKeys={viewerKeys} roster={roster} act={act} />
-        : <Invite viewerKeys={viewerKeys} roster={roster} />}
+        : <Invite viewerKeys={viewerKeys} roster={roster} onInvited={() => { act(async () => {}); }} />}
       {(manageWhy || removeWhy) && (
         <div className="space-y-1 text-sm text-gray-600 dark:text-gray-400">
           {manageWhy && <p id={manageId}>{manageWhy}</p>}
@@ -117,19 +118,23 @@ export default function Members(props: TeamTabProps) {
                     {orderRoles(roster.roles).map((r) => <option key={r.ulid} value={r.name}>{r.name}</option>)}
                   </select>
                 </td>
-                {!project && (
+                {!project && (() => {
+                  const why = revokeWhy(m);
+                  return (
                   <td className="px-3 py-2 text-right">
                     <button
                       type="button"
-                      disabled={!!revokeWhy(m)}
-                      title={revokeWhy(m)}
+                      aria-label={`Revoke ${nameOf(m)}`}
+                      disabled={!!why}
+                      title={why}
                       onClick={() => setRevoking(m)}
                       className="rounded-md border border-gray-300 dark:border-gray-700 px-3 py-1 text-sm hover:bg-gray-100 dark:hover:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Revoke
                     </button>
                   </td>
-                )}
+                  );
+                })()}
                 {project && (
                   <td className="px-3 py-2 text-right">
                     <button

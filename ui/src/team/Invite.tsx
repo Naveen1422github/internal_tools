@@ -8,6 +8,8 @@ import { firstMissing, needSentence } from './view';
 // the inviter lacks (S3-14). The join code is a one-time password: it lives in
 // this component's state only and is gone when the dialog closes.
 
+// The office gives a new device Office member (newMemberOfficeRole), or Office
+// admin when no live admin is left, which a remote inviter can't arrange.
 const OFFICE_MEMBER = 'Office member';
 
 /** Why this laptop can't invite, or null. */
@@ -21,19 +23,20 @@ export function inviteReason(viewerKeys: string[], roster: TeamRoster): string |
 /** "Monday 26 October 2026, 10:00", in this browser's time zone. */
 const when = (iso: string) => new Date(iso).toLocaleString(undefined, { dateStyle: 'full', timeStyle: 'short' });
 
-export default function Invite({ viewerKeys, roster }: { viewerKeys: string[]; roster: TeamRoster }) {
+export default function Invite({ viewerKeys, roster, onInvited }: { viewerKeys: string[]; roster: TeamRoster; onInvited: () => void }) {
   const why = inviteReason(viewerKeys, roster);
   const [open, setOpen] = useState(false);
   return (
     <div className="space-y-1">
       <button type="button" disabled={!!why} title={why ?? undefined} onClick={() => setOpen(true)} className={primaryClass}>Invite a person</button>
       {why && <p className="text-xs text-gray-500">{why}</p>}
-      {open && <InviteDialog onClose={() => setOpen(false)} />}
+      {open && <InviteDialog onClose={(invited) => { setOpen(false); if (invited) onInvited(); }} />}
     </div>
   );
 }
 
-function InviteDialog({ onClose }: { onClose: () => void }) {
+/** `invited`: a code was made, so the roles' holder counts changed (the office counts people not yet joined). */
+function InviteDialog({ onClose }: { onClose: (invited: boolean) => void }) {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,7 +58,7 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
 
   if (!invite) {
     return (
-      <Dialog title="Invite a person" confirmLabel="Create join code" confirmDisabled={!name.trim()} busy={busy} error={error} onConfirm={send} onCancel={onClose}>
+      <Dialog title="Invite a person" confirmLabel="Create join code" confirmDisabled={!name.trim()} busy={busy} error={error} onConfirm={send} onCancel={() => onClose(false)}>
         <label className="block space-y-1 text-sm">
           <span>Their name</span>
           <input value={name} onChange={(e) => setName(e.target.value)} className="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-sm" />
@@ -65,9 +68,9 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
     );
   }
   return (
-    <Dialog title={`Join code for ${invite.name}`} onCancel={onClose} cancelLabel="Done">
+    <Dialog title={`Join code for ${invite.name}`} onCancel={() => onClose(true)} cancelLabel="Done">
       <p className="text-sm">
-        Give this code to {invite.name}. On their laptop they run <code>{'collab sync setup <code>'}</code> with it.
+        Give this code to {invite.name}. On their laptop they run <code>{'collab sync setup <code>'}</code>.
         {' '}It works once{invite.expires_at ? ` and expires on ${when(invite.expires_at)}` : ''}.
       </p>
       <p className="text-sm font-medium">Treat it like a password: it is shown only once.</p>
