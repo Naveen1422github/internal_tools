@@ -261,6 +261,11 @@ export const teamSetMember = (b: InScope & { device: string; role: string }) =>
 /** Project scope only: revoking a device from the office stays on the CLI (S3-7). */
 export const teamRemoveMember = (b: { project: string; device: string }) =>
   sendJson<{ ok: true }>('POST', '/api/team/member/remove', b);
+/** UI parity D2: `collab team invite` on the web. The join code is shown once: never store it. */
+export interface TeamInvite { device_id: string; name: string; join_code: string; expires_at?: string }
+export const teamInvite = (name: string) => sendJson<TeamInvite>('POST', '/api/team/invite', { name });
+/** UI parity D4: `collab team revoke` on the web. */
+export const teamRevoke = (device: string) => sendJson<{ ok: true }>('POST', '/api/team/revoke', { device });
 export const teamCreateRole = (b: InScope & { name: string; keys: string[] }) =>
   sendJson<{ role: { ulid: string; name: string; keys: string[] } }>('POST', '/api/team/role/create', b);
 /** `role` is the role's ULID. */

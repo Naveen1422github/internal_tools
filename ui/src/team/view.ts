@@ -1,5 +1,5 @@
 import type { TeamMember, TeamProjectAccess, TeamRole, TeamRoster, TeamScope } from '../api/client';
-import { labelOf } from './catalog';
+import { activeKeys, labelOf } from './catalog';
 
 /** What every Team tab (Members, Roles, Who can do what) is given by the Team page. */
 export interface TeamTabProps {
@@ -59,4 +59,13 @@ export function holderCount(role: TeamRole, members: TeamMember[]): number {
 /** The members holding a role, by name. */
 export function holdersOf(role: TeamRole, members: TeamMember[]): TeamMember[] {
   return members.filter((m) => m.role_ulid === role.ulid);
+}
+
+/**
+ * The first active key of `keys` the viewer lacks, in catalog order, or null.
+ * The office's rank and no-escalation rules (S3-1, S3-14) refuse naming this key;
+ * the page uses it only to grey a control out with the same sentence.
+ */
+export function firstMissing(scope: TeamScope, keys: string[], viewerKeys: string[]): string | null {
+  return activeKeys(scope).find((k) => keys.includes(k) && !viewerKeys.includes(k)) ?? null;
 }
