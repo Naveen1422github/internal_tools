@@ -41,7 +41,8 @@ export default function CopyNote({ entry, onClose }: { entry: Entry; onClose: ()
       onClose();
       toast(r.lines.join('\n'));
       const made = r.copied[0];
-      if (made && !made.pending) openDrawer(made.to);
+      // A team copy made while the office is away waits for its number: open it by its ULID.
+      if (made) openDrawer(made.pending ? { ulid: made.to_ulid } : made.to);
     } catch (e) {
       setError((e as Error).message);
     } finally { setBusy(false); }

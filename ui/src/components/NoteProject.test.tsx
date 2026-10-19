@@ -84,4 +84,24 @@ describe('notes show their project', () => {
     await dialog.findByText('This note was already copied to NV-4.');
     expect((dialog.getByRole('button', { name: 'Copy note' }) as HTMLButtonElement).disabled).toBe(true);
   });
+
+  it('a team copy waiting for its number opens by ULID; a deleted note can\'t be copied; an unknown project is said so', async () => {
+    api.copyPlan.mockResolvedValue({ source: {}, target: { ulid: 'u-nv', code: 'NV', name: 'Navi', mode: 'team' }, items: [{ ulid: sh12.ulid }], skipped: [], lines: ['x'] });
+    api.copyApply.mockResolvedValue({ copied: [{ from: 'SH-12', to: 'NV-?', to_ulid: '01PEND1NG00000000000000000', pending: true }], lines: ['Copied 1 note'] });
+    useUi.getState().openDrawer('SH-12');
+    render(<MemoryRouter><EntryDrawer /><Toaster /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy to another project' }));
+    const dialog = within(screen.getByRole('dialog'));
+    fireEvent.change(await dialog.findByLabelText('Copy into'), { target: { value: 'NV' } });
+    await waitFor(() => expect((dialog.getByRole('button', { name: 'Copy note' }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(dialog.getByRole('button', { name: 'Copy note' }));
+    await waitFor(() => expect(useUi.getState().drawerEntry).toEqual({ ulid: '01PEND1NG00000000000000000' }));
+    cleanup();
+    api.getEntry.mockResolvedValue({ ...sh12, deleted_at: '2026-10-19', project: { code: 'SH', name: null, mode: null, left: false } });
+    useUi.getState().closeDrawer();
+    useUi.getState().openDrawer('SH-12');
+    render(<MemoryRouter><EntryDrawer /></MemoryRouter>);
+    expect((await screen.findByRole('button', { name: 'Copy to another project' }) as HTMLButtonElement).disabled).toBe(true);
+    screen.getByText('SH · a project not on this laptop yet');
+  });
 });

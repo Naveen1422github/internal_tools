@@ -27,7 +27,9 @@ export interface Entry {
   superseded_target?: LinkTarget | null;
   /** UI parity Task 10: the note's project (search results carry its ULID, a note read the project). */
   project_ulid?: string | null;
-  project?: { code: string; name: string; mode: string; left: boolean } | null;
+  /** null name: the project isn't on this laptop yet. */
+  project?: { code: string; name: string | null; mode: string | null; left: boolean } | null;
+  deleted_at?: string | null;
 }
 
 /** The note at the other end of a link, found by its ULID (J17; core's LinkTarget). */
@@ -361,7 +363,7 @@ export interface CopyPlanView {
 export const copyPlan = (a: CopyArgs) => sendJson<CopyPlanView>('POST', '/api/projects/copy/plan', a);
 /** `expect` and `target`: the list and project the person saw; if either changed, nothing is copied (409). */
 export const copyApply = (a: CopyArgs, expect: string[], target: string) =>
-  sendJson<{ copied: Array<{ from: string; to: string; pending: boolean }>; lines: string[] }>('POST', '/api/projects/copy/apply', { ...a, expect, target });
+  sendJson<{ copied: Array<{ from: string; to: string; to_ulid: string; pending: boolean }>; lines: string[] }>('POST', '/api/projects/copy/apply', { ...a, expect, target });
 
 /** `collab sync share|unshare <module>`: answers the office's list of shared modules. */
 export const moduleShare = (slug: string, shared: boolean) => sendJson<{ shared: string[] }>('POST', '/api/sync/share', { slug, shared });

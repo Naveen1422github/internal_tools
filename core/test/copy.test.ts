@@ -297,5 +297,10 @@ test('note:<ref> copies exactly that note, by number or ULID; an unknown note is
     assert.equal(planCopy(t.db, { from: 'note:AL-1', to: 'BE' }).skipped[0].reason, 'already copied to BE-1');
     assert.throws(() => planCopy(t.db, { from: 'note:AL-9', to: 'BE' }), /no note "AL-9" in this notebook/);
     assert.throws(() => planCopy(t.db, { from: 'note:AL-1', to: 'AL' }), /same project \(AL\)/);
+    // Two live rows with one number (a needs-merge pair): say so, never pick one quietly.
+    const twin = '01JTW1N00000000000000000AA';
+    t.db.prepare(`INSERT INTO entries (ulid, id, series, project_ulid, type, kind, category, title, summary, status, tokens_estimate, deprecated, created_at)
+      SELECT ?, id, series, project_ulid, type, kind, category, 'twin', summary, status, tokens_estimate, deprecated, created_at FROM entries WHERE ulid = ?`).run(twin, a1.ulid);
+    assert.throws(() => planCopy(t.db, { from: 'note:AL-1', to: 'BE' }), /AL-1 names 2 notes; say which with note:<ULID>/);
   } finally { t.cleanup(); }
 });

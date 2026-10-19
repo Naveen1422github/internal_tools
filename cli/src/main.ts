@@ -43,7 +43,7 @@ const USAGE = `usage: collab [--notebook <name>] <command>
   collab refused list                     changes the post office refused, kept on this laptop
   collab refused copy <id> --to <CODE>    copy one into a solo project
   collab refused delete <id>              discard one
-  collab copy --from <module|project> --to <project> [--author me] [--since <date>] [--yes]
+  collab copy --from <module|project|note:SH-12> --to <project> [--author me] [--since <date>] [--yes]
                                           copy notes into a project: lists them, asks, then copies
   collab doctor [--json] [--fix]          check the whole setup and print the fix for each problem
   collab --version`;

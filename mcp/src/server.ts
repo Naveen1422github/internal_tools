@@ -1408,7 +1408,7 @@ server.registerTool(
       "exactly what changed (each old -> new number). Copying a team you left into a solo project makes the notes editable.",
     ].join("\n"),
     inputSchema: {
-      from: z.string().min(1).describe("A module slug (its E notes) or a project code/ULID. 'module:<slug>' / 'project:<code>' when a name is both."),
+      from: z.string().min(1).describe("A module slug (its E notes) or a project code/ULID. 'module:<slug>' / 'project:<code>' when a name is both; 'note:<SH-12 | ULID>' for one note."),
       to: z.string().min(1).describe("The target project's code or ULID."),
       author: z.string().optional().describe("'me' = only this machine's author's notes; or an author name."),
       since: z.string().optional().describe("YYYY-MM-DD: only notes created on or after this date."),

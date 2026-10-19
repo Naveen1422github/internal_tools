@@ -69,7 +69,7 @@ function moduleExists(db: DB, slug: string): boolean {
 
 function resolveSource(db: DB, raw: string): CopyPlan["source"] {
   const v = String(raw ?? "").trim();
-  if (!v) throw new Error("[collab] copy needs --from <module | project>");
+  if (!v) throw new Error("[collab] copy needs --from <module | project | note:<SH-12>>");
   const asProject = (s: string): CopyPlan["source"] => {
     const p = findProject(db, s);
     if (!p) throw notFound(db, s);
@@ -81,11 +81,13 @@ function resolveSource(db: DB, raw: string): CopyPlan["source"] {
   };
   const asNote = (s: string): CopyPlan["source"] => {
     const ref = isUlid(s) ? null : parseNoteRef(s);
-    const row = (isUlid(s)
-      ? db.prepare(`SELECT ulid, id, series, project_ulid FROM entries WHERE ulid = ? AND deleted_at IS NULL`).get(s)
-      : ref ? db.prepare(`SELECT ulid, id, series, project_ulid FROM entries WHERE series = ? AND id = ? AND deleted_at IS NULL ORDER BY ulid LIMIT 1`).get(ref.series, ref.id) : undefined
-    ) as { ulid: string; id: number | null; series: string; project_ulid: string | null } | undefined;
-    if (!row) throw new Error(`[collab] no note "${s}" in this notebook`);
+    const rows = (isUlid(s)
+      ? db.prepare(`SELECT ulid, id, series, project_ulid FROM entries WHERE ulid = ? AND deleted_at IS NULL`).all(s)
+      : ref ? db.prepare(`SELECT ulid, id, series, project_ulid FROM entries WHERE series = ? AND id = ? AND deleted_at IS NULL ORDER BY ulid`).all(ref.series, ref.id) : []
+    ) as Array<{ ulid: string; id: number | null; series: string; project_ulid: string | null }>;
+    if (rows.length === 0) throw new Error(`[collab] no note "${s}" in this notebook`);
+    if (rows.length > 1) throw new Error(`[collab] ${s} names ${rows.length} notes; say which with note:<ULID>: ${rows.map((r) => r.ulid).join(", ")}`);
+    const row = rows[0];
     const name = formatEntryRef(row.id, row.series);
     return { kind: "note", name, label: `note ${name}`, note_ulid: row.ulid, ...(row.project_ulid ? { project_ulid: row.project_ulid } : {}) };
   };

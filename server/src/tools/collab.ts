@@ -222,7 +222,10 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       // UI parity Task 10: the note's project, so the drawer can show it.
       const pu = (entry as any).project_ulid as string | null | undefined;
       const p = pu ? findProject(db, pu) : null;
-      send(200, { ...entry, project: p ? { code: p.code, name: p.name, mode: p.mode, left: !!p.left_at } : null });
+      // A project row not on this laptop (yet): its code is the note's series; the name is unknown.
+      const project = p ? { code: p.code, name: p.name, mode: p.mode, left: !!p.left_at }
+        : pu ? { code: (entry as any).series, name: null, mode: null, left: false } : null;
+      send(200, { ...entry, project });
     } catch (err: any) {
       send(errStatus(err), { error: err.message });
     }
