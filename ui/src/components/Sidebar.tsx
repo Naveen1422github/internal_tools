@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { needsMerge, teamOverview } from '../api/client';
+import { needsMerge, refusedList, teamOverview } from '../api/client';
 
 const links = [
   { to: '/', label: 'Dashboard', end: true },
@@ -21,6 +21,16 @@ export default function Sidebar() {
   useEffect(() => {
     let alive = true;
     const load = () => needsMerge().then((r) => { if (alive) setCount(r.results.length); }).catch(() => {});
+    load();
+    const t = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  // S3-10: changes the post office refused; shown only when there are some.
+  // Any failure hides it rather than keep a stale count.
+  const [refused, setRefused] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const load = () => refusedList().then((r) => { if (alive) setRefused(r.results.length); }).catch(() => { if (alive) setRefused(0); });
     load();
     const t = setInterval(load, 30_000);
     return () => { alive = false; clearInterval(t); };
@@ -49,6 +59,11 @@ export default function Sidebar() {
         </NavLink>
       ))}
       {team && <NavLink to="/team" className={navClass}>Team</NavLink>}
+      {refused > 0 && (
+        <NavLink to="/refused" className={navClass}>
+          Refused changes<span className="ml-2 rounded-full bg-amber-400 text-black px-2 text-xs">{refused}</span>
+        </NavLink>
+      )}
       {count > 0 && (
         <NavLink to="/needs-merge" className={navClass}>
           Needs merge<span className="ml-2 rounded-full bg-amber-400 text-black px-2 text-xs">{count}</span>

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { teamRemoveMember, teamSetMember, type TeamMember } from '../api/client';
 import { needSentence, whereOf, type TeamTabProps } from './view';
+import { localTimeOfUtc } from '../format';
 
 const nameOf = (m: TeamMember) => m.name ?? m.device_id;
-/** The office stores SQLite's datetime('now'): UTC, written "2026-10-19 10:00:00" with no zone. */
-const lastSeen = (at: string | null) =>
-  at ? new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(at) ? at : `${at.replace(' ', 'T')}Z`).toLocaleString() : 'Never';
+/** The office stores SQLite's datetime('now'), in UTC. */
+const lastSeen = (at: string | null) => (at ? localTimeOfUtc(at) : 'Never');
 
 /**
  * Members of a team project, or of the office. The role select applies at once;
