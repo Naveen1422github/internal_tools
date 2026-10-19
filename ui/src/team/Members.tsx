@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { teamRemoveMember, teamSetMember, type TeamMember } from '../api/client';
-import { needSentence, whereOf, type TeamTabProps } from './view';
+import { needSentence, orderRoles, whereOf, type TeamTabProps } from './view';
 import { localTimeOfUtc } from '../format';
 
 const nameOf = (m: TeamMember) => m.name ?? m.device_id;
@@ -74,7 +74,7 @@ export default function Members(props: TeamTabProps) {
                     onChange={(e) => setRole(m, e.target.value)}
                     className="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-sm disabled:opacity-50"
                   >
-                    {roster.roles.map((r) => <option key={r.ulid} value={r.name}>{r.name}</option>)}
+                    {orderRoles(roster.roles).map((r) => <option key={r.ulid} value={r.name}>{r.name}</option>)}
                   </select>
                 </td>
                 {project && (

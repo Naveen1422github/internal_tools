@@ -142,6 +142,21 @@ describe('Team page, Members tab', () => {
     expect(remove.title).toBe('You need "Revoke members" (member.revoke) in RD to do this');
   });
 
+  it('the role select lists roles in the Roles tab order: built-ins in catalog order, then custom by name', async () => {
+    at('/team', () => api.teamProject.mockResolvedValue({
+      ...projectRoster(),
+      roles: [
+        role('r-reader', 'Reader', ['note.view']),
+        { ...role('r-zed', 'Zed', ['note.view']), is_starter: false },
+        role('r-owner', 'Owner', ALL_PROJECT, 'all'),
+        { ...role('r-aud', 'Auditor', ['note.view']), is_starter: false },
+        role('r-contrib', 'Contributor', ['note.view']),
+      ],
+    }));
+    const select = (await rowOf('Rinku')).getByLabelText('Role for Rinku') as HTMLSelectElement;
+    expect([...select.options].map((o) => o.textContent)).toEqual(['Owner', 'Contributor', 'Reader', 'Auditor', 'Zed']);
+  });
+
   it('office scope: office members, office role select, no remove, and the revoke note', async () => {
     at('/team?scope=office');
     await waitFor(() => expect(api.teamOffice).toHaveBeenCalled());
