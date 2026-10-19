@@ -7,7 +7,10 @@ import {
   registerProject, addMember, revokeMember,
   type Member, type Store,
 } from "./store.js";
-import { officeKeys, projectKeys, requireOfficeKey, requireProjectKey, setProjectMember, setOfficeRole } from "./access.js";
+import {
+  officeKeys, projectKeys, requireOfficeKey, requireProjectKey, setProjectMember, setOfficeRole,
+  createProjectRole, updateProjectRole, deleteProjectRole,
+} from "./access.js";
 import { sanitizeKeys, type AccessPayload } from "@collab-mcp/core";
 import { acceptChanges, fetchDeliveries, fetchReplay, lastSeq } from "./deliveries.js";
 
@@ -102,15 +105,17 @@ function requireMembership(db: Store, device: string, projectUlid: string): void
 function membersOf(db: Store, projectUlid: string) {
   const members = db
     .prepare(
-      `SELECT m.device_id, m.name, r.name AS role, m.last_seen_at FROM po_project_members x
+      `SELECT m.device_id, m.name, r.name AS role, x.role_ulid, m.last_seen_at FROM po_project_members x
          JOIN po_members m ON m.device_id = x.device_id AND m.revoked_at IS NULL
          JOIN po_roles r ON r.ulid = x.role_ulid WHERE x.project_ulid = ? ORDER BY m.name, m.device_id`,
     )
     .all(projectUlid);
-  const roles = (db.prepare(`SELECT ulid, name, keys FROM po_roles WHERE project_ulid = ? ORDER BY name`).all(projectUlid) as Array<{ ulid: string; name: string; keys: string }>).map((r) => {
+  const roles = (db.prepare(`SELECT ulid, name, keys, is_starter FROM po_roles WHERE project_ulid = ? ORDER BY name`).all(projectUlid) as Array<{ ulid: string; name: string; keys: string; is_starter: number }>).map((r) => {
     let parsed: unknown = [];
     try { parsed = JSON.parse(r.keys); } catch { /* grants nothing */ }
-    return { ulid: r.ulid, name: r.name, keys: sanitizeKeys("project", parsed) };
+    // S3-2: Owner's name and keys are fixed ("all"); the other project roles lock nothing.
+    const locked: "all" | "name" | null = r.is_starter === 1 && r.name === "Owner" ? "all" : null;
+    return { ulid: r.ulid, name: r.name, keys: sanitizeKeys("project", parsed), is_starter: r.is_starter === 1, locked };
   });
   return { members, roles };
 }
@@ -278,6 +283,26 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
       const role = m[1] === "PUT" ? String(b?.role ?? "") : null;
       if (m[1] === "PUT" && !role) throw new StoreError("a role name is needed");
       if (setProjectMember(o.store, me.device_id, ulid, device, role)) ring("access", {});
+      return send(res, 200, { ok: true });
+    }
+    if ((m = /^POST \/v1\/projects\/([^/]+)\/roles$/.exec(route))) {
+      const ulid = param(m[1]);
+      const b = await readJson(req, maxBody);
+      requireMembership(o.store, me.device_id, ulid);
+      const role = createProjectRole(o.store, me.device_id, ulid, { name: b?.name, keys: b?.keys });
+      ring("access", {});
+      return send(res, 200, { role });
+    }
+    if ((m = /^(PUT|DELETE) \/v1\/projects\/([^/]+)\/roles\/([^/]+)$/.exec(route))) {
+      const ulid = param(m[2]), role = param(m[3]);
+      const b = m[1] === "PUT" ? await readJson(req, maxBody) : (req.resume(), {});
+      requireMembership(o.store, me.device_id, ulid);
+      if (m[1] === "PUT") {
+        if (updateProjectRole(o.store, me.device_id, ulid, role, { name: b?.name, keys: b?.keys })) ring("access", {});
+      } else {
+        deleteProjectRole(o.store, me.device_id, ulid, role);
+        ring("access", {});
+      }
       return send(res, 200, { ok: true });
     }
     if ((m = /^PUT \/v1\/office\/members\/([^/]+)$/.exec(route))) {

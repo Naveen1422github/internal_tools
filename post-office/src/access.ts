@@ -218,13 +218,144 @@ export function setProjectMember(db: Store, actor: string | null, projectUlid: s
     const before = projectKeys(db, deviceId, projectUlid).has("note.view");
     if (role) db.prepare(`INSERT OR REPLACE INTO po_project_members (project_ulid, device_id, role_ulid) VALUES (?, ?, ?)`).run(projectUlid, deviceId, role.ulid);
     else db.prepare(`DELETE FROM po_project_members WHERE project_ulid = ? AND device_id = ?`).run(projectUlid, deviceId);
-    const after = projectKeys(db, deviceId, projectUlid).has("note.view");
-    if (!before && after) {
-      db.prepare(`INSERT OR REPLACE INTO po_replays (device_id, project_ulid, upto_seq) VALUES (?, ?, ?)`).run(deviceId, projectUlid, lastSeq(db));
-    } else if (before && !after) {
-      db.prepare(`DELETE FROM po_replays WHERE device_id = ? AND project_ulid = ?`).run(deviceId, projectUlid);
-    }
+    syncReplays(db, deviceId, projectUlid, before);
     return true;
+  }).immediate();
+}
+
+/**
+ * R14/R15, after a change to what `deviceId` holds in a project (`before` =
+ * whether it held note.view before): gaining note.view queues a replay of the
+ * history so far, losing it drops a pending one. Runs inside the caller's transaction.
+ */
+export function syncReplays(db: Store, deviceId: string, projectUlid: string, before: boolean): void {
+  const after = projectKeys(db, deviceId, projectUlid).has("note.view");
+  if (!before && after) {
+    db.prepare(`INSERT OR REPLACE INTO po_replays (device_id, project_ulid, upto_seq) VALUES (?, ?, ?)`).run(deviceId, projectUlid, lastSeq(db));
+  } else if (before && !after) {
+    db.prepare(`DELETE FROM po_replays WHERE device_id = ? AND project_ulid = ?`).run(deviceId, projectUlid);
+  }
+}
+
+// ---------------------------------------------------------------- project roles (S3)
+// Who may change a role, and how (all checked here, never only in the UI):
+// - role.manage, and the rank rule (S3-1): you edit or delete a role only when
+//   you hold every active key it holds now;
+// - no escalation (S3-14): every active key a role is created with, or ends up
+//   with after an edit, must be one you hold (your own role included);
+// - built-ins (S3-2): Owner is fixed, because the office finds Owners by name
+//   (liveOwners, soleOwnerOf) and "one Owner always" means nothing if its keys
+//   could shrink. Editor, Contributor and Reader can be renamed and re-keyed,
+//   but no starter role is ever deleted (S3-3); a custom one only when nobody,
+//   revoked devices included, points at it (a dangling role_ulid drops out of every JOIN).
+// - S3-4: a request names active keys only; the stored inactive ones (task.*) are kept.
+// - S3-6: names are trimmed, 1-40 characters, unique case-insensitively in the
+//   project, and never a starter name (a starter role may keep or take back one).
+// `actor = null` = the office machine's CLI: no keys checked, the structural rules still hold.
+const ROLE_NAME_MAX = 40;
+const STARTER_NAMES = STARTER_PROJECT_ROLES.map((r) => r.name.toLowerCase());
+
+interface RoleRow { ulid: string; name: string; keys: string; is_starter: number }
+
+function projectRoleRow(db: Store, projectUlid: string, roleUlid: string): RoleRow {
+  const r = db.prepare(`SELECT ulid, name, keys, is_starter FROM po_roles WHERE ulid = ? AND project_ulid = ?`).get(roleUlid, projectUlid) as RoleRow | undefined;
+  if (!r) throw new StoreError("no such role", 404); // a role of another project is just as missing
+  return r;
+}
+
+function isOwnerRole(r: RoleRow): boolean {
+  return r.is_starter === 1 && r.name === OWNER;
+}
+
+/** S3-6. `self` = the role being renamed (it may keep its own name, in any case). */
+function checkRoleName(db: Store, projectUlid: string, raw: unknown, self: RoleRow | null): string {
+  const name = typeof raw === "string" ? raw.trim() : "";
+  if (!name) throw new StoreError("a role needs a name");
+  if (name.length > ROLE_NAME_MAX) throw new StoreError(`a role name can be at most ${ROLE_NAME_MAX} characters`);
+  if (STARTER_NAMES.includes(name.toLowerCase()) && !self?.is_starter) throw new StoreError(`"${name}" is the name of a built-in role`, 409);
+  const clash = db.prepare(`SELECT ulid, name FROM po_roles WHERE project_ulid = ? AND lower(name) = lower(?) AND ulid <> ?`)
+    .get(projectUlid, name, self?.ulid ?? "") as { name: string } | undefined;
+  if (clash) throw new StoreError(`${codeOf(db, projectUlid)} already has a role called "${clash.name}"`, 409);
+  return name;
+}
+
+/** S3-4: the keys of a request, all active project keys, in catalog order. */
+function checkGivenKeys(raw: unknown): Set<string> {
+  if (!Array.isArray(raw)) throw new StoreError("keys must be a list of permissions");
+  const active = new Set(keysOf("project"));
+  const out = new Set<string>();
+  for (const k of raw) {
+    if (typeof k !== "string" || !active.has(k)) throw new StoreError(`"${String(k)}" is not a permission that can be given`);
+    out.add(k);
+  }
+  return out;
+}
+
+/** A role's stored keys, sanitized (unknown ones dropped, inactive ones kept). */
+function storedKeysOf(stored: string): Set<string> {
+  let parsed: unknown = [];
+  try { parsed = JSON.parse(stored); } catch { /* grants nothing */ }
+  return new Set(sanitizeKeys("project", parsed));
+}
+
+/** Stored form: catalog order, inactive keys included. */
+function storedForm(keys: Set<string>): string {
+  return JSON.stringify(keysOf("project", { includeInactive: true }).filter((k) => keys.has(k)));
+}
+
+/** S3-14: the actor holds every key, checked in catalog order so the refusal names the first one. */
+function requireHoldsAll(db: Store, actor: string, projectUlid: string, keys: Set<string>): void {
+  for (const k of keysOf("project")) if (keys.has(k)) requireProjectKey(db, actor, projectUlid, k);
+}
+
+export function createProjectRole(db: Store, actor: string | null, projectUlid: string, input: { name: unknown; keys: unknown }): { ulid: string; name: string; keys: string[] } {
+  return db.transaction(() => {
+    if (actor !== null) requireProjectKey(db, actor, projectUlid, "role.manage");
+    const name = checkRoleName(db, projectUlid, input.name, null);
+    const keys = checkGivenKeys(input.keys);
+    if (actor !== null) requireHoldsAll(db, actor, projectUlid, keys);
+    const ulid = newUlid();
+    const stored = storedForm(keys);
+    db.prepare(`INSERT INTO po_roles (ulid, project_ulid, name, keys, is_starter) VALUES (?, ?, ?, ?, 0)`).run(ulid, projectUlid, name, stored);
+    return { ulid, name, keys: JSON.parse(stored) as string[] };
+  }).immediate();
+}
+
+/** Rename and/or re-key a role; holders gain or lose replays with it (S3-5). True when something changed. */
+export function updateProjectRole(db: Store, actor: string | null, projectUlid: string, roleUlid: string, input: { name?: unknown; keys?: unknown }): boolean {
+  return db.transaction(() => {
+    if (actor !== null) requireProjectKey(db, actor, projectUlid, "role.manage");
+    const role = projectRoleRow(db, projectUlid, roleUlid);
+    if (isOwnerRole(role)) throw new StoreError("The Owner role can't be renamed or changed", 409);
+    if (actor !== null) requireOutranks(db, actor, "project", projectUlid, grant("project", role.keys));
+    const name = input.name === undefined ? role.name : checkRoleName(db, projectUlid, input.name, role);
+    let stored = role.keys;
+    if (input.keys !== undefined) {
+      const given = checkGivenKeys(input.keys);
+      if (actor !== null) requireHoldsAll(db, actor, projectUlid, given);
+      const active = new Set(keysOf("project"));
+      const now = storedKeysOf(role.keys);
+      const next = new Set([...given, ...[...now].filter((k) => !active.has(k))]);
+      if (next.size !== now.size || [...next].some((k) => !now.has(k))) stored = storedForm(next);
+    }
+    if (name === role.name && stored === role.keys) return false;
+    const holders = (db.prepare(`SELECT device_id FROM po_project_members WHERE project_ulid = ? AND role_ulid = ?`).all(projectUlid, roleUlid) as Array<{ device_id: string }>)
+      .map((h) => ({ device: h.device_id, before: projectKeys(db, h.device_id, projectUlid).has("note.view") }));
+    db.prepare(`UPDATE po_roles SET name = ?, keys = ? WHERE ulid = ?`).run(name, stored, roleUlid);
+    for (const h of holders) syncReplays(db, h.device, projectUlid, h.before);
+    return true;
+  }).immediate();
+}
+
+export function deleteProjectRole(db: Store, actor: string | null, projectUlid: string, roleUlid: string): void {
+  db.transaction(() => {
+    if (actor !== null) requireProjectKey(db, actor, projectUlid, "role.manage");
+    const role = projectRoleRow(db, projectUlid, roleUlid);
+    if (role.is_starter) throw new StoreError(`${role.name} is a built-in role and can't be deleted`, 409);
+    if (actor !== null) requireOutranks(db, actor, "project", projectUlid, grant("project", role.keys));
+    const n = (db.prepare(`SELECT COUNT(*) n FROM po_project_members WHERE project_ulid = ? AND role_ulid = ?`).get(projectUlid, roleUlid) as { n: number }).n;
+    if (n > 0) throw new StoreError(`${n} ${n === 1 ? "member holds" : "members hold"} ${role.name}. Give them another role first`, 409);
+    db.prepare(`DELETE FROM po_roles WHERE ulid = ?`).run(roleUlid);
   }).immediate();
 }
 

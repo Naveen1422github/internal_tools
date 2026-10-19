@@ -108,3 +108,66 @@ test('lowering your own role is accepted; the last Owner lowering themselves -> 
     assert.equal(officeRoleOf(o, n.device), 'Office admin');
   } finally { await o.stop(); }
 });
+
+// ---------------------------------------------------------------- Task 2: project roles
+const roleUlid = (o: O, p: string, name: string) =>
+  (o.store.prepare(`SELECT ulid FROM po_roles WHERE project_ulid = ? AND name = ?`).get(p, name) as { ulid: string }).ulid;
+const storedKeys = (o: O, ulid: string) => (o.store.prepare(`SELECT keys FROM po_roles WHERE ulid = ?`).get(ulid) as { keys: string }).keys;
+
+test('creating a project role holding a key you lack -> 403 naming that key; nothing is created', async () => {
+  const o = await office();
+  try {
+    const { r, p } = await team(o);
+    projectRole(o, p, 'Lead', ['note.view', 'note.create', 'role.manage']);
+    setProjectMember(o.store, null, p, r.device, 'Lead');
+    const res = await requestJson(o.target(r), 'POST', `/v1/projects/${p}/roles`, { name: 'Boss', keys: ['note.view', 'note.supersede', 'member.revoke'] });
+    assert.equal(res.status, 403);
+    assert.equal(res.body.error, 'You need "Supersede notes" (note.supersede) in SH to do this');
+    assert.equal(o.store.prepare(`SELECT 1 FROM po_roles WHERE project_ulid = ? AND name = 'Boss'`).get(p), undefined);
+  } finally { await o.stop(); }
+});
+
+test('editing a project role to add a key you lack -> 403 naming that key, your own role included', async () => {
+  const o = await office();
+  try {
+    const { r, p } = await team(o);
+    projectRole(o, p, 'Lead', ['note.view', 'note.create', 'note.edit.own', 'role.manage']);
+    setProjectMember(o.store, null, p, r.device, 'Lead');
+    const contributor = roleUlid(o, p, 'Contributor');
+    const lead = roleUlid(o, p, 'Lead');
+    const before = [storedKeys(o, contributor), storedKeys(o, lead)];
+    for (const [ulid, keys] of [
+      [contributor, ['note.view', 'note.create', 'note.edit.own', 'project.edit']],
+      [lead, ['note.view', 'note.create', 'note.edit.own', 'role.manage', 'project.edit']],   // raising your own role
+    ] as const) {
+      const res = await requestJson(o.target(r), 'PUT', `/v1/projects/${p}/roles/${ulid}`, { keys });
+      assert.equal(res.status, 403);
+      assert.equal(res.body.error, 'You need "Edit project" (project.edit) in SH to do this');
+    }
+    assert.deepEqual([storedKeys(o, contributor), storedKeys(o, lead)], before);
+    // lowering your own role's keys is accepted
+    assert.equal((await requestJson(o.target(r), 'PUT', `/v1/projects/${p}/roles/${lead}`, { keys: ['note.view', 'role.manage'] })).status, 200);
+  } finally { await o.stop(); }
+});
+
+test('editing or deleting a project role ranked above you -> 403 naming the first key you lack', async () => {
+  const o = await office();
+  try {
+    const { r, p } = await team(o);
+    projectRole(o, p, 'Lead', ['note.view', 'role.manage']);
+    setProjectMember(o.store, null, p, r.device, 'Lead');
+    const editor = roleUlid(o, p, 'Editor');
+    const want = 'You need "Create notes" (note.create) in SH to do this';
+    for (const body of [{ name: 'Writer' }, { keys: ['note.view'] }]) {
+      const res = await requestJson(o.target(r), 'PUT', `/v1/projects/${p}/roles/${editor}`, body);
+      assert.equal(res.status, 403, JSON.stringify(body));
+      assert.equal(res.body.error, want);
+    }
+    // (deleting a built-in is a 409 for everyone: a custom role shows the rank rule)
+    projectRole(o, p, 'Big', ['note.view', 'note.create']);
+    const del = await requestJson(o.target(r), 'DELETE', `/v1/projects/${p}/roles/${roleUlid(o, p, 'Big')}`);
+    assert.equal(del.status, 403);
+    assert.equal(del.body.error, want);
+    assert.equal(roleIn(o, p, r.device), 'Lead');
+  } finally { await o.stop(); }
+});
