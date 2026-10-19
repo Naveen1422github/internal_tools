@@ -47,14 +47,16 @@ describe('EntryDrawer: a project note', () => {
   });
 
   it('supersede: pick SH-3 in the note picker, confirm, and the refs are sent as strings (UI parity Task 12)', async () => {
-    api.search.mockResolvedValue({ results: [{ id: 12, series: 'SH', ulid: sh12.ulid, title: 'Project note' }, { id: 3, series: 'SH', ulid: '01ARZ3NDEKTSV4RRFFQ69G5FB0', title: 'Newer note' }] });
+    // The note itself comes back without its ULID matching (by number), and a pending note has no number: neither is offered.
+    api.search.mockResolvedValue({ results: [{ id: 12, series: 'SH', title: 'Project note' }, { id: null, series: 'SH', title: 'Pending note' }, { id: 3, series: 'SH', ulid: '01ARZ3NDEKTSV4RRFFQ69G5FB0', title: 'Newer note' }] });
     useUi.getState().openDrawer('SH-12');
     render(<MemoryRouter><EntryDrawer /></MemoryRouter>);
     fireEvent.click(await waitFor(() => screen.getByRole('button', { name: 'Supersede' })));
     const dialog = within(screen.getByRole('dialog'));
-    const list = await dialog.findByRole('listbox', { name: 'The note that replaces it' });
+    const list = await dialog.findByRole('list', { name: 'The note that replaces it' });
     await waitFor(() => within(list).getByText('Newer note'));
     expect(within(list).queryByText('Project note')).toBeNull();
+    expect(within(list).queryByText('Pending note')).toBeNull();
     expect((dialog.getByRole('button', { name: 'Supersede' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(within(list).getByText('Newer note'));
     dialog.getByText(/SH-12 will be marked as superseded by SH-3/);

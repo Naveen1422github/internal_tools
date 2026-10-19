@@ -28,7 +28,7 @@ export function runSearch(db: any, { q = '', type, module, agent, kind = 'signal
   if (!db) throw new Error('Database not available');
 
   let query = `
-    SELECT e.id, ${hasSeries(db) ? 'e.series, e.project_ulid' : `'E' AS series, NULL AS project_ulid`}, e.type, e.kind, e.category, e.title, e.summary, e.module, e.agent, e.created_at,
+    SELECT e.id, e.ulid, ${hasSeries(db) ? 'e.series, e.project_ulid' : `'E' AS series, NULL AS project_ulid`}, e.type, e.kind, e.category, e.title, e.summary, e.module, e.agent, e.created_at,
            snippet(entries_fts, -1, '[[HL]]', '[[/HL]]', '...', 10) as snippet
     FROM entries_fts
     ${ftsJoin(db, 'e')}

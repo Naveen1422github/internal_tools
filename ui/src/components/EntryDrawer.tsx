@@ -75,7 +75,8 @@ export default function EntryDrawer() {
   const handleSupersede = async (by: Entry) => {
     if (!entry) return;
     const res = await supersede([noteRefOf(entry)], noteRefOf(by));
-    if (res.ok) {
+    if (!res.ok) throw new Error('The note was not superseded. Try again.');
+    {
       setEntry(await reload(entry));
       toast(`${formatEntryRef(entry.id, entry.series)} is superseded by ${formatEntryRef(by.id, by.series)}.`);
     }
@@ -84,7 +85,8 @@ export default function EntryDrawer() {
   const handleDelete = async () => {
     if (!entry) return;
     const res = await deleteEntry(noteRefOf(entry));
-    if (res.ok) {
+    if (!res.ok) throw new Error('The note was not deleted. Try again.');
+    {
       toast(`${formatEntryRef(entry.id, entry.series)} deleted.`);
       closeDrawer();
     }
@@ -339,7 +341,7 @@ function SupersedeDialog({ entry, onSupersede, onClose }: { entry: Entry; onSupe
   const me = formatEntryRef(entry.id, entry.series);
   return (
     <ActionDialog title={`Supersede ${me}`} confirmLabel="Supersede" confirmDisabled={!by} onConfirm={() => onSupersede(by!)} onClose={onClose}>
-      <NotePicker label="The note that replaces it" exclude={entry.ulid ?? me} value={by} onChange={setBy} />
+      <NotePicker label="The note that replaces it" exclude={[me, ...(entry.ulid ? [entry.ulid] : [])]} value={by} onChange={setBy} />
       <p className="text-sm">
         {by ? `${me} will be marked as superseded by ${formatEntryRef(by.id, by.series)} (“${by.title}”). It stays readable.` : 'Choose the newer note.'}
       </p>

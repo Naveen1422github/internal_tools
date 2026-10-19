@@ -252,12 +252,13 @@ function ReassignDialog({ ids, onClose, onDone }: { ids: number[]; onClose: () =
   const [module, setModule] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => { listModules().then((r) => setList(r.results.map((m: { slug: string }) => m.slug))).catch(() => {}); }, []);
+  useEffect(() => { listModules().then((r) => setList(r.results.map((m: { slug: string }) => m.slug))).catch((e) => setError((e as Error).message)); }, []);
   const save = async () => {
     setBusy(true); setError(null);
     try {
       const r = await reassignModule(ids, module);
-      if (r.ok) { onClose(); onDone(ids.length, module); }
+      if (!r.ok) throw new Error('Nothing was moved. Try again.');
+      onClose(); onDone(ids.length, module);
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
   return (
@@ -278,12 +279,13 @@ function SummaryDialog({ id, onClose, onDone }: { id: number; onClose: () => voi
   const [summary, setSummary] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const tooLong = summary.length > 200;
+  const tooLong = summary.trim().length > 200;
   const save = async () => {
     setBusy(true); setError(null);
     try {
       const r = await upsertEntry({ id, summary: summary.trim() });
-      if (r.ok) { onClose(); onDone(); }
+      if (!r.ok) throw new Error('The summary was not saved. Try again.');
+      onClose(); onDone();
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
   return (
@@ -292,7 +294,7 @@ function SummaryDialog({ id, onClose, onDone }: { id: number; onClose: () => voi
         <span>Summary</span>
         <textarea value={summary} onChange={(e) => setSummary(e.target.value)} rows={3} className={fieldClass} />
       </label>
-      <p className={`text-right text-xs ${tooLong ? 'font-bold text-red-600' : 'text-gray-500'}`}>{summary.length}/200</p>
+      <p className={`text-right text-xs ${tooLong ? 'font-bold text-red-600' : 'text-gray-500'}`}>{summary.trim().length}/200</p>
     </Dialog>
   );
 }

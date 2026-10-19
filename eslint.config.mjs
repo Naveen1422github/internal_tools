@@ -22,7 +22,10 @@ export default [
       'no-restricted-properties': ['error',
         { object: 'window', property: 'alert', message: 'Use a toast (components/Toast).' },
         { object: 'window', property: 'confirm', message: 'Use a Dialog (components/Dialog).' },
-        { object: 'window', property: 'prompt', message: 'Use a Dialog with a field (components/Dialog).' }],
+        { object: 'window', property: 'prompt', message: 'Use a Dialog with a field (components/Dialog).' },
+        { object: 'globalThis', property: 'alert', message: 'Use a toast (components/Toast).' },
+        { object: 'globalThis', property: 'confirm', message: 'Use a Dialog (components/Dialog).' },
+        { object: 'globalThis', property: 'prompt', message: 'Use a Dialog with a field (components/Dialog).' }],
     },
   },
 ];
