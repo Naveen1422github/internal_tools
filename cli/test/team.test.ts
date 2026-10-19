@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { closeDb, newUlid, parseJoinCode } from '@collab-mcp/core';
-import { setProjectMember } from '@collab-mcp/post-office';
+import { setProjectMember, setOfficeRole } from '@collab-mcp/post-office';
 import { main } from '../src/main.js';
 import { startOffice, joinedDb, type Office } from '../../courier/test/world.js';
 
@@ -109,6 +109,18 @@ test('office-role, invite and revoke work for the Office admin', async () => {
     assert.equal(rv.code, 0, rv.err.join('\n'));
     assert.match(rv.out.join('\n'), /revoked/i);
     void b;
+  });
+});
+
+test('collab team invite by a device that lacks a key of the new role prints the office refusal (S3-14)', async () => {
+  await withOffice(async ({ office, b, as }) => {
+    office.store.prepare(`INSERT INTO po_office_roles (ulid, name, keys, is_starter) VALUES (?, 'Recruiter', ?, 0)`).run(newUlid(), JSON.stringify(['office.member.add']));
+    setOfficeRole(office.store, null, b.device, 'Recruiter');
+    const before = (office.store.prepare(`SELECT COUNT(*) AS c FROM po_members`).get() as { c: number }).c;
+    const r = await as(b, ['team', 'invite', 'third laptop']);
+    assert.equal(r.code, 1);
+    assert.match(r.err.join('\n'), /You need "Create projects" \(office\.project\.create\) in this office to do this/);
+    assert.equal((office.store.prepare(`SELECT COUNT(*) AS c FROM po_members`).get() as { c: number }).c, before);
   });
 });
 

@@ -266,8 +266,8 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         return openStream(res, me);
       case "POST /v1/office/members": {
         const b = await readJson(req, maxBody);
-        requireOfficeKey(o.store, me.device_id, "office.member.add");
-        const { deviceId, secret } = addMember(o.store, String(b?.name ?? ""));
+        // S3-14: office.member.add and every key of the role the new device gets, in addMember's transaction.
+        const { deviceId, secret } = addMember(o.store, String(b?.name ?? ""), { actor: me.device_id });
         ring("access", {});
         log(`${me.name}: added member ${deviceId}`);
         return send(res, 200, { device_id: deviceId, secret });

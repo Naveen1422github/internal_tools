@@ -256,3 +256,24 @@ test('assigning a custom office role holding a key you lack -> 403 naming that k
     assert.equal(officeRoleOf(o, k.device), 'Office member');
   } finally { await o.stop(); }
 });
+
+test('adding a device whose office role holds a key you lack -> 403 naming that key; nothing is created (S3-14)', async () => {
+  const o = await office();
+  try {
+    const { n, r } = await team(o);
+    const made = await requestJson(o.target(n), 'POST', '/v1/office/roles', { name: 'Recruiter', keys: ['office.member.add'] });
+    assert.equal(made.status, 200);
+    assert.equal((await requestJson(o.target(n), 'PUT', `/v1/office/members/${r.device}`, { role: 'Recruiter' })).status, 200);
+    const members = () => (o.store.prepare(`SELECT COUNT(*) AS c FROM po_members`).get() as { c: number }).c;
+    const before = members();
+    const res = await requestJson(o.target(r), 'POST', '/v1/office/members', { name: 'Newcomer' });
+    assert.equal(res.status, 403);
+    assert.equal(res.body.error, 'You need "Create projects" (office.project.create) in this office to do this');
+    assert.equal(members(), before);
+    // an Office admin still adds
+    const ok = await requestJson(o.target(n), 'POST', '/v1/office/members', { name: 'Newcomer' });
+    assert.equal(ok.status, 200);
+    assert.equal(officeRoleOf(o, ok.body.device_id), 'Office member');
+    assert.equal(members(), before + 1);
+  } finally { await o.stop(); }
+});

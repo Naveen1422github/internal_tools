@@ -171,11 +171,25 @@ export function seedAccess(db: Store): void {
   }).immediate();
 }
 
-/** A device the office just added: Office admin when no live admin exists, else Office member (ledger ruling 1). */
-export function assignNewMemberOfficeRole(db: Store, deviceId: string): void {
+/**
+ * The office role a device added now would get: Office admin when no live admin
+ * exists, else Office member (ledger ruling 1). S3-14: adding a device hands out
+ * that role, so a device adding one needs office.member.add and every active key
+ * of it. Call inside the adding transaction, before the insert, and pass the
+ * result to assignNewMemberOfficeRole so the role checked is the role given.
+ * `actor = null` = the office machine's CLI: no keys checked.
+ */
+export function newMemberOfficeRole(db: Store, actor: string | null): string {
+  if (actor !== null) requireOfficeKey(db, actor, "office.member.add");
   const role = liveOfficeAdmins(db).length === 0 ? OFFICE_ADMIN : OFFICE_MEMBER;
-  const r = db.prepare(`SELECT ulid FROM po_office_roles WHERE name = ?`).get(role) as { ulid: string };
-  db.prepare(`INSERT OR REPLACE INTO po_office_members (device_id, role_ulid) VALUES (?, ?)`).run(deviceId, r.ulid);
+  const r = db.prepare(`SELECT ulid, keys FROM po_office_roles WHERE name = ?`).get(role) as { ulid: string; keys: string };
+  if (actor !== null) requireHoldsAll(db, actor, "office", null, grant("office", r.keys));
+  return r.ulid;
+}
+
+/** A device the office just added gets the role newMemberOfficeRole chose (unchecked choice when none is passed). */
+export function assignNewMemberOfficeRole(db: Store, deviceId: string, roleUlid: string = newMemberOfficeRole(db, null)): void {
+  db.prepare(`INSERT OR REPLACE INTO po_office_members (device_id, role_ulid) VALUES (?, ?)`).run(deviceId, roleUlid);
 }
 
 /** registerProject's half (R7a): starter roles + the creator as the only member, Owner. */
