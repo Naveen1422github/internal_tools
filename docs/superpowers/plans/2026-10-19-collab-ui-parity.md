@@ -1,6 +1,13 @@
 # Collab UI parity: implementation plan
 
-**Status: waiting for the owner's approval. Nothing is built yet.**
+**Status: approved 2026-10-19, with the rulings below. Being built on `collab-ui-parity`.**
+
+**Owner's rulings (2026-10-19):**
+- `collab copy` gets a UI: pick a source module or project, pick a target project, show the list, confirm, copy. It uses the same core code as the CLI.
+- D1 is accepted: renaming a team project goes through the post office, and `project.edit` is checked there.
+- D2 to D9: the defaults stand.
+- **The owner's rule:** users should never need the command line for anything they do themselves. The AI may use the MCP, but every action a user takes needs a proper screen. Scope additions A to D follow (Tasks 9 to 12).
+- R2 was not ruled on, so the default stands: the AI gets no team-admin tools until S4.
 
 **Goal:** the web UI covers the everyday actions that today exist only on the CLI. Collab is UI-first; the CLI stays as a power tool.
 
@@ -48,9 +55,9 @@ The CLI is left for one-time setup, the office machine, and emergency repairs. T
 | `collab sync status --team` | partly | Team → Members shows "last seen". The "behind by N" figure is a backlog item. |
 | `collab sync start / stop / run` | no, out of scope | Web UI part 3 (brief). `run` is the courier process itself. |
 | `collab sync setup <join code>` | no, out of scope | Joining from a new laptop is Stage D (brief) |
-| `collab sync set-address <url>` | **yes (new)** | Health page, under Sync: "The post office moved?" with an address field. It runs the same certificate check first, so an address where anything else answers is refused and nothing changes. A running courier picks up the new address on its next retry, so nothing needs stopping. The logic moves from `courier/src/cli.ts` into core. Guide 07's "there's no command" is out of date; Task 7 fixes the wording. |
+| `collab sync set-address <url>` | **yes (new, C)** | Settings page: "The post office moved?" with an address field. It runs the same certificate check first, so an address where anything else answers is refused and nothing changes. A running courier picks up the new address on its next retry, so nothing needs stopping. The logic moves from `courier/src/cli.ts` into core. Guide 07's "there's no command" is out of date; Task 7 fixes the wording. |
 | `collab sync modules / share / unshare` | **yes (new)** | Modules page: a Share / Stop sharing toggle on each module, using the same `GET` and `POST /v1/modules` calls. It needs `office.module.share` (checked at the office) and is greyed with the reason otherwise. These are the legacy office-wide modules, which projects replace, but they are still in use, so they get a screen. |
-| `collab sync autostart on/off` | no, with part 3 | It belongs with the sync start/stop controls (web UI part 3, out of scope here) |
+| `collab sync autostart on/off` | **yes (new, C)** | Settings page: "Start sync at login" (Task 11) |
 | `collab sync uninstall` | no | Destructive and one-time: it removes sync from this machine. It stays a deliberate terminal action. |
 | `collab copy --from … --to …` | **yes (new)** | Projects page: "Copy notes into <CODE>". Choose a module or project, and optionally mine only or since a date. The page lists what would be copied (`planCopy`), asks, then copies (`applyCopy`). That is the same list → ask → copy as the CLI, with core's words. The AI already has `collab_copy`. |
 | `collab notebook list / which` | **yes (new, read-only)** | Health page: the notebooks on this computer, marking the one open now and the default |
@@ -58,6 +65,19 @@ The CLI is left for one-time setup, the office machine, and emergency repairs. T
 | `collab notebook reindex` | no | A rare repair; never run automatically (spec P11) |
 | `collab office init / serve / add-member / revoke / set-office-role / set-project-role / status / share / unshare / modules` | no | They run on the office machine, which has no web UI. `add-member` and `revoke` have laptop equivalents (`team invite` and `team revoke`), which are now in the UI. The `set-*` commands are the emergency fix-it for when nobody holds the needed role. |
 | `collab mcp`, `collab web`, `collab --version` | no | They start programs. The version is on the Health page (Version group). |
+
+**Actions that had no command and no screen, or only the AI's draft card (scope additions A to D):**
+
+| Action | Today | UI |
+|---|---|---|
+| Write a new note | the AI's draft card only (MCP `collab_add`) | **yes (new, A):** a "New note" button and form: type, title, summary, description, module, and a project picker that says where the note will land |
+| See a note's project | not shown | **yes (new, B):** a project filter in Knowledge, and a project chip on note cards and in the drawer |
+| Move a note to another project | `collab copy` (core only copies, on purpose: spec P8) | **yes (new, B):** "Copy to another project" in the drawer (D10) |
+| Supersede a note | a browser prompt asking for the number | **yes (new, D):** a note picker |
+| This laptop's notebook, member name and device id | `collab notebook which`; the device id and name are in no command | **yes (new, C):** Settings page. A core function `thisLaptop(db)` is added first. |
+| Change the post office address | `collab sync set-address` | **yes (new, C):** Settings page (moved there from the Health task) |
+| Start sync at login | `collab sync autostart on/off` | **yes (new, C):** Settings page, using the courier's own `autostartPlan`, `installAutostart` and `removeAutostart` (D11) |
+| Errors, confirmations and prompts | browser `alert`, `confirm` and `prompt` | **yes (new, D):** proper dialogs and toasts everywhere |
 
 ## What the AI can do (MCP)
 
@@ -89,6 +109,11 @@ The AI already has these tools:
 | **D7** | **Core's office errors get types.** `registerAtOffice` throws `OfficeUnreachableError` (a connect failure or timeout) and `OfficeRefusedError { status, officeError }` (an office 4xx). The messages stay word for word, so the CLI output and tests are unchanged. The web server maps them to 503, to the office's status with its sentence, or to 501 for an older office. | Purely additive. |
 | **D8** | **A "Projects" link always shows in the sidebar**, after Modules. Solo projects need no office (rule 2). | Placement only. |
 | **D9** | **Binding:** each project row lists its bound modules, each with Unbind. "Bind a module" offers this notebook's modules. Re-binding a bound module moves it, as the CLI does, and the page shows core's `bindChangeLine` sentence. Left projects can't be bound to (core refuses), so the control is greyed with core's reason. | None known. |
+
+| **D10** | **"Move to another project" is a copy.** Core moves notes between projects only by copying, on purpose (spec P8): the number is the project's (SH-12), so a note can't keep it in another project. The drawer offers "Copy to another project". It uses the copy flow with a new `ulids` filter on `planCopy`, limiting the plan to that one note. The original gets its `copied_to` link, as with `collab copy`. The note-create checks (`note.create` on the target; the target can't be a left team project) come from core, unchanged. | If you want a true move (copy, then retire the original), that is one more step after the copy: supersede the original by the copy. It is cheap to add. |
+| **D11** | **Settings reuses the courier's own code.** The address change and start-at-login live in the courier package (they write the courier's config file and register the login task). The web server loads `@collab-mcp/courier` at run time, the way the CLI loads it. It does not add a dependency to `server/package.json`, because that would change `package-lock.json`, which must not be committed. The certificate check for an address change moves into core (`checkPostOfficeAt`). The courier's `setPostOfficeAddress` and `setAutostart` are exported and used by both `collab sync` and the web server. | If the courier package is missing (a broken install), Settings says so and shows the CLI fix. |
+| **D12** | **The member name comes from the office.** The laptop stores only its device id. Settings asks the office for this device's name (`GET /v1/status`); offline it shows the device id with "name unavailable: the post office can't be reached". | None known. |
+| **D13** | **One dialog and toast system** (`ui/src/components/Dialog.tsx` and `Toast.tsx`). It is used for every confirmation, error and success message that used `alert`, `confirm` or `prompt`. The Team page's inline confirmations stay as they are. A lint rule (`no-restricted-globals` for `alert`, `confirm` and `prompt` in `ui/src`) keeps them out. | Visual only. |
 
 **No migration** on the laptop or the office. `X-Collab-Schema` stays the same, so Rinku only rebuilds.
 
@@ -213,7 +238,7 @@ Each task has one commit, a reviewer pass, and fix commits if the review finds a
   - Copy into a team project you can't create notes in shows the refusal.
 - **Commit:** `feat: copy notes into a project from the web, with the same plan, ask, copy as collab copy`
 
-### Task 7b: Health page, safe fixes, set-address and notebooks
+### Task 7b: Health page, safe fixes and notebooks (set-address moved to Task 11)
 - **Files:**
   - Core: `core/src/setup/fix.ts` (new, moved out of `cli/src/doctor.ts`); `core/src/sync/address.ts` (new, moved out of `courier/src/cli.ts`)
   - CLI and courier: call those core functions
@@ -247,7 +272,72 @@ Each task has one commit, a reviewer pass, and fix commits if the review finds a
   - There is no team-change, invite, revoke or refused-delete tool.
 - **Commit:** `feat(mcp): AI tools for promote, rename, team list and refused changes`
 
-### Task 8: Acceptance, docs, full suite, branch review
+### Task 9: New note form (A)
+- **Files:**
+  - Core: `noteDestination(db, { module, project })` (new, in `core/src/ops/add.ts`). It returns where a note would land: the project and why (named, bound module, or none), using the same `resolveProjectArg` as `addEntryAsync`.
+  - Server:
+    - `GET /api/collab/note-destination?module=&project=`
+    - `POST /api/collab/entry/upsert` accepts `project`
+  - UI:
+    - `ui/src/components/NewNote.tsx`
+    - a "New note" button in the header (AppShell) and on Knowledge
+- **Tests:**
+  - The form validates like `draftErrors`.
+  - The project picker defaults to "automatic" and shows the destination line; choosing a project sends `project`.
+  - A Reader in a team project is refused with the 403 sentence, shown in the form.
+  - The server creates the note in the named project; a left project → 403.
+- **Commit:** `feat(ui): New note form with a project picker that says where the note lands`
+
+### Task 10: Notes show their project; copy a note to another project (B, D10)
+- **Files:**
+  - Core: a `ulids` filter on `planCopy`
+  - Server:
+    - `runSearch` takes `project` (a code, or `none` for E notes) and returns `project_ulid`
+    - the entry read returns `project` (code, name, mode)
+  - UI:
+    - a Knowledge project filter
+    - a project chip on cards and in the drawer
+    - "Copy to another project" in the drawer, using the copy endpoints from Task 7a
+- **Tests:**
+  - Filter by SH returns only SH notes, and "No project" returns only E notes.
+  - The chip shows the code and the name.
+  - Copying one note copies exactly that note and shows the new number.
+  - A target where `note.create` is refused shows the refusal.
+  - A left project is not offered.
+- **Commit:** `feat: notes show their project; filter by project; copy a note to another project`
+
+### Task 11: Settings page (C, D11, D12)
+- **Files:**
+  - Core:
+    - `thisLaptop(db)` → notebook name and path, device id, post office address, fingerprint
+    - `checkPostOfficeAt(url, fingerprint)`
+  - Courier: export `setPostOfficeAddress(dir, url)` and `setAutostart(dir, on)`; `collab sync set-address` and `collab sync autostart` call them, with output unchanged
+  - Server: `server/src/tools/settings.ts`
+    - `GET /api/settings`
+    - `POST /api/settings/address {url}`
+    - `POST /api/settings/autostart {on}`
+  - UI: `ui/src/pages/Settings.tsx`, plus a sidebar link
+- **Tests:**
+  - Settings shows the notebook, the device id and the name (from the office).
+  - Offline: the device id shows with the "name unavailable" line.
+  - An address with the wrong certificate → refused and nothing changes; with the right one, the DB and the courier config are both updated.
+  - Autostart on and off calls the plan's install and remove (with the deps stubbed) and writes `autostart` to the config.
+  - The CLI output is unchanged.
+- **Commit:** `feat: Settings page: this laptop, the post office address and start sync at login`
+
+### Task 12: Dialogs and toasts instead of alert, confirm and prompt; a note picker for supersede (D)
+- **Files:**
+  - Create: `ui/src/components/Dialog.tsx`, `ui/src/components/Toast.tsx`, `ui/src/components/NotePicker.tsx`
+  - Modify: `EntryDrawer.tsx`, `Health.tsx`, the ESLint config
+- **Tests:**
+  - Supersede opens the picker, a search finds a note, and choosing it asks to confirm, then calls `supersede`.
+  - Delete asks in a dialog.
+  - An error shows a toast.
+  - Health's reassign-module and fix-summary use dialogs.
+  - A grep test: no `alert(`, `confirm(` or `prompt(` remain in `ui/src` outside tests.
+- **Commit:** `feat(ui): dialogs and toasts replace browser prompts; supersede picks a note`
+
+### Task 13: Acceptance, docs, full suite, branch review
 - **Files:**
   - Create: `test/ui-parity-acceptance.test.mts`
   - Modify: guides 05, 07 and 08
@@ -269,17 +359,14 @@ Each task has one commit, a reviewer pass, and fix commits if the review finds a
   - fix commits for what it finds;
   - push `collab-ui-parity`.
 
-## Needs your ruling
+## Rulings
 
-- **R1 (settled by your direction):** `collab copy` gets a UI (Task 7a).
-- **D1:** do you accept it, including `project.edit` becoming checked at the office?
-- **R2:** the AI gets no team-admin tools until S4 (see "What the AI can do"). Do you agree, or should it have them now, accepting that it would act with your full rights?
-- Everything else above goes ahead with the stated default unless you say otherwise.
+All were taken on 2026-10-19; see the top of this plan.
 
 ## What still needs the terminal after this plan
 
 - **One-time setup:** `collab sync setup` (Stage D gives it a screen), `notebook new/adopt`, `sync uninstall`.
-- **Sync start, stop and autostart:** web UI part 3, the next piece.
+- **Sync start and stop:** web UI part 3, the next piece. (Start-at-login is now in Settings.)
 - **The office machine:** `collab office …`, which has no web UI.
 - **Repairs:** `notebook reindex`.
 
@@ -288,4 +375,4 @@ Each task has one commit, a reviewer pass, and fix commits if the review finds a
 - Pending invites, and revoking an unused join code, in the UI. Default: a "Waiting to join" section in Office → Members, using `GET /v1/status`.
 - "Behind by N" on the Members tab.
 - A team rename can collide with a local project name on another laptop: the upsert renames without a clash check. Default: record it as a project clash, as P10 does.
-- "Start the courier" as a Health fix, and autostart, with web UI part 3.
+- "Start the courier" as a Health fix, with web UI part 3.
