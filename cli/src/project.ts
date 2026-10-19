@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   closeDb, collabStartDir, createProjectOp, currentProject, findCollabFile, findProject, getDb,
-  notFound, promoteProject, highestNumberOf, renameProject, resolveDbPath, getSyncValue, SYNC_KEYS, type Project,
+  notFound, promoteProject, renameProject, resolveDbPath, promotedLines, type Project,
   projectCreatedLines, projectListLines, projectListRows, bindModule, unbindModule, bindChangeLine,
 } from "@collab-mcp/core";
 import { failPlain, type CliResult, type Io } from "./io.js";
@@ -86,10 +86,8 @@ export async function runProject(args: string[], io: Io): Promise<CliResult> {
         if (!before) throw notFound(db, code);
         const wasTeam = before.mode === "team";
         const p = await promoteProject(db, code);
-        const seed = highestNumberOf(db, p.code); // what promoteProject sent as the office's seed
-        if (wasTeam) { io.out(`Project ${p.code} (${p.name}) is already a team project of this notebook's post office.`); return { code: 0 }; }
-        io.out(`Project ${p.code} (${p.name}) is now a team project: the post office at ${getSyncValue(db, SYNC_KEYS.url)} continues its numbers after ${p.code}-${seed}; the next note is ${p.code}-${seed + 1}.`);
-        io.out("Its notes keep their numbers; the courier sends them to the team on its next sync.");
+        // Same lines as the MCP tool collab_project_promote (UI parity Task 7d).
+        for (const l of promotedLines(db, p, wasTeam)) io.out(l);
         return { code: 0 };
       }
       case "rename": {

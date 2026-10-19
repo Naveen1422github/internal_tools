@@ -216,3 +216,15 @@ export async function copyRefused(db: DB, id: string, toCode: string): Promise<{
   discardRefused(db, id);
   return { id: res.id as number, series: target.code };
 }
+
+/** `collab refused list` / collab_refused_list, line for line. */
+export function refusedListLines(db: DB): string[] {
+  const rows = listRefused(db);
+  if (!rows.length) return ["Nothing was refused."];
+  const out = [`${"ID".padEnd(28)}${"WHEN".padEnd(21)}${"PROJECT".padEnd(9)}${"KIND".padEnd(6)}${"NOTE".padEnd(26)}REASON`];
+  for (const r of rows) {
+    const { note, project_code } = describeRefused(db, r);
+    out.push(`${r.ulid.padEnd(28)}${r.at.padEnd(21)}${project_code.padEnd(9)}${r.kind.padEnd(6)}${note.padEnd(26)}${r.reason}`);
+  }
+  return out;
+}

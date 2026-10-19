@@ -1,5 +1,5 @@
 import {
-  closeDb, findProject, formatJoinCode, getDb, postOfficeTargetFromDb, requestJson, type PostOfficeTarget,
+  closeDb, findProject, formatJoinCode, getDb, postOfficeTargetFromDb, requestJson, teamListLines, type PostOfficeTarget,
 } from "@collab-mcp/core";
 import { failPlain, type CliResult, type Io } from "./io.js";
 
@@ -61,13 +61,8 @@ export async function runTeam(args: string[], io: Io): Promise<CliResult> {
         const c = context();
         const p = teamProject(c, rest[0]);
         const m = await ask(c, "GET", `/v1/projects/${enc(p.ulid)}/members`);
-        io.out(`${p.code} (${p.name})`);
-        io.out(`${"DEVICE".padEnd(14)}${"NAME".padEnd(22)}${"ROLE".padEnd(18)}LAST SEEN`);
-        for (const x of m.members as Array<{ device_id: string; name: string; role: string; last_seen_at: string | null }>) {
-          io.out(`${x.device_id.padEnd(14)}${x.name.padEnd(22)}${x.role.padEnd(18)}${x.last_seen_at ?? "-"}`);
-        }
-        io.out(`Roles in ${p.code}:`);
-        for (const r of m.roles as Array<{ name: string; keys: string[] }>) io.out(`  ${r.name}: ${r.keys.join(", ")}`);
+        // Same lines as the MCP tool collab_team_list (UI parity Task 7d).
+        for (const l of teamListLines(p, m)) io.out(l);
         return { code: 0 };
       }
       case "set":

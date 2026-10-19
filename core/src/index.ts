@@ -19,6 +19,7 @@ export * from './ops/savings.js';
 export * from './ops/bind.js';
 export * from './ops/copy.js';
 export * from './ops/project.js';
+export * from './ops/team.js';
 export * from './constants.js';
 export * from './validate.js';
 export * from './ulid.js';

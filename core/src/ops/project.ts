@@ -5,7 +5,7 @@
 // collab_project_list) call these and print exactly these lines.
 import type { DB } from "../db.js";
 import { listBindings } from "./bind.js";
-import { createProject, createTeamProject, listProjects, isLeftProject, type Project } from "../projects.js";
+import { createProject, createTeamProject, listProjects, isLeftProject, highestNumberOf, type Project } from "../projects.js";
 import { pendingCounts } from "../sync/overview.js";
 import { getSyncValue } from "../sync/state.js";
 import { SYNC_KEYS } from "../sync/http-allocator.js";
@@ -47,4 +47,14 @@ export function projectListLines(rows: ProjectListRow[]): string[] {
     `${p.current ? "*" : " "} ${p.code.padEnd(8)} ${p.name.padEnd(24)} ${p.mode.padEnd(5)} ${String(p.notes).padStart(5)} note(s)` +
       `${p.pending ? `, ${p.pending} waiting for a number` : ""}${isLeftProject(p) ? " (left team, read-only)" : ""}` +
       `${p.modules.length ? `  modules: ${p.modules.join(", ")}` : ""}`);
+}
+
+/** `collab project promote` / collab_project_promote, line for line. `wasTeam`: it was already a team project. */
+export function promotedLines(db: DB, p: Project, wasTeam: boolean): string[] {
+  if (wasTeam) return [`Project ${p.code} (${p.name}) is already a team project of this notebook's post office.`];
+  const seed = highestNumberOf(db, p.code); // what promoteProject sent as the office's seed
+  return [
+    `Project ${p.code} (${p.name}) is now a team project: the post office at ${getSyncValue(db, SYNC_KEYS.url)} continues its numbers after ${p.code}-${seed}; the next note is ${p.code}-${seed + 1}.`,
+    "Its notes keep their numbers; the courier sends them to the team on its next sync.",
+  ];
 }
