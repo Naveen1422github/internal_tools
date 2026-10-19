@@ -10,6 +10,7 @@ import {
 import {
   officeKeys, projectKeys, requireOfficeKey, requireProjectKey, setProjectMember, setOfficeRole,
   createProjectRole, updateProjectRole, deleteProjectRole, isOwnerRole,
+  createOfficeRole, updateOfficeRole, deleteOfficeRole, listOfficeMembers,
 } from "./access.js";
 import { sanitizeKeys, type AccessPayload } from "@collab-mcp/core";
 import { acceptChanges, fetchDeliveries, fetchReplay, lastSeq } from "./deliveries.js";
@@ -268,6 +269,15 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         log(`${me.name}: added member ${deviceId}`);
         return send(res, 200, { device_id: deviceId, secret });
       }
+      case "GET /v1/office/members":
+        // S3-7: any live member (authenticate already refused revoked devices).
+        return send(res, 200, listOfficeMembers(o.store));
+      case "POST /v1/office/roles": {
+        const b = await readJson(req, maxBody);
+        const role = createOfficeRole(o.store, me.device_id, { name: b?.name, keys: b?.keys });
+        ring("access", {});
+        return send(res, 200, { role });
+      }
     }
     // Parameterised routes (one small matcher; the switch keeps the fixed ones).
     let m: RegExpExecArray | null;
@@ -301,6 +311,17 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         if (updateProjectRole(o.store, me.device_id, ulid, role, { name: b?.name, keys: b?.keys })) ring("access", {});
       } else {
         deleteProjectRole(o.store, me.device_id, ulid, role);
+        ring("access", {});
+      }
+      return send(res, 200, { ok: true });
+    }
+    if ((m = /^(PUT|DELETE) \/v1\/office\/roles\/([^/]+)$/.exec(route))) {
+      const role = param(m[2]);
+      const b = m[1] === "PUT" ? await readJson(req, maxBody) : (req.resume(), {});
+      if (m[1] === "PUT") {
+        if (updateOfficeRole(o.store, me.device_id, role, { name: b?.name, keys: b?.keys })) ring("access", {});
+      } else {
+        deleteOfficeRole(o.store, me.device_id, role);
         ring("access", {});
       }
       return send(res, 200, { ok: true });

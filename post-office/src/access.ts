@@ -256,7 +256,10 @@ export function syncReplays(db: Store, deviceId: string, projectUlid: string, be
 const ROLE_NAME_MAX = 40;
 /** One fold for every name comparison (S3-6): NFC first, so "É" and "E\u0301" meet; full Unicode case, not SQLite's ASCII-only lower(). */
 const foldName = (s: string) => s.normalize("NFC").toLowerCase();
-const STARTER_NAMES = STARTER_PROJECT_ROLES.map((r) => foldName(r.name));
+const STARTER_NAMES: Record<Scope, string[]> = {
+  project: STARTER_PROJECT_ROLES.map((r) => foldName(r.name)),
+  office: STARTER_OFFICE_ROLES.map((r) => foldName(r.name)),
+};
 const CONTROL = /[\u0000-\u001f\u007f]/;
 
 interface RoleRow { ulid: string; name: string; keys: string; is_starter: number }
@@ -275,25 +278,27 @@ export function isOwnerRole(r: { name: string; is_starter: number | boolean }): 
 /**
  * S3-6. `self` = the role being renamed: it may keep its own name in any case,
  * and that is the only way to hold a built-in name (a renamed Editor can't take
- * "Editor" back, and Contributor can't take it either).
+ * "Editor" back, and Contributor can't take it either). `projectUlid = null` = office roles.
  */
-function checkRoleName(db: Store, projectUlid: string, raw: unknown, self: RoleRow | null): string {
+function checkRoleName(db: Store, scope: Scope, projectUlid: string | null, raw: unknown, self: RoleRow | null): string {
   const name = typeof raw === "string" ? raw.trim() : "";
   if (!name) throw new StoreError("a role needs a name");
   if (CONTROL.test(name)) throw new StoreError("a role name can't contain control characters");
   if (name.length > ROLE_NAME_MAX) throw new StoreError(`a role name can be at most ${ROLE_NAME_MAX} characters`);
   const folded = foldName(name);
-  if (STARTER_NAMES.includes(folded) && !(self && foldName(self.name) === folded)) throw new StoreError(`"${name}" is the name of a built-in role`, 409);
-  const others = db.prepare(`SELECT ulid, name FROM po_roles WHERE project_ulid = ? AND ulid <> ?`).all(projectUlid, self?.ulid ?? "") as Array<{ name: string }>;
+  if (STARTER_NAMES[scope].includes(folded) && !(self && foldName(self.name) === folded)) throw new StoreError(`"${name}" is the name of a built-in role`, 409);
+  const others = (scope === "project"
+    ? db.prepare(`SELECT ulid, name FROM po_roles WHERE project_ulid = ? AND ulid <> ?`).all(projectUlid, self?.ulid ?? "")
+    : db.prepare(`SELECT ulid, name FROM po_office_roles WHERE ulid <> ?`).all(self?.ulid ?? "")) as Array<{ name: string }>;
   const clash = others.find((r) => foldName(r.name) === folded);
-  if (clash) throw new StoreError(`${codeOf(db, projectUlid)} already has a role called "${clash.name}"`, 409);
+  if (clash) throw new StoreError(`${scope === "project" ? codeOf(db, projectUlid!) : "this office"} already has a role called "${clash.name}"`, 409);
   return name;
 }
 
-/** S3-4: the keys of a request, all active project keys, in catalog order. */
-function checkGivenKeys(raw: unknown): Set<string> {
+/** S3-4: the keys of a request, all active keys of the scope, in catalog order. */
+function checkGivenKeys(scope: Scope, raw: unknown): Set<string> {
   if (!Array.isArray(raw)) throw new StoreError("keys must be a list of permissions");
-  const active = new Set(keysOf("project"));
+  const active = new Set(keysOf(scope));
   const out = new Set<string>();
   for (const k of raw) {
     if (typeof k !== "string" || !active.has(k)) throw new StoreError(`"${String(k)}" is not a permission that can be given`);
@@ -303,30 +308,42 @@ function checkGivenKeys(raw: unknown): Set<string> {
 }
 
 /** A role's stored keys, sanitized (unknown ones dropped, inactive ones kept). */
-function storedKeysOf(stored: string): Set<string> {
+function storedKeysOf(scope: Scope, stored: string): Set<string> {
   let parsed: unknown = [];
   try { parsed = JSON.parse(stored); } catch { /* grants nothing */ }
-  return new Set(sanitizeKeys("project", parsed));
+  return new Set(sanitizeKeys(scope, parsed));
 }
 
 /** Stored form: catalog order, inactive keys included. */
-function storedForm(keys: Set<string>): string {
-  return JSON.stringify(keysOf("project", { includeInactive: true }).filter((k) => keys.has(k)));
+function storedForm(scope: Scope, keys: Set<string>): string {
+  return JSON.stringify(keysOf(scope, { includeInactive: true }).filter((k) => keys.has(k)));
 }
 
 /** S3-14: the actor holds every key, checked in catalog order so the refusal names the first one. */
-function requireHoldsAll(db: Store, actor: string, projectUlid: string, keys: Set<string>): void {
-  for (const k of keysOf("project")) if (keys.has(k)) requireProjectKey(db, actor, projectUlid, k);
+function requireHoldsAll(db: Store, actor: string, scope: Scope, projectUlid: string | null, keys: Set<string>): void {
+  for (const k of keysOf(scope)) {
+    if (!keys.has(k)) continue;
+    if (scope === "project") requireProjectKey(db, actor, projectUlid!, k);
+    else requireOfficeKey(db, actor, k);
+  }
+}
+
+/** S3-4: the request's active keys plus the role's stored inactive ones; the stored string itself when nothing moved. */
+function rekeyed(scope: Scope, storedNow: string, given: Set<string>): string {
+  const active = new Set(keysOf(scope));
+  const now = storedKeysOf(scope, storedNow);
+  const next = new Set([...given, ...[...now].filter((k) => !active.has(k))]);
+  return next.size !== now.size || [...next].some((k) => !now.has(k)) ? storedForm(scope, next) : storedNow;
 }
 
 export function createProjectRole(db: Store, actor: string | null, projectUlid: string, input: { name: unknown; keys: unknown }): { ulid: string; name: string; keys: string[] } {
   return db.transaction(() => {
     if (actor !== null) requireProjectKey(db, actor, projectUlid, "role.manage");
-    const name = checkRoleName(db, projectUlid, input.name, null);
-    const keys = checkGivenKeys(input.keys);
-    if (actor !== null) requireHoldsAll(db, actor, projectUlid, keys);
+    const name = checkRoleName(db, "project", projectUlid, input.name, null);
+    const keys = checkGivenKeys("project", input.keys);
+    if (actor !== null) requireHoldsAll(db, actor, "project", projectUlid, keys);
     const ulid = newUlid();
-    const stored = storedForm(keys);
+    const stored = storedForm("project", keys);
     db.prepare(`INSERT INTO po_roles (ulid, project_ulid, name, keys, is_starter) VALUES (?, ?, ?, ?, 0)`).run(ulid, projectUlid, name, stored);
     return { ulid, name, keys: JSON.parse(stored) as string[] };
   }).immediate();
@@ -339,15 +356,12 @@ export function updateProjectRole(db: Store, actor: string | null, projectUlid: 
     const role = projectRoleRow(db, projectUlid, roleUlid);
     if (isOwnerRole(role)) throw new StoreError("The Owner role can't be renamed or changed", 409);
     if (actor !== null) requireOutranks(db, actor, "project", projectUlid, grant("project", role.keys));
-    const name = input.name === undefined ? role.name : checkRoleName(db, projectUlid, input.name, role);
+    const name = input.name === undefined ? role.name : checkRoleName(db, "project", projectUlid, input.name, role);
     let stored = role.keys;
     if (input.keys !== undefined) {
-      const given = checkGivenKeys(input.keys);
-      if (actor !== null) requireHoldsAll(db, actor, projectUlid, given);
-      const active = new Set(keysOf("project"));
-      const now = storedKeysOf(role.keys);
-      const next = new Set([...given, ...[...now].filter((k) => !active.has(k))]);
-      if (next.size !== now.size || [...next].some((k) => !now.has(k))) stored = storedForm(next);
+      const given = checkGivenKeys("project", input.keys);
+      if (actor !== null) requireHoldsAll(db, actor, "project", projectUlid, given);
+      stored = rekeyed("project", role.keys, given);
     }
     if (name === role.name && stored === role.keys) return false;
     const holders = (db.prepare(`SELECT device_id FROM po_project_members WHERE project_ulid = ? AND role_ulid = ?`).all(projectUlid, roleUlid) as Array<{ device_id: string }>)
@@ -368,6 +382,93 @@ export function deleteProjectRole(db: Store, actor: string | null, projectUlid: 
     if (n > 0) throw new StoreError(`${n} ${n === 1 ? "member holds" : "members hold"} ${role.name}. Give them another role first`, 409);
     db.prepare(`DELETE FROM po_roles WHERE ulid = ?`).run(roleUlid);
   }).immediate();
+}
+
+// ---------------------------------------------------------------- office roles (S3)
+// The project rules above, in office scope, with office.role.manage and the office keys:
+// - the rank rule (S3-1) and no escalation (S3-14), exactly as for project roles;
+// - built-ins (S3-2): Office admin is fixed (name, keys, existence), because the
+//   office counts admins by name (liveOfficeAdmins, isSoleOfficeAdmin) and "one
+//   Office admin always" means nothing if its keys could shrink. Office member's
+//   name and existence are fixed, because a new device is given the role found by
+//   that exact name (assignNewMemberOfficeRole, a case-sensitive match: a rename,
+//   even of case, would break every join); its keys can change.
+// - S3-3/S3-4/S3-6 as for project roles; names are unique within the office.
+// No replays move: no office key is note.view (replays follow project keys only).
+function officeRoleRow(db: Store, roleUlid: string): RoleRow {
+  const r = db.prepare(`SELECT ulid, name, keys, is_starter FROM po_office_roles WHERE ulid = ?`).get(roleUlid) as RoleRow | undefined;
+  if (!r) throw new StoreError("no such role", 404);
+  return r;
+}
+
+/** S3-2: "all" for Office admin (fixed), "name" for Office member (keys editable), null otherwise. */
+export function officeRoleLock(r: { name: string; is_starter: number | boolean }): "all" | "name" | null {
+  if (!(r.is_starter === 1 || r.is_starter === true)) return null;
+  return r.name === OFFICE_ADMIN ? "all" : r.name === OFFICE_MEMBER ? "name" : null;
+}
+
+export function createOfficeRole(db: Store, actor: string | null, input: { name: unknown; keys: unknown }): { ulid: string; name: string; keys: string[] } {
+  return db.transaction(() => {
+    if (actor !== null) requireOfficeKey(db, actor, "office.role.manage");
+    const name = checkRoleName(db, "office", null, input.name, null);
+    const keys = checkGivenKeys("office", input.keys);
+    if (actor !== null) requireHoldsAll(db, actor, "office", null, keys);
+    const ulid = newUlid();
+    const stored = storedForm("office", keys);
+    db.prepare(`INSERT INTO po_office_roles (ulid, name, keys, is_starter) VALUES (?, ?, ?, 0)`).run(ulid, name, stored);
+    return { ulid, name, keys: JSON.parse(stored) as string[] };
+  }).immediate();
+}
+
+/** Rename and/or re-key an office role. True when something changed. */
+export function updateOfficeRole(db: Store, actor: string | null, roleUlid: string, input: { name?: unknown; keys?: unknown }): boolean {
+  return db.transaction(() => {
+    if (actor !== null) requireOfficeKey(db, actor, "office.role.manage");
+    const role = officeRoleRow(db, roleUlid);
+    const lock = officeRoleLock(role);
+    if (lock === "all") throw new StoreError(`The ${OFFICE_ADMIN} role can't be renamed or changed`, 409);
+    if (lock === "name" && input.name !== undefined && (typeof input.name !== "string" || input.name.trim() !== role.name)) {
+      throw new StoreError(`The ${OFFICE_MEMBER} role can't be renamed`, 409);
+    }
+    if (actor !== null) requireOutranks(db, actor, "office", null, grant("office", role.keys));
+    const name = input.name === undefined || lock === "name" ? role.name : checkRoleName(db, "office", null, input.name, role);
+    let stored = role.keys;
+    if (input.keys !== undefined) {
+      const given = checkGivenKeys("office", input.keys);
+      if (actor !== null) requireHoldsAll(db, actor, "office", null, given);
+      stored = rekeyed("office", role.keys, given);
+    }
+    if (name === role.name && stored === role.keys) return false;
+    db.prepare(`UPDATE po_office_roles SET name = ?, keys = ? WHERE ulid = ?`).run(name, stored, roleUlid);
+    return true;
+  }).immediate();
+}
+
+export function deleteOfficeRole(db: Store, actor: string | null, roleUlid: string): void {
+  db.transaction(() => {
+    if (actor !== null) requireOfficeKey(db, actor, "office.role.manage");
+    const role = officeRoleRow(db, roleUlid);
+    if (role.is_starter) throw new StoreError(`${role.name} is a built-in role and can't be deleted`, 409);
+    if (actor !== null) requireOutranks(db, actor, "office", null, grant("office", role.keys));
+    const n = (db.prepare(`SELECT COUNT(*) n FROM po_office_members WHERE role_ulid = ?`).get(roleUlid) as { n: number }).n;
+    if (n > 0) throw new StoreError(`${n} ${n === 1 ? "member holds" : "members hold"} ${role.name}. Give them another role first`, 409);
+    db.prepare(`DELETE FROM po_office_roles WHERE ulid = ?`).run(roleUlid);
+  }).immediate();
+}
+
+/** GET /v1/office/members (S3-7): live, joined devices with their office role, and every office role. */
+export function listOfficeMembers(db: Store) {
+  const members = db
+    .prepare(
+      `SELECT m.device_id, m.name, r.name AS role, x.role_ulid, m.last_seen_at FROM po_office_members x
+         JOIN po_members m ON m.device_id = x.device_id AND m.revoked_at IS NULL AND m.joined_at IS NOT NULL
+         JOIN po_office_roles r ON r.ulid = x.role_ulid ORDER BY m.name, m.device_id`,
+    )
+    .all();
+  const roles = (db.prepare(`SELECT ulid, name, keys, is_starter FROM po_office_roles ORDER BY name`).all() as RoleRow[]).map((r) => ({
+    ulid: r.ulid, name: r.name, keys: [...storedKeysOf("office", r.keys)], is_starter: r.is_starter === 1, locked: officeRoleLock(r),
+  }));
+  return { members, roles };
 }
 
 /**

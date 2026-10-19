@@ -171,3 +171,88 @@ test('editing or deleting a project role ranked above you -> 403 naming the firs
     assert.equal(roleIn(o, p, r.device), 'Lead');
   } finally { await o.stop(); }
 });
+
+// ---------------------------------------------------------------- Task 3: office roles
+const officeRoleUlid = (o: O, name: string) =>
+  (o.store.prepare(`SELECT ulid FROM po_office_roles WHERE name = ?`).get(name) as { ulid: string }).ulid;
+const officeStoredKeys = (o: O, ulid: string) => (o.store.prepare(`SELECT keys FROM po_office_roles WHERE ulid = ?`).get(ulid) as { keys: string }).keys;
+
+test('creating an office role holding a key you lack -> 403 naming that key; nothing is created', async () => {
+  const o = await office();
+  try {
+    const { r } = await team(o);
+    officeRole(o, 'Keeper', ['office.project.create', 'office.role.manage']);
+    setOfficeRole(o.store, null, r.device, 'Keeper');
+    const res = await requestJson(o.target(r), 'POST', '/v1/office/roles', { name: 'Boss', keys: ['office.project.create', 'office.member.revoke', 'office.module.share'] });
+    assert.equal(res.status, 403);
+    assert.equal(res.body.error, 'You need "Share modules" (office.module.share) in this office to do this');
+    assert.equal(o.store.prepare(`SELECT 1 FROM po_office_roles WHERE name = 'Boss'`).get(), undefined);
+    // within its own keys, Keeper may create
+    assert.equal((await requestJson(o.target(r), 'POST', '/v1/office/roles', { name: 'Small', keys: ['office.project.create'] })).status, 200);
+  } finally { await o.stop(); }
+});
+
+test('editing an office role to add a key you lack -> 403 naming that key, your own role included', async () => {
+  const o = await office();
+  try {
+    const { r } = await team(o);
+    officeRole(o, 'Keeper', ['office.project.create', 'office.role.manage']);
+    setOfficeRole(o.store, null, r.device, 'Keeper');
+    const member = officeRoleUlid(o, 'Office member');
+    const keeper = officeRoleUlid(o, 'Keeper');
+    const before = [officeStoredKeys(o, member), officeStoredKeys(o, keeper)];
+    for (const [ulid, keys] of [
+      [member, ['office.project.create', 'office.member.add']],
+      [keeper, ['office.project.create', 'office.role.manage', 'office.member.add']],   // raising your own role
+    ] as const) {
+      const res = await requestJson(o.target(r), 'PUT', `/v1/office/roles/${ulid}`, { keys });
+      assert.equal(res.status, 403);
+      assert.equal(res.body.error, 'You need "Add office members" (office.member.add) in this office to do this');
+    }
+    assert.deepEqual([officeStoredKeys(o, member), officeStoredKeys(o, keeper)], before);
+    // lowering your own role's keys is accepted
+    assert.equal((await requestJson(o.target(r), 'PUT', `/v1/office/roles/${keeper}`, { keys: ['office.role.manage'] })).status, 200);
+    assert.equal(officeStoredKeys(o, keeper), JSON.stringify(['office.role.manage']));
+  } finally { await o.stop(); }
+});
+
+test('editing or deleting an office role ranked above you -> 403 naming the first key you lack', async () => {
+  const o = await office();
+  try {
+    const { r } = await team(o);
+    officeRole(o, 'Keeper', ['office.role.manage']);
+    setOfficeRole(o.store, null, r.device, 'Keeper');
+    const member = officeRoleUlid(o, 'Office member');
+    const want = 'You need "Create projects" (office.project.create) in this office to do this';
+    const res = await requestJson(o.target(r), 'PUT', `/v1/office/roles/${member}`, { keys: [] });
+    assert.equal(res.status, 403);
+    assert.equal(res.body.error, want);
+    officeRole(o, 'Big', ['office.project.create', 'office.role.manage']);
+    const big = officeRoleUlid(o, 'Big');
+    for (const [method, body] of [['PUT', { name: 'Small' }], ['DELETE', undefined]] as const) {
+      const r2 = await requestJson(o.target(r), method, `/v1/office/roles/${big}`, body);
+      assert.equal(r2.status, 403, method);
+      assert.equal(r2.body.error, want);
+    }
+    assert.equal(officeStoredKeys(o, member), JSON.stringify(['office.project.create']));
+    assert.equal(officeRoleOf(o, r.device), 'Keeper');
+  } finally { await o.stop(); }
+});
+
+test('assigning a custom office role holding a key you lack -> 403 naming that key, to someone else or to yourself', async () => {
+  const o = await office();
+  try {
+    const { n, r, k } = await team(o);
+    const made = await requestJson(o.target(n), 'POST', '/v1/office/roles', { name: 'Gatekeeper', keys: ['office.project.create', 'office.member.add'] });
+    assert.equal(made.status, 200);
+    officeRole(o, 'Keeper', ['office.project.create', 'office.role.manage']);
+    setOfficeRole(o.store, null, r.device, 'Keeper');
+    for (const who of [k.device, r.device]) {
+      const res = await requestJson(o.target(r), 'PUT', `/v1/office/members/${who}`, { role: 'Gatekeeper' });
+      assert.equal(res.status, 403);
+      assert.equal(res.body.error, 'You need "Add office members" (office.member.add) in this office to do this');
+    }
+    assert.equal(officeRoleOf(o, r.device), 'Keeper');
+    assert.equal(officeRoleOf(o, k.device), 'Office member');
+  } finally { await o.stop(); }
+});
