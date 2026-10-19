@@ -160,6 +160,18 @@ test('typed errors: an office without team projects (404) is an OfficeRefusedErr
   const t = shared(old.url, old.fingerprint);
   try {
     await assert.rejects(createTeamProject(t.db, { name: 'Support hub', code: 'SH' }), (e: any) =>
-      e instanceof OfficeRefusedError && e.status === 404 && /keeps no team projects yet/.test(e.message));
+      e instanceof OfficeRefusedError && e.status === 404 && e.officeError === 'no such endpoint: POST /v1/projects'
+      && /keeps no team projects yet/.test(e.message));
   } finally { await old.close(); t.cleanup(); }
+});
+
+test('typed errors: a revoked key is an OfficeUnreachableError whose cause is AccessRevokedError (the server maps cause first)', async () => {
+  const { OfficeUnreachableError, AccessRevokedError } = await import('../src/sync/errors.js');
+  const gone = await stubServer((_req, res) => { res.writeHead(401); res.end('{}'); });
+  const t = shared(gone.url, gone.fingerprint);
+  try {
+    await assert.rejects(createTeamProject(t.db, { name: 'Support hub', code: 'SH' }), (e: any) =>
+      e instanceof OfficeUnreachableError && e.cause instanceof AccessRevokedError);
+    assert.equal(findProject(t.db, 'SH'), null);
+  } finally { await gone.close(); t.cleanup(); }
 });
