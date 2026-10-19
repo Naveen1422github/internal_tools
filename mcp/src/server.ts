@@ -1553,7 +1553,8 @@ server.registerTool(
       "It can't be made solo again. The office checks \"Create projects\" (office.project.create).",
     ].join("\n"),
     inputSchema: { project: z.string().min(1).describe("Project code (SH) or ULID.") },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    // It can't be undone and sends every note of the project to the team: clients should ask first.
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   },
   async (args) => {
     try {
