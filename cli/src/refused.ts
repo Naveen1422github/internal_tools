@@ -1,4 +1,4 @@
-import { closeDb, copyRefused, discardRefused, formatEntryRef, getDb, listRefused } from "@collab-mcp/core";
+import { closeDb, copyRefused, describeRefused, discardRefused, formatEntryRef, getDb, listRefused } from "@collab-mcp/core";
 import type { CliResult, Io } from "./io.js";
 import { failPlain } from "./io.js";
 
@@ -9,21 +9,6 @@ import { failPlain } from "./io.js";
 const USAGE = `usage: collab refused list
        collab refused copy <id> --to <SOLO CODE>
        collab refused delete <id>`;
-
-type Db = ReturnType<typeof getDb>;
-
-/** The note as a person knows it: its number when it has one, else its title. */
-function noteLabel(db: Db, ulid: string | null): string {
-  if (!ulid) return "-";
-  const n = db.prepare(`SELECT id, series, title FROM entries WHERE ulid = ?`).get(ulid) as { id: number | null; series: string; title: string } | undefined;
-  if (!n) return "-";
-  return n.id !== null && n.id !== undefined ? formatEntryRef(n.id, n.series) : n.title;
-}
-
-function projectCode(db: Db, ulid: string | null): string {
-  if (!ulid) return "-";
-  return (db.prepare(`SELECT code FROM projects WHERE ulid = ?`).get(ulid) as { code: string } | undefined)?.code ?? "-";
-}
 
 export async function runRefused(args: string[], io: Io): Promise<CliResult> {
   const [sub, ...rest] = args;
@@ -36,7 +21,8 @@ export async function runRefused(args: string[], io: Io): Promise<CliResult> {
         if (!rows.length) { io.out("Nothing was refused."); return { code: 0 }; }
         io.out(`${"ID".padEnd(28)}${"WHEN".padEnd(21)}${"PROJECT".padEnd(9)}${"KIND".padEnd(6)}${"NOTE".padEnd(26)}REASON`);
         for (const r of rows) {
-          io.out(`${r.ulid.padEnd(28)}${r.at.padEnd(21)}${projectCode(db, r.project_ulid).padEnd(9)}${r.kind.padEnd(6)}${noteLabel(db, r.note_ulid).padEnd(26)}${r.reason}`);
+          const { note, project_code } = describeRefused(db, r);
+          io.out(`${r.ulid.padEnd(28)}${r.at.padEnd(21)}${project_code.padEnd(9)}${r.kind.padEnd(6)}${note.padEnd(26)}${r.reason}`);
         }
         return { code: 0 };
       }

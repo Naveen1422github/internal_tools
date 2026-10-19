@@ -5,9 +5,9 @@ import assert from 'node:assert';
 import { freshDb } from './helpers/sync.js';
 import { migrate, latestMigration, type DB } from '../src/db.js';
 import { SYNCED_TABLES } from '../src/sync/enable.js';
-import { recordRefusal, listRefused, isRefusedNote, copyRefused, discardRefused } from '../src/access/refused.js';
+import { recordRefusal, listRefused, isRefusedNote, copyRefused, discardRefused, describeRefused, RefusedNotFoundError, TeamTargetError } from '../src/access/refused.js';
 import { addEntry } from '../src/ops/add.js';
-import { createProject } from '../src/projects.js';
+import { createProject, ProjectNotFoundError } from '../src/projects.js';
 import type { WireChange } from '../src/sync/changes.js';
 
 // A cell of entries row `ulid` (pk packed the way cr-sqlite does).
@@ -155,5 +155,33 @@ test('copyRefused keeps the refs the refused cells added (R-32b), once, and only
     const refs = (t.db.prepare(`SELECT ref_type, ref_value FROM refs WHERE entry_ulid = ? ORDER BY ref_type, ref_value`).all(u) as Array<{ ref_type: string; ref_value: string }>)
       .map((r) => `${r.ref_type}:${r.ref_value}`);
     assert.deepEqual(refs, ['file:added.ts', 'file:kept.ts', 'task:T-9']);
+  } finally { t.cleanup(); }
+});
+
+test('describeRefused: the note\'s number, else its title, else "-"; the project code, else "-"', () => {
+  const { t, note } = setup();
+  try {
+    createProject(t.db, { name: 'Solo Box', code: 'SB' });
+    const sb = (t.db.prepare(`SELECT ulid FROM projects WHERE code = 'SB'`).get() as { ulid: string }).ulid;
+    const n = addEntry(t.db, { type: 'decision', title: 'In SB', summary: 's', project: 'SB' });
+    assert.deepEqual(describeRefused(t.db, { note_ulid: n.ulid, project_ulid: sb }), { note: `SB-${n.id}`, project_code: 'SB' });
+    t.db.prepare(`UPDATE entries SET id = NULL WHERE ulid = ?`).run(n.ulid);
+    assert.deepEqual(describeRefused(t.db, { note_ulid: n.ulid, project_ulid: null }), { note: 'In SB', project_code: '-' });
+    assert.deepEqual(describeRefused(t.db, { note_ulid: null, project_ulid: '01JZZZZZZZZZZZZZZZZZZZZZZZ' }), { note: '-', project_code: '-' });
+    assert.deepEqual(describeRefused(t.db, { note_ulid: '01JZZZZZZZZZZZZZZZZZZZZZZZ', project_ulid: null }), { note: '-', project_code: '-' });
+    assert.ok(note.ulid);
+  } finally { t.cleanup(); }
+});
+
+test('refused errors carry a class each, with the same words', async () => {
+  const { t, note } = setup();
+  try {
+    createProject(t.db, { name: 'Team Box', code: 'TB' });
+    t.db.prepare(`UPDATE projects SET mode = 'team', team = 'fp' WHERE code = 'TB'`).run();
+    const id = recordRefusal(t.db, { noteUlid: note.ulid, projectUlid: null, kind: 'edit', key: null, reason: 'no', cells: [] });
+    assert.throws(() => discardRefused(t.db, 'nope'), (e: unknown) => e instanceof RefusedNotFoundError && (e as Error).message === '[collab] no refused change "nope" on this laptop.');
+    await assert.rejects(copyRefused(t.db, 'nope', 'TB'), RefusedNotFoundError);
+    await assert.rejects(copyRefused(t.db, id, 'TB'), (e: unknown) => e instanceof TeamTargetError && /^\[collab\] TB is a team project\. Copy this note into a solo project instead/.test((e as Error).message));
+    await assert.rejects(copyRefused(t.db, id, 'ZZ'), ProjectNotFoundError);
   } finally { t.cleanup(); }
 });

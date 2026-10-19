@@ -11,6 +11,7 @@ import * as ai from './tools/ai.js';
 import * as sync from './tools/sync.js';
 import * as setup from './tools/setup.js';
 import * as team from './tools/team.js';
+import * as refused from './tools/refused.js';
 import { checkApiRequest, checkHost, type GuardRefusal } from './guard.js';
 import { createWebKey, injectKey } from './web-key.js';
 
@@ -42,6 +43,7 @@ const routes: Record<string, any> = {
   ...sync.routes,
   ...setup.routes,
   ...team.routes,
+  ...refused.routes,
 };
 
 const MIME: Record<string, string> = {
