@@ -131,6 +131,15 @@ describe('team and refused calls', () => {
     expect([down.status, down.message]).toEqual([503, "The post office can't be reached right now."]);
   });
 
+  it('an error body that is not JSON gives a plain sentence with the status', async () => {
+    globalThis.fetch = vi.fn(async () => new Response('<html>Bad gateway</html>', { status: 502 })) as any;
+    const err = await api.teamProject('P1').catch((e) => e);
+    expect([err.status, err.message]).toEqual([502, 'Something went wrong (HTTP 502). Try again.']);
+    globalThis.fetch = vi.fn(async () => new Response('oops', { status: 403 })) as any;
+    const post = await api.refusedDelete('01R').catch((e) => e);
+    expect([post.status, post.message]).toEqual([403, 'Something went wrong (HTTP 403). Try again.']);
+  });
+
   it('team calls hit the right routes with the right bodies', async () => {
     const f = reply(200, { ok: true });
     await api.teamProject('01ABC');

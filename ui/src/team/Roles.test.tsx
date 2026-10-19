@@ -21,6 +21,7 @@ const overview = () => ({
     { ulid: 'P_SH', code: 'SH', name: 'Shop', role: 'Owner', keys: ALL_PROJECT },
     { ulid: 'P_LM', code: 'LM', name: 'Limited', role: 'Manager', keys: ['role.manage', 'note.view'] },
     { ulid: 'P_RD', code: 'RD', name: 'Research', role: 'Reader', keys: ['note.view'] },
+    { ulid: 'P_NR', code: 'NR', name: 'No revoke', role: 'Lead', keys: ALL_PROJECT.filter((k) => k !== 'member.revoke') },
   ],
 });
 const role = (ulid: string, name: string, keys: string[], is_starter = true, locked: 'all' | 'name' | null = null) =>
@@ -77,7 +78,8 @@ async function rolesAt(path: string, setup?: () => void) {
 }
 const cardNames = () => screen.getAllByRole('article').map((a) => a.getAttribute('aria-label'));
 const card = (name: string) => within(screen.getByRole('article', { name }));
-const editor = () => within(screen.getByRole('form', { name: /role/i }));
+// Only one editor form ever renders; its name is checked where it matters.
+const editor = () => within(screen.getByRole('form'));
 
 describe('Roles tab', () => {
   afterEach(() => { cleanup(); vi.clearAllMocks(); });
@@ -141,7 +143,7 @@ describe('Roles tab', () => {
     }
     expect(f.queryByRole('button', { name: 'Save' })).toBeNull();
     fireEvent.click(f.getByRole('button', { name: 'Close' }));
-    expect(screen.queryByRole('form', { name: /role/i })).toBeNull();
+    expect(screen.queryByRole('form')).toBeNull();
   });
 
   it('Duplicate prefills the keys and "<Name> (copy)", and saving creates a role', async () => {
@@ -155,7 +157,7 @@ describe('Roles tab', () => {
     await waitFor(() => expect(api.teamCreateRole).toHaveBeenCalledWith({
       scope: 'project', project: 'P_SH', name: 'Contributor (copy)', keys: ['note.view', 'note.create', 'note.edit.own'],
     }));
-    await waitFor(() => expect(screen.queryByRole('form', { name: /role/i })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('form')).toBeNull());
   });
 
   it('Save sends active keys only, in catalog order, by role ULID', async () => {
@@ -172,14 +174,96 @@ describe('Roles tab', () => {
     }));
   });
 
-  it('a toggle for a key the viewer lacks is disabled with the reason', async () => {
+  it('a toggle for a key the viewer lacks is disabled with the reason, shown once and linked', async () => {
     await rolesAt('/team?scope=LM');
     fireEvent.click(screen.getByRole('button', { name: 'New role' }));
     const f = editor();
+    const note = 'You can only give permissions you hold yourself.';
     const supersede = f.getByRole('checkbox', { name: 'Supersede notes' }) as HTMLInputElement;
     expect(supersede.disabled).toBe(true);
-    expect(supersede.closest('label')?.title).toBe('You can only give permissions you hold yourself.');
-    expect((f.getByRole('checkbox', { name: 'View notes' }) as HTMLInputElement).disabled).toBe(false);
+    expect(supersede.closest('label')?.title).toBe(note);
+    const line = f.getByText(note);
+    expect(f.getAllByText(note)).toHaveLength(1);
+    expect((supersede.getAttribute('aria-describedby') ?? '').split(' ')).toContain(line.id);
+    const view = f.getByRole('checkbox', { name: 'View notes' }) as HTMLInputElement;
+    expect(view.disabled).toBe(false);
+    expect((view.getAttribute('aria-describedby') ?? '').split(' ')).not.toContain(line.id);
+  });
+
+  it('no "only give" note when every toggle can be changed', async () => {
+    await rolesAt('/team?scope=SH');
+    fireEvent.click(screen.getByRole('button', { name: 'New role' }));
+    expect(editor().queryByText('You can only give permissions you hold yourself.')).toBeNull();
+  });
+
+  it('a duplicated role may drop a key the viewer lacks, but not take it back; Save sends keys without it', async () => {
+    await rolesAt('/team?scope=NR');
+    fireEvent.click(card('Owner').getByRole('button', { name: 'Duplicate' }));
+    const f = editor();
+    const revoke = () => f.getByRole('checkbox', { name: 'Revoke members' }) as HTMLInputElement;
+    expect(revoke().checked).toBe(true);
+    expect(revoke().disabled).toBe(false);
+    fireEvent.click(revoke());
+    expect(revoke().checked).toBe(false);
+    expect(revoke().disabled).toBe(true);
+    fireEvent.click(f.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.teamCreateRole).toHaveBeenCalledWith({
+      scope: 'project', project: 'P_NR', name: 'Owner (copy)', keys: ALL_PROJECT.filter((k) => k !== 'member.revoke'),
+    }));
+  });
+
+  it('editing an existing role keeps a lacked key disabled, ticked or not', async () => {
+    await rolesAt('/team?scope=NR', () => api.teamProject.mockResolvedValue({
+      ...projectRoster(), roles: [...projectRoster().roles, role('r-lead', 'Lead', ['note.view', 'member.revoke'], false)],
+    }));
+    fireEvent.click(card('Lead').getByRole('button', { name: 'Edit' }));
+    const revoke = editor().getByRole('checkbox', { name: 'Revoke members' }) as HTMLInputElement;
+    expect(revoke.checked).toBe(true);
+    expect(revoke.disabled).toBe(true);
+  });
+
+  it('editor titles: "New role", "Edit role: <Name>", "<Name> (read-only)"', async () => {
+    await rolesAt('/team?scope=SH');
+    fireEvent.click(screen.getByRole('button', { name: 'New role' }));
+    screen.getByRole('form', { name: 'New role' });
+    fireEvent.click(card('Contributor').getByRole('button', { name: 'Duplicate' }));
+    screen.getByRole('form', { name: 'New role' });
+    fireEvent.click(card('Editor').getByRole('button', { name: 'Edit' }));
+    screen.getByRole('form', { name: 'Edit role: Editor' });
+    screen.getByRole('heading', { name: 'Edit role: Editor' });
+    fireEvent.click(card('Owner').getByRole('button', { name: 'View' }));
+    screen.getByRole('form', { name: 'Owner (read-only)' });
+  });
+
+  it('the editor takes focus on open and gives it back to the opening button on close', async () => {
+    await rolesAt('/team?scope=SH');
+    const edit = card('Editor').getByRole('button', { name: 'Edit' });
+    fireEvent.click(edit);
+    await waitFor(() => expect(document.activeElement).toBe(editor().getByLabelText('Name')));
+    fireEvent.click(editor().getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('form')).toBeNull();
+    expect(document.activeElement).toBe(edit);
+
+    const view = card('Owner').getByRole('button', { name: 'View' });
+    fireEvent.click(view);
+    await waitFor(() => expect(document.activeElement).toBe(editor().getByRole('heading', { name: 'Owner (read-only)' })));
+    fireEvent.keyDown(editor().getByRole('heading'), { key: 'Escape' });
+    expect(document.activeElement).toBe(view);
+
+    const newRole = screen.getByRole('button', { name: 'New role' });
+    fireEvent.click(newRole);
+    fireEvent.change(editor().getByLabelText('Name'), { target: { value: 'Lead' } });
+    fireEvent.click(editor().getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByRole('form')).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'New role' }));
+  });
+
+  it('the delete panel gives focus back to Delete on Cancel', async () => {
+    await rolesAt('/team?scope=SH');
+    const del = card('Zeta').getByRole('button', { name: 'Delete' });
+    fireEvent.click(del);
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    expect(document.activeElement).toBe(del);
   });
 
   it('without role.manage every editing control is disabled with the standard sentence', async () => {
@@ -191,11 +275,27 @@ describe('Roles tab', () => {
       card('Editor').getByRole('button', { name: 'Duplicate' }),
       card('Zeta').getByRole('button', { name: 'Delete' }),
     ] as HTMLButtonElement[];
+    // One visible line with the reason, linked from each control; the title stays.
+    const line = screen.getByText(sentence);
+    expect(screen.getAllByText(sentence)).toHaveLength(1);
     for (const b of buttons) {
       expect(b.disabled).toBe(true);
       expect(b.title).toBe(sentence);
+      expect(b.getAttribute('aria-describedby')).toBe(line.id);
     }
     expect((card('Owner').getByRole('button', { name: 'View' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('with role.manage there is no reason line', async () => {
+    await rolesAt('/team?scope=SH');
+    expect(screen.queryByText(/You need "Manage roles"/)).toBeNull();
+  });
+
+  it('a long role name wraps inside its card', async () => {
+    await rolesAt('/team?scope=SH');
+    const h = card('Zeta').getByRole('heading', { name: 'Zeta' });
+    expect(h.className).toContain('break-words');
+    expect(h.className).toContain('min-w-0');
   });
 
   it('delete asks first, then shows the office\'s 409 word for word', async () => {

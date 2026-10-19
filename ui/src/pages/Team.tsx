@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { teamOffice, teamOverview, teamProject, type TeamOverview, type TeamRoster } from '../api/client';
 import Members from '../team/Members';
@@ -43,6 +43,10 @@ export default function Team() {
   const [reloads, setReloads] = useState(0);
 
   const scope = overview?.connected ? (asked && choicesOf(overview).includes(asked) ? asked : choicesOf(overview)[0] ?? null) : null;
+  // The scope on screen now, read when a change answers: an answer to a change
+  // sent under a previous scope is ignored (no banner, no reload).
+  const current = useRef(scope);
+  current.current = scope;
 
   useEffect(() => {
     let alive = true;
@@ -70,13 +74,16 @@ export default function Team() {
 
   const act = async (change: () => Promise<unknown>) => {
     setBanner(null);
+    const sentUnder = current.current;
     try {
       await change();
     } catch (e) {
+      if (current.current !== sentUnder) return false;
       const { status, message } = errorOf(e);
       if (replacesBody(status)) { setRoster(null); setFatal(message); } else setBanner(message);
       return false;
     }
+    if (current.current !== sentUnder) return false;
     setReloads((n) => n + 1);
     return true;
   };
@@ -99,12 +106,12 @@ export default function Team() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         {heading}
-        <label className="flex items-center gap-2 text-sm">
+        <label className="flex min-w-0 max-w-full items-center gap-2 text-sm">
           <span className="text-gray-500">Team settings for</span>
           <select
             value={scope}
             onChange={(e) => choose(e.target.value)}
-            className="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-sm"
+            className="max-w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-sm"
           >
             {overview.projects.map((p) => (
               <option key={p.ulid} value={p.code}>{p.name ? `${p.code} · ${p.name}` : p.code}</option>

@@ -36,14 +36,17 @@ export default function Sidebar() {
     return () => { alive = false; clearInterval(t); };
   }, []);
   // S3-11: "Team" only for a notebook connected to a post office that is in a
-  // team project or holds an office role. Asked once; any failure keeps it hidden.
+  // team project or holds an office role. Asked every 30 s like the counts, so it
+  // appears once the office can be reached; any failure hides it.
   const [team, setTeam] = useState(false);
   useEffect(() => {
     let alive = true;
-    teamOverview()
+    const load = () => teamOverview()
       .then((o) => { if (alive) setTeam(o.connected && (o.projects.length > 0 || o.office !== null)); })
-      .catch(() => {});
-    return () => { alive = false; };
+      .catch(() => { if (alive) setTeam(false); });
+    load();
+    const t = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(t); };
   }, []);
   return (
     <nav className="w-56 shrink-0 border-r border-gray-200 dark:border-gray-800 p-3 flex flex-col gap-1">

@@ -1,4 +1,4 @@
-import { useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import type { TeamScope } from '../api/client';
 import { CATALOG, activeKeys } from './catalog';
 import { LAPTOP_NOTE } from './view';
@@ -9,8 +9,14 @@ const NOT_HELD = 'You can only give permissions you hold yourself.';
 
 export interface RoleEditorProps {
   scope: TeamScope;
-  /** The form's accessible name, e.g. "New role" or "Edit role Editor". */
+  /** The form's accessible name, e.g. "New role" or "Edit role: Editor". */
   title: string;
+  /**
+   * True for a new or duplicated role: a key the viewer lacks may be unticked
+   * (removing is not giving) but never ticked. False for an existing role, where
+   * every key the viewer lacks stays as it is.
+   */
+  isNew: boolean;
   initialName: string;
   /** May include inactive keys; only active ones are shown and sent (rule 4). */
   initialKeys: string[];
@@ -28,7 +34,7 @@ export interface RoleEditorProps {
  * toggles only spare the viewer a refusal.
  */
 export default function RoleEditor(props: RoleEditorProps) {
-  const { scope, title, locked, viewerKeys, onSave, onClose } = props;
+  const { scope, title, isNew, locked, viewerKeys, onSave, onClose } = props;
   const active = activeKeys(scope);
   const [name, setName] = useState(props.initialName);
   const [keys, setKeys] = useState(() => new Set(props.initialKeys.filter((k) => active.includes(k))));
@@ -36,6 +42,11 @@ export default function RoleEditor(props: RoleEditorProps) {
   const id = useId();
   const readOnly = locked === 'all';
   const nameLocked = locked !== null;
+  const heading = useRef<HTMLHeadingElement>(null);
+  const nameField = useRef<HTMLInputElement>(null);
+
+  // Focus moves into the editor when it opens: the name, or the heading when the name is fixed.
+  useEffect(() => { (nameLocked ? heading.current : nameField.current)?.focus(); }, [nameLocked]);
 
   const toggle = (key: string) => setKeys((prev) => {
     const next = new Set(prev);
@@ -57,6 +68,11 @@ export default function RoleEditor(props: RoleEditorProps) {
     .map((a) => ({ ...a, permissions: a.permissions.filter((p) => p.active) }))
     .filter((a) => a.permissions.length > 0);
 
+  /** A key the viewer lacks: fixed on an existing role; on a new one it may only be unticked. */
+  const isDisabled = (key: string) => readOnly || (!viewerKeys.includes(key) && (!isNew || !keys.has(key)));
+  const notHeldShown = !readOnly && areas.some((a) => a.permissions.some((p) => isDisabled(p.key)));
+  const notHeldId = `${id}-not-held`;
+
   return (
     <form
       aria-label={title}
@@ -64,13 +80,14 @@ export default function RoleEditor(props: RoleEditorProps) {
       onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
       className="border border-gray-200 dark:border-gray-800 rounded-lg p-4 space-y-4"
     >
-      <h2 className="text-lg font-semibold">{title}</h2>
+      <h2 ref={heading} tabIndex={-1} className="text-lg font-semibold break-words focus:outline-none">{title}</h2>
       {readOnly && <p className="text-sm text-gray-600 dark:text-gray-400">{ALL_LOCKED_NOTE}</p>}
 
       <div className="space-y-1">
         <label htmlFor={`${id}-name`} className="block text-sm font-medium">Name</label>
         <input
           id={`${id}-name`}
+          ref={nameField}
           type="text"
           value={name}
           readOnly={nameLocked}
@@ -81,16 +98,18 @@ export default function RoleEditor(props: RoleEditorProps) {
         {locked === 'name' && <p className="text-sm text-gray-600 dark:text-gray-400">{NAME_LOCKED_NOTE}</p>}
       </div>
 
+      {notHeldShown && <p id={notHeldId} className="text-sm text-gray-600 dark:text-gray-400">{NOT_HELD}</p>}
+
       {areas.map((a) => (
         <fieldset key={a.area} className="space-y-2">
           <legend className="text-sm font-semibold">{a.label}</legend>
           {a.permissions.map((p) => {
-            const held = viewerKeys.includes(p.key);
-            const disabled = readOnly || !held;
+            const disabled = isDisabled(p.key);
+            const notHeld = disabled && !readOnly;
             return (
               <label
                 key={p.key}
-                title={!readOnly && !held ? NOT_HELD : undefined}
+                title={notHeld ? NOT_HELD : undefined}
                 className={`flex items-start gap-3 text-sm ${disabled ? 'opacity-60' : ''}`}
               >
                 <input
@@ -99,7 +118,7 @@ export default function RoleEditor(props: RoleEditorProps) {
                   disabled={disabled}
                   onChange={() => toggle(p.key)}
                   aria-labelledby={`${id}-${p.key}-label`}
-                  aria-describedby={`${id}-${p.key}`}
+                  aria-describedby={notHeld ? `${id}-${p.key} ${notHeldId}` : `${id}-${p.key}`}
                   className="mt-1"
                 />
                 <span>

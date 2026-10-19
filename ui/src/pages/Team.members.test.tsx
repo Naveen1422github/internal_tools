@@ -140,6 +140,64 @@ describe('Team page, Members tab', () => {
     const remove = rinku.getByRole('button', { name: 'Remove from RD' }) as HTMLButtonElement;
     expect(remove.disabled).toBe(true);
     expect(remove.title).toBe('You need "Revoke members" (member.revoke) in RD to do this');
+    // Each reason is said once, visibly, above the table, and linked from its controls.
+    const manage = screen.getByText('You need "Manage roles" (role.manage) in RD to do this');
+    const revoke = screen.getByText('You need "Revoke members" (member.revoke) in RD to do this');
+    expect(select.getAttribute('aria-describedby')).toBe(manage.id);
+    expect(remove.getAttribute('aria-describedby')).toBe(revoke.id);
+    expect(manage.compareDocumentPosition(screen.getByRole('table')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('with the keys there is no reason line', async () => {
+    at('/team?scope=SH');
+    await rowOf('Rinku');
+    expect(screen.queryByText(/^You need /)).toBeNull();
+  });
+
+  it('the answer to a change sent under another scope is ignored', async () => {
+    let refuse!: (e: Error) => void;
+    at('/team?scope=SH', () => api.teamSetMember.mockImplementationOnce(() => new Promise((_, no) => { refuse = no; })));
+    fireEvent.change((await rowOf('Rinku')).getByLabelText('Role for Rinku'), { target: { value: 'Reader' } });
+    await waitFor(() => expect(api.teamSetMember).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText('Team settings for'), { target: { value: 'RD' } });
+    await waitFor(() => expect(api.teamProject).toHaveBeenCalledWith('P_RD'));
+    await rowOf('Rinku');
+    refuse(refusal(403, 'You need "Edit project" (project.edit) in SH to do this'));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(api.teamProject).toHaveBeenCalledTimes(2);
+  });
+
+  it('a success sent under another scope does not reload the new scope', async () => {
+    let accept!: (v: unknown) => void;
+    at('/team?scope=SH', () => api.teamSetMember.mockImplementationOnce(() => new Promise((yes) => { accept = yes; })));
+    fireEvent.change((await rowOf('Rinku')).getByLabelText('Role for Rinku'), { target: { value: 'Reader' } });
+    await waitFor(() => expect(api.teamSetMember).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText('Team settings for'), { target: { value: 'RD' } });
+    await waitFor(() => expect(api.teamProject).toHaveBeenCalledWith('P_RD'));
+    await rowOf('Rinku');
+    accept({ ok: true });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(api.teamProject).toHaveBeenCalledTimes(2);
+    expect(api.teamOverview).toHaveBeenCalledTimes(2);
+  });
+
+  it('the scope picker never overflows the page', async () => {
+    at('/team');
+    const picker = await screen.findByLabelText('Team settings for');
+    expect(picker.className).toContain('max-w-full');
+  });
+
+  it('the remove panel gives focus back to the button on Cancel, and to the table after a removal', async () => {
+    at('/team?scope=SH');
+    const remove = (await rowOf('Rinku')).getByRole('button', { name: 'Remove from SH' });
+    fireEvent.click(remove);
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    expect(document.activeElement).toBe(remove);
+    fireEvent.click(remove);
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(api.teamRemoveMember).toHaveBeenCalled());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('table')));
   });
 
   it('the role select lists roles in the Roles tab order: built-ins in catalog order, then custom by name', async () => {
@@ -175,6 +233,8 @@ describe('Team page, Members tab', () => {
     const select = (await rowOf('Rinku')).getByLabelText('Office role for Rinku') as HTMLSelectElement;
     expect(select.disabled).toBe(true);
     expect(select.title).toBe('You need "Manage office roles" (office.role.manage) in this office to do this');
+    const line = screen.getByText('You need "Manage office roles" (office.role.manage) in this office to do this');
+    expect(select.getAttribute('aria-describedby')).toBe(line.id);
   });
 
   it('a project with only the viewer shows the empty state with the CLI command', async () => {

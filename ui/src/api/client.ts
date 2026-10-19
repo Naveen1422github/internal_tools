@@ -220,7 +220,7 @@ async function sendJson<T>(method: 'GET' | 'POST', url: string, body?: unknown):
   let error: unknown;
   try { error = (await res.json())?.error; } catch { /* not JSON */ }
   if (res.status === 403 && error === 'forbidden') throw new ApiError(RELOAD_MESSAGE, 403);
-  throw new ApiError(typeof error === 'string' && error ? error : `${method} ${url} -> ${res.status}`, res.status);
+  throw new ApiError(typeof error === 'string' && error ? error : `Something went wrong (HTTP ${res.status}). Try again.`, res.status);
 }
 
 export type TeamScope = 'project' | 'office';

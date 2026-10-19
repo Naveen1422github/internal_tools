@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { teamRemoveMember, teamSetMember, type TeamMember } from '../api/client';
 import { needSentence, orderRoles, whereOf, type TeamTabProps } from './view';
 import { localTimeOfUtc } from '../format';
@@ -20,6 +20,15 @@ export default function Members(props: TeamTabProps) {
   const canRemove = viewerKeys.includes('member.revoke');
   const [confirming, setConfirming] = useState<TeamMember | null>(null);
   const others = roster.members.filter((m) => m.device_id !== me);
+  // Each reason is said once, visibly, above the table; the controls point at it (and keep the title).
+  const manageWhy = canManage ? undefined : needSentence(manageKey, where);
+  const removeWhy = canRemove || !project ? undefined : needSentence('member.revoke', where);
+  const manageId = useId();
+  const removeId = useId();
+  // The Remove button that opened the panel gets focus back when it closes.
+  const opener = useRef<HTMLButtonElement | null>(null);
+  const table = useRef<HTMLTableElement>(null);
+  const refocus = () => { if (opener.current?.isConnected) opener.current.focus(); };
 
   const setRole = (m: TeamMember, role: string) =>
     act(() => teamSetMember(project ? { scope, project: project.ulid, device: m.device_id, role } : { scope, device: m.device_id, role }));
@@ -27,11 +36,19 @@ export default function Members(props: TeamTabProps) {
   const remove = async (m: TeamMember) => {
     if (!project) return;
     setConfirming(null);
-    await act(() => teamRemoveMember({ project: project.ulid, device: m.device_id }));
+    const ok = await act(() => teamRemoveMember({ project: project.ulid, device: m.device_id }));
+    // After a removal the row is about to go: land on the table instead of a button that vanishes.
+    if (ok) table.current?.focus(); else refocus();
   };
 
   return (
     <div className="space-y-4">
+      {(manageWhy || removeWhy) && (
+        <div className="space-y-1 text-sm text-gray-600 dark:text-gray-400">
+          {manageWhy && <p id={manageId}>{manageWhy}</p>}
+          {removeWhy && <p id={removeId}>{removeWhy}</p>}
+        </div>
+      )}
       {project && others.length === 0 && (
         <p className="text-sm text-gray-500">
           This project has no other members yet. Add one with <code>{`collab team set <member> ${project.code} <role>`}</code>.
@@ -42,11 +59,11 @@ export default function Members(props: TeamTabProps) {
           name={nameOf(confirming)}
           code={project.code}
           onRemove={() => remove(confirming)}
-          onCancel={() => setConfirming(null)}
+          onCancel={() => { setConfirming(null); refocus(); }}
         />
       )}
       <div className="border border-gray-200 dark:border-gray-800 rounded-lg overflow-x-auto">
-        <table className="w-full text-sm">
+        <table ref={table} tabIndex={-1} className="w-full text-sm focus:outline-none">
           <thead className="bg-gray-50 dark:bg-gray-900 text-left text-xs text-gray-500">
             <tr>
               <th className="px-3 py-2 font-semibold">Name</th>
@@ -70,7 +87,8 @@ export default function Members(props: TeamTabProps) {
                     aria-label={`${project ? 'Role' : 'Office role'} for ${nameOf(m)}`}
                     value={m.role}
                     disabled={!canManage}
-                    title={canManage ? undefined : needSentence(manageKey, where)}
+                    title={manageWhy}
+                    aria-describedby={manageWhy ? manageId : undefined}
                     onChange={(e) => setRole(m, e.target.value)}
                     className="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-sm disabled:opacity-50"
                   >
@@ -82,8 +100,9 @@ export default function Members(props: TeamTabProps) {
                     <button
                       type="button"
                       disabled={!canRemove}
-                      title={canRemove ? undefined : needSentence('member.revoke', where)}
-                      onClick={() => setConfirming(m)}
+                      title={removeWhy}
+                      aria-describedby={removeWhy ? removeId : undefined}
+                      onClick={(e) => { opener.current = e.currentTarget; setConfirming(m); }}
                       className="rounded-md border border-gray-300 dark:border-gray-700 px-3 py-1 text-sm hover:bg-gray-100 dark:hover:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Remove from {project.code}

@@ -108,6 +108,57 @@ describe('Refused changes page', () => {
     expect(api.refusedList).toHaveBeenCalledTimes(2);
   });
 
+  it('while a copy is pending, that row\'s Copy and Delete are disabled; other rows are not', async () => {
+    let finish!: (v: unknown) => void;
+    page(() => api.refusedCopy.mockImplementationOnce(() => new Promise((yes) => { finish = yes; })));
+    const row = await rowOf('SH-7');
+    const copy = row.getByRole('button', { name: 'Copy' }) as HTMLButtonElement;
+    fireEvent.click(copy);
+    await waitFor(() => expect(copy.disabled).toBe(true));
+    expect((row.getByRole('button', { name: 'Delete' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(copy);
+    expect(api.refusedCopy).toHaveBeenCalledTimes(1);
+    expect(((await rowOf('MY-3')).getByRole('button', { name: 'Copy' }) as HTMLButtonElement).disabled).toBe(false);
+    finish({ ref: 'MY-4' });
+    await screen.findByText('Copied as MY-4.');
+    await waitFor(() => expect(copy.disabled).toBe(false));
+  });
+
+  it('while a delete is pending, that row\'s Copy and Delete are disabled', async () => {
+    let finish!: (v: unknown) => void;
+    page(() => api.refusedDelete.mockImplementationOnce(() => new Promise((yes) => { finish = yes; })));
+    const row = await rowOf('SH-7');
+    fireEvent.click(row.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect((row.getByRole('button', { name: 'Delete' }) as HTMLButtonElement).disabled).toBe(true));
+    expect((row.getByRole('button', { name: 'Copy' }) as HTMLButtonElement).disabled).toBe(true);
+    finish({ ok: true });
+    await waitFor(() => expect((row.getByRole('button', { name: 'Delete' }) as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it('a copy that worked is reported even when the reload fails; the reload error is shown separately', async () => {
+    page(() => api.refusedList
+      .mockResolvedValueOnce({ results: rows(), solo_projects: SOLO })
+      .mockRejectedValueOnce(refusal(503, 'The server is not answering.')));
+    fireEvent.click((await rowOf('SH-7')).getByRole('button', { name: 'Copy' }));
+    await screen.findByText('Copied as MY-4.');
+    expect((await screen.findByRole('alert')).textContent).toContain('The server is not answering.');
+  });
+
+  it('the delete panel gives focus back to Delete on Cancel, and to the heading after a delete', async () => {
+    page(() => api.refusedList
+      .mockResolvedValueOnce({ results: rows(), solo_projects: SOLO })
+      .mockResolvedValueOnce({ results: rows().slice(1), solo_projects: SOLO }));
+    const del = (await rowOf('SH-7')).getByRole('button', { name: 'Delete' });
+    fireEvent.click(del);
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    expect(document.activeElement).toBe(del);
+    fireEvent.click(del);
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(screen.queryByRole('row', { name: /SH-7/ })).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Refused changes' }));
+  });
+
   it('deleting a new note says the note is removed too', async () => {
     page();
     fireEvent.click((await rowOf('MY-3')).getByRole('button', { name: 'Delete' }));
@@ -163,5 +214,24 @@ describe('Sidebar, Refused changes', () => {
     await waitFor(() => expect(api.refusedList).toHaveBeenCalled());
     await Promise.resolve();
     expect(screen.queryByRole('link', { name: /Refused changes/ })).toBeNull();
+  });
+});
+
+describe('Sidebar, Team', () => {
+  afterEach(() => { cleanup(); vi.clearAllMocks(); vi.useRealTimers(); });
+
+  it('asks for the team overview again every 30 s, so "Team" appears once the office is reachable', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.needsMerge.mockResolvedValue({ results: [] });
+    api.refusedList.mockResolvedValue({ results: [], solo_projects: [] });
+    api.teamOverview
+      .mockRejectedValueOnce(refusal(503, "The post office can't be reached right now."))
+      .mockResolvedValue({ connected: true, me: { device_id: 'd' }, office: null, projects: [{ ulid: 'P', code: 'SH', name: null, role: 'Reader', keys: [] }] });
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    await waitFor(() => expect(api.teamOverview).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('link', { name: 'Team' })).toBeNull();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect((await screen.findByRole('link', { name: 'Team' })).getAttribute('href')).toBe('/team');
+    expect(api.teamOverview).toHaveBeenCalledTimes(2);
   });
 });
