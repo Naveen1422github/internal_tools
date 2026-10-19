@@ -16,6 +16,7 @@ function grant(scope: Scope, stored: string | undefined): Set<string> {
   const active = new Set(keysOf(scope));
   return new Set(sanitizeKeys(scope, parsed).filter((k) => active.has(k)));
 }
+export { grant as activeKeysOfRole };
 
 const LIVE = `EXISTS (SELECT 1 FROM po_members m WHERE m.device_id = x.device_id AND m.revoked_at IS NULL)`;
 
@@ -56,6 +57,25 @@ export function requireProjectKey(db: Store, deviceId: string, projectUlid: stri
 export function requireOfficeKey(db: Store, deviceId: string, key: string): void {
   if (officeKeys(db, deviceId).has(key)) return;
   throw new StoreError(`You need "${labelOf(key)}" (${key}) in this office to do this`, 403);
+}
+
+/**
+ * The rank rule (S3-1): you manage a member only if you hold every active key
+ * of their current role. Throws on the first key you lack, in the usual wording.
+ */
+export function requireOutranks(db: Store, actor: string, scope: Scope, projectUlid: string | null, targetKeys: Set<string>): void {
+  const mine = scope === "project" ? projectKeys(db, actor, projectUlid!) : officeKeys(db, actor);
+  for (const k of targetKeys) {
+    if (mine.has(k)) continue;
+    if (scope === "project") requireProjectKey(db, actor, projectUlid!, k);
+    else requireOfficeKey(db, actor, k);
+  }
+}
+
+/** The stored keys of a device's office role (revoked devices included); undefined when it has none. */
+function officeRoleKeys(db: Store, deviceId: string): string | undefined {
+  return (db.prepare(`SELECT r.keys FROM po_office_members x JOIN po_office_roles r ON r.ulid = x.role_ulid WHERE x.device_id = ?`)
+    .get(deviceId) as { keys: string } | undefined)?.keys;
 }
 
 // ---------------------------------------------------------------- structural counts
@@ -167,22 +187,24 @@ export function seedNewProject(db: Store, projectUlid: string, creatorDevice: st
 /**
  * Give `deviceId` a role in a project, change it, or (`roleName = null`)
  * remove it. Adding needs member.invite, changing needs role.manage, removing
- * needs member.revoke; the role given may not hold a key the actor lacks.
- * A project always keeps one Owner. R14: gaining
- * note.view queues a replay of the history so far; losing it drops it.
+ * needs member.revoke; the role given may not hold a key the actor lacks
+ * (S3-14, yourself included), nor may the target's current role (S3-1).
+ * Lowering your own role passes both. A project always keeps one Owner.
+ * R14: gaining note.view queues a replay of the history so far; losing it drops it.
  * `actor = null` = the office machine's CLI: no keys checked, the Owner rule still holds.
  */
 export function setProjectMember(db: Store, actor: string | null, projectUlid: string, deviceId: string, roleName: string | null): boolean {
   return db.transaction(() => {
     if (!db.prepare(`SELECT 1 FROM po_projects WHERE ulid = ?`).get(projectUlid)) throw new StoreError(`no team project ${projectUlid} on this post office`, 404);
     const cur = db
-      .prepare(`SELECT r.name FROM po_project_members x JOIN po_roles r ON r.ulid = x.role_ulid WHERE x.project_ulid = ? AND x.device_id = ?`)
-      .get(projectUlid, deviceId) as { name: string } | undefined;
+      .prepare(`SELECT r.name, r.keys FROM po_project_members x JOIN po_roles r ON r.ulid = x.role_ulid WHERE x.project_ulid = ? AND x.device_id = ?`)
+      .get(projectUlid, deviceId) as { name: string; keys: string } | undefined;
+    if (actor !== null) requireProjectKey(db, actor, projectUlid, roleName === null ? "member.revoke" : cur ? "role.manage" : "member.invite");
+    // S3-1: nobody changes or removes a member ranked above them (checked before the no-op answer).
+    if (actor !== null && cur) requireOutranks(db, actor, "project", projectUlid, grant("project", cur.keys));
     if (roleName === null) {
-      if (actor !== null) requireProjectKey(db, actor, projectUlid, "member.revoke");
       if (!cur) return false;
     } else {
-      if (actor !== null) requireProjectKey(db, actor, projectUlid, cur ? "role.manage" : "member.invite");
       if (cur?.name === roleName) return false;
       if (!liveMember(db, deviceId)) throw new StoreError(`${deviceId} is not a member of this office`, 404);
     }
@@ -206,10 +228,15 @@ export function setProjectMember(db: Store, actor: string | null, projectUlid: s
   }).immediate();
 }
 
-/** Each device holds one office role (R13). `actor = null` = the office machine's CLI (unguarded). */
+/**
+ * Each device holds one office role (R13). Like a project role: the actor must
+ * outrank the target's current office role (S3-1) and hold every key of the new
+ * one (S3-14). `actor = null` = the office machine's CLI (unguarded).
+ */
 export function setOfficeRole(db: Store, actor: string | null, deviceId: string, roleName: string): void {
   db.transaction(() => {
     if (actor !== null) requireOfficeKey(db, actor, "office.role.manage");
+    if (actor !== null) requireOutranks(db, actor, "office", null, grant("office", officeRoleKeys(db, deviceId)));
     if (!liveMember(db, deviceId)) throw new StoreError(`${deviceId} is not a member of this office`, 404);
     const role = db.prepare(`SELECT ulid, keys FROM po_office_roles WHERE name = ?`).get(roleName) as { ulid: string; keys: string } | undefined;
     if (!role) throw new StoreError(`this office has no role called "${roleName}"`, 404);
@@ -222,8 +249,13 @@ export function setOfficeRole(db: Store, actor: string | null, deviceId: string,
   }).immediate();
 }
 
-/** revokeMember's guard: never leave the office without an admin or a project without an Owner. */
-export function assertRevocable(db: Store, deviceId: string): void {
+/**
+ * revokeMember's guard: never leave the office without an admin or a project
+ * without an Owner. With an `actor` (an office member, not the office CLI), the
+ * actor must also outrank the device's office role (S3-1).
+ */
+export function assertRevocable(db: Store, deviceId: string, actor: string | null = null): void {
+  if (actor !== null) requireOutranks(db, actor, "office", null, grant("office", officeRoleKeys(db, deviceId)));
   if (isSoleOfficeAdmin(db, deviceId)) {
     throw new StoreError("this is the only Office admin; make someone else Office admin first", 409);
   }

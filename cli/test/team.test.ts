@@ -5,7 +5,8 @@ import assert from 'node:assert';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { closeDb, parseJoinCode } from '@collab-mcp/core';
+import { closeDb, newUlid, parseJoinCode } from '@collab-mcp/core';
+import { setProjectMember } from '@collab-mcp/post-office';
 import { main } from '../src/main.js';
 import { startOffice, joinedDb, type Office } from '../../courier/test/world.js';
 
@@ -71,6 +72,27 @@ test('a refusal is shown as its plain message with exit code 1', async () => {
     const r = await as(b, ['team', 'office-role', a.device, 'Office member']);
     assert.equal(r.code, 1);
     assert.match(r.err.join('\n'), /You need ".+" \(office\.role\.manage\) in this office/);
+  });
+});
+
+test('collab team set by a lower-ranked member prints the office refusal (cli)', async () => {
+  await withOffice(async ({ office, a, b, as }) => {
+    // b registers TM (so b's notebook knows it); the office machine then makes a and c Owners, b a Lead without project.edit
+    assert.equal((await as(b, ['project', 'create', 'Team One', '--code', 'TM', '--team'])).code, 0);
+    const p = (office.store.prepare(`SELECT ulid FROM po_projects WHERE code = 'TM'`).get() as { ulid: string }).ulid;
+    const lead = ['note.view', 'note.create', 'note.edit.own', 'note.edit.any', 'note.supersede', 'note.archive', 'note.copy.out',
+      'merge.resolve', 'member.invite', 'member.revoke', 'role.manage'];
+    office.store.prepare(`INSERT INTO po_roles (ulid, project_ulid, name, keys, is_starter) VALUES (?, ?, 'Lead', ?, 0)`).run(newUlid(), p, JSON.stringify(lead));
+    const c = office.code('c').device;
+    setProjectMember(office.store, null, p, a.device, 'Owner');
+    setProjectMember(office.store, null, p, c, 'Owner');
+    setProjectMember(office.store, null, p, b.device, 'Lead');
+    for (const argv of [['team', 'set', a.device, 'TM', 'Reader'], ['team', 'remove', a.device, 'TM']]) {
+      const r = await as(b, argv);
+      assert.equal(r.code, 1, argv.join(' '));
+      assert.match(r.err.join('\n'), /You need "Edit project" \(project\.edit\) in TM to do this/);
+    }
+    assert.match((await as(b, ['team', 'list', 'TM'])).out.join('\n'), /\ba\b.*Owner/, 'a is still Owner');
   });
 });
 

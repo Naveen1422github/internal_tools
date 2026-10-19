@@ -294,7 +294,7 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
       requireOfficeKey(o.store, me.device_id, "office.member.revoke");
       const who = param(m[1]);
       if (!o.store.prepare(`SELECT 1 FROM po_members WHERE device_id = ?`).get(who)) throw new StoreError(`no member called ${who}`, 404);
-      revokeMember(o.store, who, { deviceOnly: true });
+      revokeMember(o.store, who, { deviceOnly: true, actor: me.device_id });
       ring("access", {});
       return send(res, 200, { ok: true });
     }

@@ -407,14 +407,17 @@ export function listMembers(db: Store): Member[] {
   return db.prepare(`SELECT ${MEMBER_COLS} FROM po_members ORDER BY created_at, rowid`).all() as Member[];
 }
 
-/** Revoke by device id or by name (a name must be unambiguous). Effective on the next request (D12). */
-export function revokeMember(db: Store, who: string, opts: { deviceOnly?: boolean } = {}): Member {
+/**
+ * Revoke by device id or by name (a name must be unambiguous). Effective on the next request (D12).
+ * `actor` = the member asking over HTTPS (rank rule, S3-1); omitted = the office machine's CLI.
+ */
+export function revokeMember(db: Store, who: string, opts: { deviceOnly?: boolean; actor?: string } = {}): Member {
   const rows = (opts.deviceOnly
     ? db.prepare(`SELECT ${MEMBER_COLS} FROM po_members WHERE device_id = ?`).all(who)
     : db.prepare(`SELECT ${MEMBER_COLS} FROM po_members WHERE device_id = ? OR name = ?`).all(who, who)) as Member[];
   if (rows.length === 0) throw new StoreError(`no member called ${who}`, 404);
   if (rows.length > 1) throw new StoreError(`${rows.length} members are called ${who}; revoke by device id: ${rows.map((r) => r.device_id).join(", ")}`);
-  if (!rows[0].revoked_at) assertRevocable(db, rows[0].device_id);
+  if (!rows[0].revoked_at) assertRevocable(db, rows[0].device_id, opts.actor ?? null);
   db.prepare(`UPDATE po_members SET revoked_at = COALESCE(revoked_at, datetime('now')), join_hash = NULL WHERE device_id = ?`).run(rows[0].device_id);
   return { ...rows[0], revoked_at: rows[0].revoked_at ?? "now" };
 }
