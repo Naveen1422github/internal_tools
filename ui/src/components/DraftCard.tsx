@@ -5,7 +5,7 @@ import { useSyncOverview } from '../sync/useSyncOverview';
 import { saveNote } from '../sync/view';
 import { formatEntryRef, noteRefOf } from '../format';
 
-const TYPES = ['handoff', 'review', 'proposal', 'counter', 'decision', 'gotcha', 'session-note', 'changelog'];
+export const TYPES = ['handoff', 'review', 'proposal', 'counter', 'decision', 'gotcha', 'session-note', 'changelog'];
 
 export function draftErrors(d: Partial<Entry>): string[] {
   const errs: string[] = [];

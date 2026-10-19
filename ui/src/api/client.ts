@@ -118,8 +118,17 @@ export const getEntry = (id: number | string) =>
 export const entryByUlid = (ulid: string) =>
   getJson<Entry>(`/api/collab/entry${qs({ ulid })}`);
 
-export const upsertEntry = (body: Omit<Partial<Entry>, 'id'> & { id?: number | string }) =>
-  postJson<{ ok: boolean; id: number; series?: string }>(`/api/collab/entry/upsert`, body);
+/**
+ * Create (no id) or edit a note. `project` (create only): a project code, or "none";
+ * omitted, core decides (the module's binding). A refusal keeps its own sentence:
+ * a 403 here is usually a role refusal, not a stale page (UI parity Task 9).
+ */
+export const upsertEntry = (body: Omit<Partial<Entry>, 'id'> & { id?: number | string; project?: string }) =>
+  sendJson<{ ok: boolean; id: number; series?: string; pending?: boolean; ulid?: string }>('POST', `/api/collab/entry/upsert`, body);
+/** Where a new note would land, in core's words. */
+export interface NoteDestination { project: { code: string; name: string; mode: string } | null; why: 'named' | 'bound' | 'folder' | 'none'; line: string }
+export const noteDestination = (p: { module?: string; project?: string }) =>
+  sendJson<NoteDestination>('GET', `/api/collab/note-destination${qs({ module: p.module, project: p.project })}`);
 
 export const deleteEntry = (id: number | string) =>
   postJson<{ ok: boolean }>(`/api/collab/entry/delete`, { id });

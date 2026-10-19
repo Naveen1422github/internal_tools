@@ -4,7 +4,7 @@ import {
   addEntry, addEntryAsync, deleteEntry, supersede, doctor,
   editEntry, EntryNotFoundError, reassignModule, upsertModule, deleteModule,
   liveEntry, ftsJoin, readSyncOverview, NeedsMergeError, formatEntryRef, ReadOnlyNoteError,
-  AccessDeniedError, getEntryByUlid, isUlid, getEntryByRef, parseNoteRef, hasSeries, listBindings, type NoteRef,
+  AccessDeniedError, getEntryByUlid, isUlid, getEntryByRef, parseNoteRef, hasSeries, listBindings, noteDestination, ProjectNotFoundError, type NoteRef,
 } from '@collab-mcp/core';
 
 const db = getDb();
@@ -215,7 +215,10 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
   },
 
   'POST /api/collab/entry/upsert': async (req, res, send, body) => {
-    const { id, type, title, summary, description, agent, module, modules, category, task_id, refs } = body;
+    const { id, type, title, summary, description, agent, module, modules, category, task_id, refs, project } = body;
+    // UI parity Task 9: the New note form names a project (a code, or "none"); omitted = core's default.
+    if (project !== undefined && (typeof project !== 'string' || !project.trim())) return send(400, { error: 'project must be a project code, or "none".' });
+    if (project !== undefined && id) return send(400, { error: "A note's project is set when it is created; copy it to move it." });
     const v = validateEntryInput({ type, title, summary, category });
     if (!v.ok) return send(400, { error: v.errors[0] });
     const resolvedCategory = v.category!;
@@ -241,7 +244,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
         const { id: newId, series, ulid } = await addEntryAsync(db, {
           type, title, summary, description, agent: agent || undefined,
           module: primaryModule ?? undefined, modules: orderedModules, category: resolvedCategory as any,
-          task_id: task_id || undefined, refs: normRefs,
+          task_id: task_id || undefined, refs: normRefs, ...(project !== undefined ? { project } : {}),
         });
         // Stage C: id null = saved pending; reach it by ulid until the courier numbers it.
         return send(200, { ok: true, id: newId, series, pending: newId === null, ulid });
@@ -260,7 +263,21 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       if (err instanceof EntryNotFoundError) return send(404, { error: err.message });
       if (err instanceof NeedsMergeError) return send(409, { error: err.message }); // V9: settle it on /merge/:id
       if (err instanceof ReadOnlyNoteError) return send(403, { error: err.message }); // a team you left (stage B2, P11)
+      if (err instanceof ProjectNotFoundError) return send(404, { error: err.message });
       send(errStatus(err), { error: err.message });
+    }
+  },
+
+  // UI parity Task 9: where a new note would land (addEntryAsync's own rule), before saving.
+  'GET /api/collab/note-destination': async (req, res, send) => {
+    const url = new URL(req.url!, `http://${req.headers.host}`);
+    const module = url.searchParams.get('module') || undefined;
+    const project = url.searchParams.get('project') || undefined;
+    try {
+      send(200, noteDestination(db, { module, project }));
+    } catch (err: any) {
+      const status = err instanceof ProjectNotFoundError ? 404 : err instanceof ReadOnlyNoteError ? 403 : errStatus(err);
+      send(status, { error: String(err.message).replace(/^\[collab\] /, '') });
     }
   },
 

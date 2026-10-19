@@ -14,6 +14,10 @@ interface UiState {
   openDrawer: (target: number | string | { ulid: string }) => void;
   closeDrawer: () => void;
 
+  // UI parity Task 9: the New note form.
+  newNoteOpen: boolean;
+  setNewNoteOpen: (open: boolean) => void;
+
   // ⌘K command palette.
   paletteOpen: boolean;
   setPaletteOpen: (open: boolean) => void;
@@ -45,6 +49,9 @@ export const useUi = create<UiState>((set) => ({
   drawerEntry: null,
   openDrawer: (target) => set({ drawerEntry: toDrawerEntry(target) }),
   closeDrawer: () => set({ drawerEntry: null }),
+
+  newNoteOpen: false,
+  setNewNoteOpen: (open) => set({ newNoteOpen: open }),
 
   paletteOpen: false,
   setPaletteOpen: (open) => set({ paletteOpen: open }),

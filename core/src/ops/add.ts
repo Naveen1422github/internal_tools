@@ -172,6 +172,30 @@ function defaultProject(db: DB, args: AddEntryArgs, withFolder: boolean): Projec
   return withFolder ? currentProject(db) : null;
 }
 
+/** Where a new note would land, and why (UI parity Task 9: the New note form says it before saving). */
+export interface NoteDestination {
+  project: { code: string; name: string; mode: string } | null;
+  /** named: the caller chose it; bound: its primary module is bound to it; folder: the .collab of the folder; none: E series. */
+  why: "named" | "bound" | "folder" | "none";
+  line: string;
+}
+
+/**
+ * The project addEntryAsync would write a note with these arguments into, by
+ * the same rule (resolveProjectArg, folder included). Throws what the save
+ * would throw for an unknown or left project; writes nothing.
+ */
+export function noteDestination(db: DB, args: { module?: string; project?: string }): NoteDestination {
+  const p = resolveProjectArg(db, { type: "decision", title: "", summary: "", module: args.module, project: args.project }, true);
+  const why: NoteDestination["why"] = !p ? "none"
+    : args.project !== undefined ? "named"
+    : boundProjectFor(db, args.module)?.ulid === p.ulid ? "bound" : "folder";
+  if (!p) return { project: null, why, line: "It goes into no project: it is numbered in the E series (E-…)." };
+  const team = p.mode === "team" ? " It is shared with the project's members; the post office numbers it." : " It stays on this laptop.";
+  const because = why === "bound" ? ` because module ${args.module} is bound to ${p.code}` : why === "folder" ? " because this folder's .collab names it" : "";
+  return { project: { code: p.code, name: p.name, mode: p.mode }, why, line: `It goes into ${p.code} (${p.name})${because}.${team}` };
+}
+
 export function addEntry(
   db: DB,
   args: AddEntryArgs,

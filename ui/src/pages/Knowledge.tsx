@@ -13,7 +13,7 @@ export default function Knowledge() {
     module: '',
     type: ''
   });
-  const { openDrawer } = useUi();
+  const { openDrawer, setNewNoteOpen } = useUi();
 
   useEffect(() => {
     modules().then(res => setModuleList(res.results)).catch(() => {});
@@ -77,7 +77,7 @@ export default function Knowledge() {
       </aside>
 
       <main className="flex-1 min-w-0 flex flex-col gap-4">
-        <div className="relative">
+        <div className="flex gap-2">
           <input 
             type="text"
             placeholder="Search entries..."
@@ -85,6 +85,7 @@ export default function Knowledge() {
             value={filters.q}
             onChange={e => setFilters({ ...filters, q: e.target.value })}
           />
+          <button type="button" onClick={() => setNewNoteOpen(true)} className="shrink-0 rounded-lg border border-gray-200 dark:border-gray-800 px-3 text-sm font-medium hover:bg-gray-100 dark:hover:bg-gray-900">New note</button>
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto pr-2">
