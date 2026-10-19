@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { migrate, latestMigration, enableSync, loadCrsqlite, isCrsqliteLoaded, SLUG_REGEX } from "@collab-mcp/core";
-import { seedAccess, seedNewProject, assignNewMemberOfficeRole, assertRevocable, requireProjectKey } from "./access.js";
+import { seedAccess, seedNewProject, newMemberOfficeRole, assignNewMemberOfficeRole, assertRevocable, requireProjectKey } from "./access.js";
 import { backfillProjectStamps } from "./deliveries.js";
 
 // The post office's ONE SQLite file (D14). The notes schema (0007 + CRRs) is a
@@ -350,18 +350,23 @@ function sameHash(storedHex: string, candidate: string): boolean {
 }
 const MEMBER_COLS = `device_id, name, joined_at, revoked_at, last_seen_at, receive_bookmark`;
 
-/** Pre-register a device and mint its one-time join secret (only its hash is stored). */
-export function addMember(db: Store, name: string, opts: { ttlHours?: number } = {}): { deviceId: string; secret: string } {
+/**
+ * Pre-register a device and mint its one-time join secret (only its hash is stored).
+ * `opts.actor` = the device asking (S3-14: it must hold every key of the role the
+ * new device gets); omitted = the office machine's CLI, nothing checked.
+ */
+export function addMember(db: Store, name: string, opts: { ttlHours?: number; actor?: string | null } = {}): { deviceId: string; secret: string } {
   const n = String(name ?? "").trim();
-  if (!n) throw new StoreError("a member needs a name");
   const deviceId = "d-" + randomBytes(5).toString("hex");
   const secret = randomBytes(24).toString("base64url");
   const ttl = opts.ttlHours ?? JOIN_TTL_HOURS;
   db.transaction(() => {
+    const role = newMemberOfficeRole(db, opts.actor ?? null); // keys first, as before: a refusal says what you lack
+    if (!n) throw new StoreError("a member needs a name");
     db.prepare(
       `INSERT INTO po_members (device_id, name, join_hash, join_expires_at) VALUES (?, ?, ?, datetime('now', ?))`,
     ).run(deviceId, n, sha256(secret), `${ttl >= 0 ? "+" : ""}${ttl} hours`);
-    assignNewMemberOfficeRole(db, deviceId);
+    assignNewMemberOfficeRole(db, deviceId, role);
   }).immediate();
   return { deviceId, secret };
 }
@@ -407,14 +412,17 @@ export function listMembers(db: Store): Member[] {
   return db.prepare(`SELECT ${MEMBER_COLS} FROM po_members ORDER BY created_at, rowid`).all() as Member[];
 }
 
-/** Revoke by device id or by name (a name must be unambiguous). Effective on the next request (D12). */
-export function revokeMember(db: Store, who: string, opts: { deviceOnly?: boolean } = {}): Member {
+/**
+ * Revoke by device id or by name (a name must be unambiguous). Effective on the next request (D12).
+ * `actor` = the member asking over HTTPS (rank rule, S3-1); omitted = the office machine's CLI.
+ */
+export function revokeMember(db: Store, who: string, opts: { deviceOnly?: boolean; actor?: string } = {}): Member {
   const rows = (opts.deviceOnly
     ? db.prepare(`SELECT ${MEMBER_COLS} FROM po_members WHERE device_id = ?`).all(who)
     : db.prepare(`SELECT ${MEMBER_COLS} FROM po_members WHERE device_id = ? OR name = ?`).all(who, who)) as Member[];
   if (rows.length === 0) throw new StoreError(`no member called ${who}`, 404);
   if (rows.length > 1) throw new StoreError(`${rows.length} members are called ${who}; revoke by device id: ${rows.map((r) => r.device_id).join(", ")}`);
-  if (!rows[0].revoked_at) assertRevocable(db, rows[0].device_id);
+  if (!rows[0].revoked_at) assertRevocable(db, rows[0].device_id, opts.actor ?? null);
   db.prepare(`UPDATE po_members SET revoked_at = COALESCE(revoked_at, datetime('now')), join_hash = NULL WHERE device_id = ?`).run(rows[0].device_id);
   return { ...rows[0], revoked_at: rows[0].revoked_at ?? "now" };
 }

@@ -369,8 +369,8 @@ export class Courier {
   /**
    * What this laptop may do, as the office says (R2): cached locally, never
    * synced. The office's membership decides (R15): a team project of this
-   * office it doesn't list is marked left (its notes stay, read-only); a left
-   * one it lists is writable again. Then any replay the office owes us (R14).
+   * office it doesn't list, or lists without note.view, is marked left (its
+   * notes stay, read-only); a left one it lists with note.view is writable again. Then any replay the office owes us (R14).
    * An older office (404) keeps no roles: nothing changes.
    */
   private async refreshAccess(): Promise<void> {
@@ -392,15 +392,20 @@ export class Courier {
     if (r.status !== 200 || !p || !Array.isArray(p.projects) || !Array.isArray(p.replays)) {
       throw new Error(`the post office did not say what this laptop may do (${r.status})`);
     }
-    const member = new Set(p.projects.map((x) => x.ulid));
+    // R15: a project listed without note.view (its role lost it in an edit,
+    // S3-5) receives nothing, so it is read-only like one this laptop is not in.
+    const listed = new Set(p.projects.map((x) => x.ulid));
+    const viewer = new Set(p.projects.filter((x) => Array.isArray(x.keys) && x.keys.includes("note.view")).map((x) => x.ulid));
     this.db.transaction(() => {
       writeAccessCache(this.db, p);
       if (!hasProjectLeft(this.db)) return;
       for (const x of this.teamProjectsOfOffice(fingerprint)) {
-        if (!member.has(x.ulid) && !x.left_at && known.has(x.ulid)) {
+        if (!viewer.has(x.ulid) && !x.left_at && known.has(x.ulid)) {
           markProjectLeft(this.db, x.ulid);
-          this.log(`removed from team project ${x.code}: its notes stay here, read-only`);
-        } else if (member.has(x.ulid) && x.left_at && clearProjectLeft(this.db, x.ulid, fingerprint)) {
+          this.log(listed.has(x.ulid)
+            ? `can no longer view team project ${x.code} (its role changed): its notes stay here, read-only`
+            : `removed from team project ${x.code}: its notes stay here, read-only`);
+        } else if (viewer.has(x.ulid) && x.left_at && clearProjectLeft(this.db, x.ulid, fingerprint)) {
           this.log(`added back to team project ${x.code}: it is writable again`);
         }
       }

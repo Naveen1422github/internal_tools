@@ -5,7 +5,8 @@ import assert from 'node:assert';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { closeDb, parseJoinCode } from '@collab-mcp/core';
+import { closeDb, newUlid, parseJoinCode } from '@collab-mcp/core';
+import { setProjectMember, setOfficeRole } from '@collab-mcp/post-office';
 import { main } from '../src/main.js';
 import { startOffice, joinedDb, type Office } from '../../courier/test/world.js';
 
@@ -74,6 +75,27 @@ test('a refusal is shown as its plain message with exit code 1', async () => {
   });
 });
 
+test('collab team set by a lower-ranked member prints the office refusal (cli)', async () => {
+  await withOffice(async ({ office, a, b, as }) => {
+    // b registers TM (so b's notebook knows it); the office machine then makes a and c Owners, b a Lead without project.edit
+    assert.equal((await as(b, ['project', 'create', 'Team One', '--code', 'TM', '--team'])).code, 0);
+    const p = (office.store.prepare(`SELECT ulid FROM po_projects WHERE code = 'TM'`).get() as { ulid: string }).ulid;
+    const lead = ['note.view', 'note.create', 'note.edit.own', 'note.edit.any', 'note.supersede', 'note.archive', 'note.copy.out',
+      'merge.resolve', 'member.invite', 'member.revoke', 'role.manage'];
+    office.store.prepare(`INSERT INTO po_roles (ulid, project_ulid, name, keys, is_starter) VALUES (?, ?, 'Lead', ?, 0)`).run(newUlid(), p, JSON.stringify(lead));
+    const c = office.code('c').device;
+    setProjectMember(office.store, null, p, a.device, 'Owner');
+    setProjectMember(office.store, null, p, c, 'Owner');
+    setProjectMember(office.store, null, p, b.device, 'Lead');
+    for (const argv of [['team', 'set', a.device, 'TM', 'Reader'], ['team', 'remove', a.device, 'TM']]) {
+      const r = await as(b, argv);
+      assert.equal(r.code, 1, argv.join(' '));
+      assert.match(r.err.join('\n'), /You need "Edit project" \(project\.edit\) in TM to do this/);
+    }
+    assert.match((await as(b, ['team', 'list', 'TM'])).out.join('\n'), /\ba\b.*Owner/, 'a is still Owner');
+  });
+});
+
 test('office-role, invite and revoke work for the Office admin', async () => {
   await withOffice(async ({ office, a, b, as }) => {
     assert.equal((await as(a, ['team', 'office-role', 'b', 'Office admin'])).code, 0);
@@ -87,6 +109,18 @@ test('office-role, invite and revoke work for the Office admin', async () => {
     assert.equal(rv.code, 0, rv.err.join('\n'));
     assert.match(rv.out.join('\n'), /revoked/i);
     void b;
+  });
+});
+
+test('collab team invite by a device that lacks a key of the new role prints the office refusal (S3-14)', async () => {
+  await withOffice(async ({ office, b, as }) => {
+    office.store.prepare(`INSERT INTO po_office_roles (ulid, name, keys, is_starter) VALUES (?, 'Recruiter', ?, 0)`).run(newUlid(), JSON.stringify(['office.member.add']));
+    setOfficeRole(office.store, null, b.device, 'Recruiter');
+    const before = (office.store.prepare(`SELECT COUNT(*) AS c FROM po_members`).get() as { c: number }).c;
+    const r = await as(b, ['team', 'invite', 'third laptop']);
+    assert.equal(r.code, 1);
+    assert.match(r.err.join('\n'), /You need "Create projects" \(office\.project\.create\) in this office to do this/);
+    assert.equal((office.store.prepare(`SELECT COUNT(*) AS c FROM po_members`).get() as { c: number }).c, before);
   });
 });
 

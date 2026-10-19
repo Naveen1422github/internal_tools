@@ -198,3 +198,89 @@ export const mergeVersions = (id: number | string) => getJson<MergeView>(`/api/s
 export const resolveMerge = (id: number | string, expectedHeads: string[], choice: MergeChoice) =>
   postJson<{ ok: true; id: number }>('/api/sync/resolve', { id, expectedHeads, choice });
 export const explainMerge = (id: number | string) => postJson<{ text: string }>('/api/sync/explain', { id });
+
+// --- Team admin and refused changes (RnR S3) ---
+// These calls carry the post office's (or core's) own sentence on failure, so
+// they don't use getJson/postJson, which turn every 403 into "reload". Only the
+// web guard's own 403 `{ error: 'forbidden' }` means reload (Review Focus 4).
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+async function sendJson<T>(method: 'GET' | 'POST', url: string, body?: unknown): Promise<T> {
+  const res = await fetch(url, method === 'GET'
+    ? { headers: keyHeader() }
+    : { method, headers: { 'Content-Type': 'application/json', ...keyHeader() }, body: JSON.stringify(body ?? {}) });
+  if (res.ok) return res.json() as Promise<T>;
+  let error: unknown;
+  try { error = (await res.json())?.error; } catch { /* not JSON */ }
+  if (res.status === 403 && error === 'forbidden') throw new ApiError(RELOAD_MESSAGE, 403);
+  throw new ApiError(typeof error === 'string' && error ? error : `Something went wrong (HTTP ${res.status}). Try again.`, res.status);
+}
+
+export type TeamScope = 'project' | 'office';
+export interface TeamProjectAccess { ulid: string; code: string; name: string | null; role: string; keys: string[] }
+export type TeamOverview =
+  | { connected: false }
+  | {
+      connected: true;
+      me: { device_id: string };
+      /** null: this device holds no office role. */
+      office: { role: string; keys: string[] } | null;
+      projects: TeamProjectAccess[];
+    };
+export interface TeamMember { device_id: string; name: string | null; role: string; role_ulid: string; last_seen_at: string | null }
+export interface TeamRole {
+  ulid: string;
+  name: string;
+  keys: string[];
+  is_starter: boolean;
+  /** "all": name and keys are fixed (Owner, Office admin); "name": only the name (Office member). */
+  locked: 'all' | 'name' | null;
+  /**
+   * Every device the office has on this role, removed and not-yet-joined ones
+   * included: the count its delete rule uses (S3-3). Absent from an older office.
+   */
+  holders?: number;
+}
+export interface TeamRoster { members: TeamMember[]; roles: TeamRole[] }
+/** `project` is the project's ULID; required for the project scope. */
+type InScope = { scope: TeamScope; project?: string };
+
+export const teamOverview = () => sendJson<TeamOverview>('GET', '/api/team/overview');
+export const teamProject = (ulid: string) => sendJson<TeamRoster>('GET', `/api/team/project${qs({ ulid })}`);
+export const teamOffice = () => sendJson<TeamRoster>('GET', '/api/team/office');
+/** `role` is the role's name. */
+export const teamSetMember = (b: InScope & { device: string; role: string }) =>
+  sendJson<{ ok: true }>('POST', '/api/team/member/set', b);
+/** Project scope only: revoking a device from the office stays on the CLI (S3-7). */
+export const teamRemoveMember = (b: { project: string; device: string }) =>
+  sendJson<{ ok: true }>('POST', '/api/team/member/remove', b);
+export const teamCreateRole = (b: InScope & { name: string; keys: string[] }) =>
+  sendJson<{ role: { ulid: string; name: string; keys: string[] } }>('POST', '/api/team/role/create', b);
+/** `role` is the role's ULID. */
+export const teamUpdateRole = (b: InScope & { role: string; name?: string; keys?: string[] }) =>
+  sendJson<{ ok: true }>('POST', '/api/team/role/update', b);
+/** `role` is the role's ULID. */
+export const teamDeleteRole = (b: InScope & { role: string }) =>
+  sendJson<{ ok: true }>('POST', '/api/team/role/delete', b);
+
+export interface RefusedRow {
+  id: string;
+  at: string;
+  project_code: string;
+  kind: 'new' | 'edit';
+  key: string | null;
+  reason: string;
+  note: string;
+}
+export interface RefusedList { results: RefusedRow[]; solo_projects: Array<{ code: string; name: string }> }
+export const refusedList = () => sendJson<RefusedList>('GET', '/api/refused');
+/** `to` is a solo project's code; answers the new note's ref, e.g. "MY-4". */
+export const refusedCopy = (id: string, to: string) => sendJson<{ ref: string }>('POST', '/api/refused/copy', { id, to });
+export const refusedDelete = (id: string) => sendJson<{ ok: true }>('POST', '/api/refused/delete', { id });

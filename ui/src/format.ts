@@ -45,3 +45,11 @@ export function parseNoteRef(value: string): NoteRef | null {
   const id = Number(code ? code[2] : legacy![1]);
   return Number.isSafeInteger(id) && id > 0 ? { series, id } : null;
 }
+
+/**
+ * A time the server stored with SQLite's datetime('now'): UTC, written
+ * "2026-10-19 10:00:00" with no zone. Shown in the viewer's local time.
+ */
+export function localTimeOfUtc(at: string): string {
+  return new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(at) ? at : `${at.replace(' ', 'T')}Z`).toLocaleString();
+}

@@ -4,6 +4,7 @@ import { StoreError, getMeta, setMeta, type Store } from "./store.js";
 import { OFFICE_ORIGIN, lastSeq, prep } from "./deliveries.js";
 
 // RnR (R1, R13): the office owns who may do what. Tables live in PO_SCHEMA.
+/** The one fixed project role (S3-2): the office finds Owners by this name. */
 const OWNER = "Owner";
 const OFFICE_ADMIN = "Office admin";
 const OFFICE_MEMBER = "Office member";
@@ -16,6 +17,7 @@ function grant(scope: Scope, stored: string | undefined): Set<string> {
   const active = new Set(keysOf(scope));
   return new Set(sanitizeKeys(scope, parsed).filter((k) => active.has(k)));
 }
+export { grant as activeKeysOfRole };
 
 const LIVE = `EXISTS (SELECT 1 FROM po_members m WHERE m.device_id = x.device_id AND m.revoked_at IS NULL)`;
 
@@ -56,6 +58,25 @@ export function requireProjectKey(db: Store, deviceId: string, projectUlid: stri
 export function requireOfficeKey(db: Store, deviceId: string, key: string): void {
   if (officeKeys(db, deviceId).has(key)) return;
   throw new StoreError(`You need "${labelOf(key)}" (${key}) in this office to do this`, 403);
+}
+
+/**
+ * The rank rule (S3-1): you manage a member only if you hold every active key
+ * of their current role. Throws on the first key you lack, in the usual wording.
+ */
+export function requireOutranks(db: Store, actor: string, scope: Scope, projectUlid: string | null, targetKeys: Set<string>): void {
+  const mine = scope === "project" ? projectKeys(db, actor, projectUlid!) : officeKeys(db, actor);
+  for (const k of targetKeys) {
+    if (mine.has(k)) continue;
+    if (scope === "project") requireProjectKey(db, actor, projectUlid!, k);
+    else requireOfficeKey(db, actor, k);
+  }
+}
+
+/** The stored keys of a device's office role (revoked devices included); undefined when it has none. */
+function officeRoleKeys(db: Store, deviceId: string): string | undefined {
+  return (db.prepare(`SELECT r.keys FROM po_office_members x JOIN po_office_roles r ON r.ulid = x.role_ulid WHERE x.device_id = ?`)
+    .get(deviceId) as { keys: string } | undefined)?.keys;
 }
 
 // ---------------------------------------------------------------- structural counts
@@ -150,11 +171,25 @@ export function seedAccess(db: Store): void {
   }).immediate();
 }
 
-/** A device the office just added: Office admin when no live admin exists, else Office member (ledger ruling 1). */
-export function assignNewMemberOfficeRole(db: Store, deviceId: string): void {
+/**
+ * The office role a device added now would get: Office admin when no live admin
+ * exists, else Office member (ledger ruling 1). S3-14: adding a device hands out
+ * that role, so a device adding one needs office.member.add and every active key
+ * of it. Call inside the adding transaction, before the insert, and pass the
+ * result to assignNewMemberOfficeRole so the role checked is the role given.
+ * `actor = null` = the office machine's CLI: no keys checked.
+ */
+export function newMemberOfficeRole(db: Store, actor: string | null): string {
+  if (actor !== null) requireOfficeKey(db, actor, "office.member.add");
   const role = liveOfficeAdmins(db).length === 0 ? OFFICE_ADMIN : OFFICE_MEMBER;
-  const r = db.prepare(`SELECT ulid FROM po_office_roles WHERE name = ?`).get(role) as { ulid: string };
-  db.prepare(`INSERT OR REPLACE INTO po_office_members (device_id, role_ulid) VALUES (?, ?)`).run(deviceId, r.ulid);
+  const r = db.prepare(`SELECT ulid, keys FROM po_office_roles WHERE name = ?`).get(role) as { ulid: string; keys: string };
+  if (actor !== null) requireHoldsAll(db, actor, "office", null, grant("office", r.keys));
+  return r.ulid;
+}
+
+/** A device the office just added gets the role newMemberOfficeRole chose (unchecked choice when none is passed). */
+export function assignNewMemberOfficeRole(db: Store, deviceId: string, roleUlid: string = newMemberOfficeRole(db, null)): void {
+  db.prepare(`INSERT OR REPLACE INTO po_office_members (device_id, role_ulid) VALUES (?, ?)`).run(deviceId, roleUlid);
 }
 
 /** registerProject's half (R7a): starter roles + the creator as the only member, Owner. */
@@ -167,22 +202,24 @@ export function seedNewProject(db: Store, projectUlid: string, creatorDevice: st
 /**
  * Give `deviceId` a role in a project, change it, or (`roleName = null`)
  * remove it. Adding needs member.invite, changing needs role.manage, removing
- * needs member.revoke; the role given may not hold a key the actor lacks.
- * A project always keeps one Owner. R14: gaining
- * note.view queues a replay of the history so far; losing it drops it.
+ * needs member.revoke; the role given may not hold a key the actor lacks
+ * (S3-14, yourself included), nor may the target's current role (S3-1).
+ * Lowering your own role passes both. A project always keeps one Owner.
+ * R14: gaining note.view queues a replay of the history so far; losing it drops it.
  * `actor = null` = the office machine's CLI: no keys checked, the Owner rule still holds.
  */
 export function setProjectMember(db: Store, actor: string | null, projectUlid: string, deviceId: string, roleName: string | null): boolean {
   return db.transaction(() => {
     if (!db.prepare(`SELECT 1 FROM po_projects WHERE ulid = ?`).get(projectUlid)) throw new StoreError(`no team project ${projectUlid} on this post office`, 404);
     const cur = db
-      .prepare(`SELECT r.name FROM po_project_members x JOIN po_roles r ON r.ulid = x.role_ulid WHERE x.project_ulid = ? AND x.device_id = ?`)
-      .get(projectUlid, deviceId) as { name: string } | undefined;
+      .prepare(`SELECT r.name, r.keys FROM po_project_members x JOIN po_roles r ON r.ulid = x.role_ulid WHERE x.project_ulid = ? AND x.device_id = ?`)
+      .get(projectUlid, deviceId) as { name: string; keys: string } | undefined;
+    if (actor !== null) requireProjectKey(db, actor, projectUlid, roleName === null ? "member.revoke" : cur ? "role.manage" : "member.invite");
+    // S3-1: nobody changes or removes a member ranked above them (checked before the no-op answer).
+    if (actor !== null && cur) requireOutranks(db, actor, "project", projectUlid, grant("project", cur.keys));
     if (roleName === null) {
-      if (actor !== null) requireProjectKey(db, actor, projectUlid, "member.revoke");
       if (!cur) return false;
     } else {
-      if (actor !== null) requireProjectKey(db, actor, projectUlid, cur ? "role.manage" : "member.invite");
       if (cur?.name === roleName) return false;
       if (!liveMember(db, deviceId)) throw new StoreError(`${deviceId} is not a member of this office`, 404);
     }
@@ -196,20 +233,305 @@ export function setProjectMember(db: Store, actor: string | null, projectUlid: s
     const before = projectKeys(db, deviceId, projectUlid).has("note.view");
     if (role) db.prepare(`INSERT OR REPLACE INTO po_project_members (project_ulid, device_id, role_ulid) VALUES (?, ?, ?)`).run(projectUlid, deviceId, role.ulid);
     else db.prepare(`DELETE FROM po_project_members WHERE project_ulid = ? AND device_id = ?`).run(projectUlid, deviceId);
-    const after = projectKeys(db, deviceId, projectUlid).has("note.view");
-    if (!before && after) {
-      db.prepare(`INSERT OR REPLACE INTO po_replays (device_id, project_ulid, upto_seq) VALUES (?, ?, ?)`).run(deviceId, projectUlid, lastSeq(db));
-    } else if (before && !after) {
-      db.prepare(`DELETE FROM po_replays WHERE device_id = ? AND project_ulid = ?`).run(deviceId, projectUlid);
-    }
+    syncReplays(db, deviceId, projectUlid, before);
     return true;
   }).immediate();
 }
 
-/** Each device holds one office role (R13). `actor = null` = the office machine's CLI (unguarded). */
+/**
+ * R14/R15, after a change to what `deviceId` holds in a project (`before` =
+ * whether it held note.view before): gaining note.view queues a replay of the
+ * history so far, losing it drops a pending one. Runs inside the caller's transaction.
+ */
+export function syncReplays(db: Store, deviceId: string, projectUlid: string, before: boolean): void {
+  const after = projectKeys(db, deviceId, projectUlid).has("note.view");
+  if (!before && after) {
+    db.prepare(`INSERT OR REPLACE INTO po_replays (device_id, project_ulid, upto_seq) VALUES (?, ?, ?)`).run(deviceId, projectUlid, lastSeq(db));
+  } else if (before && !after) {
+    db.prepare(`DELETE FROM po_replays WHERE device_id = ? AND project_ulid = ?`).run(deviceId, projectUlid);
+  }
+}
+
+// ---------------------------------------------------------------- project roles (S3)
+// Who may change a role, and how (all checked here, never only in the UI):
+// - role.manage, and the rank rule (S3-1): you edit or delete a role only when
+//   you hold every active key it holds now;
+// - no escalation (S3-14): every active key a role is created with, or ends up
+//   with after an edit, must be one you hold (your own role included);
+// - built-ins (S3-2): Owner is fixed, because the office finds Owners by name
+//   (liveOwners, soleOwnerOf) and "one Owner always" means nothing if its keys
+//   could shrink. Editor, Contributor and Reader can be renamed and re-keyed,
+//   but no starter role is ever deleted (S3-3); a custom one only when nobody,
+//   revoked devices included, points at it (a dangling role_ulid drops out of every JOIN).
+// - S3-4: a request names active keys only; the stored inactive ones (task.*) are kept.
+// - S3-6: names are trimmed, 1-40 characters, unique case-insensitively in the
+//   project, and never a starter name (a starter role may keep its own, in any
+//   case; once renamed away, nobody can take it back).
+// `actor = null` = the office machine's CLI: no keys checked, the structural rules still hold.
+const ROLE_NAME_MAX = 40;
+/** One fold for every name comparison (S3-6): NFC first, so "É" and "E\u0301" meet; full Unicode case, not SQLite's ASCII-only lower(). */
+const foldName = (s: string) => s.normalize("NFC").toLowerCase();
+const STARTER_NAMES: Record<Scope, string[]> = {
+  project: STARTER_PROJECT_ROLES.map((r) => foldName(r.name)),
+  office: STARTER_OFFICE_ROLES.map((r) => foldName(r.name)),
+};
+const CONTROL = /[\u0000-\u001f\u007f]/;
+
+interface RoleRow { ulid: string; name: string; keys: string; is_starter: number }
+
+function projectRoleRow(db: Store, projectUlid: string, roleUlid: string): RoleRow {
+  const r = db.prepare(`SELECT ulid, name, keys, is_starter FROM po_roles WHERE ulid = ? AND project_ulid = ?`).get(roleUlid, projectUlid) as RoleRow | undefined;
+  if (!r) throw new StoreError("No such role.", 404); // a role of another project is just as missing
+  return r;
+}
+
+/** S3-2: the starter Owner role (a custom role can never be named "Owner", S3-6). */
+export function isOwnerRole(r: { name: string; is_starter: number | boolean }): boolean {
+  return (r.is_starter === 1 || r.is_starter === true) && r.name === OWNER;
+}
+
+/**
+ * S3-6. `self` = the role being renamed: it may keep its own name in any case,
+ * and that is the only way to hold a built-in name (a renamed Editor can't take
+ * "Editor" back, and Contributor can't take it either). `projectUlid = null` = office roles.
+ */
+function checkRoleName(db: Store, scope: Scope, projectUlid: string | null, raw: unknown, self: RoleRow | null): string {
+  const name = typeof raw === "string" ? raw.trim() : "";
+  if (!name) throw new StoreError("A role needs a name.");
+  if (CONTROL.test(name)) throw new StoreError("A role name can't contain control characters.");
+  if (name.length > ROLE_NAME_MAX) throw new StoreError(`A role name can be at most ${ROLE_NAME_MAX} characters.`);
+  const folded = foldName(name);
+  if (STARTER_NAMES[scope].includes(folded) && !(self && foldName(self.name) === folded)) throw new StoreError(`"${name}" is the name of a built-in role.`, 409);
+  const others = (scope === "project"
+    ? db.prepare(`SELECT ulid, name FROM po_roles WHERE project_ulid = ? AND ulid <> ?`).all(projectUlid, self?.ulid ?? "")
+    : db.prepare(`SELECT ulid, name FROM po_office_roles WHERE ulid <> ?`).all(self?.ulid ?? "")) as Array<{ name: string }>;
+  const clash = others.find((r) => foldName(r.name) === folded);
+  if (clash) throw new StoreError(`${scope === "project" ? codeOf(db, projectUlid!) : "This office"} already has a role called "${clash.name}".`, 409);
+  return name;
+}
+
+/** S3-4: the keys of a request, all active keys of the scope, in catalog order. */
+function checkGivenKeys(scope: Scope, raw: unknown): Set<string> {
+  if (!Array.isArray(raw)) throw new StoreError("Keys must be a list of permissions.");
+  const active = new Set(keysOf(scope));
+  const out = new Set<string>();
+  for (const k of raw) {
+    if (typeof k !== "string" || !active.has(k)) throw new StoreError(`"${String(k)}" is not a permission that can be given.`);
+    out.add(k);
+  }
+  return out;
+}
+
+/** A role's stored keys, sanitized (unknown ones dropped, inactive ones kept). */
+function storedKeysOf(scope: Scope, stored: string): Set<string> {
+  let parsed: unknown = [];
+  try { parsed = JSON.parse(stored); } catch { /* grants nothing */ }
+  return new Set(sanitizeKeys(scope, parsed));
+}
+
+/** Stored form: catalog order, inactive keys included. */
+function storedForm(scope: Scope, keys: Set<string>): string {
+  return JSON.stringify(keysOf(scope, { includeInactive: true }).filter((k) => keys.has(k)));
+}
+
+/** S3-14: the actor holds every key, checked in catalog order so the refusal names the first one. */
+function requireHoldsAll(db: Store, actor: string, scope: Scope, projectUlid: string | null, keys: Set<string>): void {
+  for (const k of keysOf(scope)) {
+    if (!keys.has(k)) continue;
+    if (scope === "project") requireProjectKey(db, actor, projectUlid!, k);
+    else requireOfficeKey(db, actor, k);
+  }
+}
+
+/** S3-4: the request's active keys plus the role's stored inactive ones; the stored string itself when nothing moved. */
+function rekeyed(scope: Scope, storedNow: string, given: Set<string>): string {
+  const active = new Set(keysOf(scope));
+  const now = storedKeysOf(scope, storedNow);
+  const next = new Set([...given, ...[...now].filter((k) => !active.has(k))]);
+  return next.size !== now.size || [...next].some((k) => !now.has(k)) ? storedForm(scope, next) : storedNow;
+}
+
+/**
+ * S3-3: every row pointing at a role, by role ULID: revoked and not-yet-joined
+ * devices included, because a dangling role_ulid drops out of every JOIN. The
+ * same count is the role list's `holders` and the delete rule's. `removed` =
+ * revoked devices (LEFT JOIN: a row with no member row counts as a holder, not as removed).
+ */
+export interface RoleHolders { holders: number; removed: number }
+const HOLDERS_SQL = (table: string, where: string) =>
+  `SELECT x.role_ulid, COUNT(*) AS holders, SUM(CASE WHEN m.revoked_at IS NOT NULL THEN 1 ELSE 0 END) AS removed
+     FROM ${table} x LEFT JOIN po_members m ON m.device_id = x.device_id ${where} GROUP BY x.role_ulid`;
+function holdersByRole(rows: Array<{ role_ulid: string; holders: number; removed: number }>): Record<string, RoleHolders> {
+  const out: Record<string, RoleHolders> = {};
+  for (const r of rows) out[r.role_ulid] = { holders: r.holders, removed: r.removed ?? 0 };
+  return out;
+}
+export function projectRoleHolders(db: Store, projectUlid: string): Record<string, RoleHolders> {
+  return holdersByRole(db.prepare(HOLDERS_SQL("po_project_members", "WHERE x.project_ulid = ?")).all(projectUlid) as Array<{ role_ulid: string; holders: number; removed: number }>);
+}
+export function officeRoleHolders(db: Store): Record<string, RoleHolders> {
+  return holdersByRole(db.prepare(HOLDERS_SQL("po_office_members", "")).all() as Array<{ role_ulid: string; holders: number; removed: number }>);
+}
+
+/**
+ * S3-3's refusal. A revoked device can't be given another role (the office CLI's
+ * set-project-role / set-office-role refuse revoked devices too), so then the
+ * refusal says why instead of what to run.
+ */
+function refuseHeld(name: string, h: RoleHolders | undefined): void {
+  if (!h || h.holders === 0) return;
+  const held = `${h.holders} ${h.holders === 1 ? "member holds" : "members hold"} ${name}`;
+  if (h.removed === 0) throw new StoreError(`${held}. Give them another role first.`, 409);
+  throw new StoreError(
+    `${held}, including ${h.removed} removed ${h.removed === 1 ? "device" : "devices"}. It can't be deleted while a removed device still holds it.`,
+    409,
+  );
+}
+
+export function createProjectRole(db: Store, actor: string | null, projectUlid: string, input: { name: unknown; keys: unknown }): { ulid: string; name: string; keys: string[] } {
+  return db.transaction(() => {
+    if (actor !== null) requireProjectKey(db, actor, projectUlid, "role.manage");
+    const name = checkRoleName(db, "project", projectUlid, input.name, null);
+    const keys = checkGivenKeys("project", input.keys);
+    if (actor !== null) requireHoldsAll(db, actor, "project", projectUlid, keys);
+    const ulid = newUlid();
+    const stored = storedForm("project", keys);
+    db.prepare(`INSERT INTO po_roles (ulid, project_ulid, name, keys, is_starter) VALUES (?, ?, ?, ?, 0)`).run(ulid, projectUlid, name, stored);
+    return { ulid, name, keys: JSON.parse(stored) as string[] };
+  }).immediate();
+}
+
+/** Rename and/or re-key a role; holders gain or lose replays with it (S3-5). True when something changed. */
+export function updateProjectRole(db: Store, actor: string | null, projectUlid: string, roleUlid: string, input: { name?: unknown; keys?: unknown }): boolean {
+  return db.transaction(() => {
+    if (actor !== null) requireProjectKey(db, actor, projectUlid, "role.manage");
+    const role = projectRoleRow(db, projectUlid, roleUlid);
+    if (isOwnerRole(role)) throw new StoreError("The Owner role can't be renamed or changed.", 409);
+    if (actor !== null) requireOutranks(db, actor, "project", projectUlid, grant("project", role.keys));
+    const name = input.name === undefined ? role.name : checkRoleName(db, "project", projectUlid, input.name, role);
+    let stored = role.keys;
+    if (input.keys !== undefined) {
+      const given = checkGivenKeys("project", input.keys);
+      if (actor !== null) requireHoldsAll(db, actor, "project", projectUlid, given);
+      stored = rekeyed("project", role.keys, given);
+    }
+    if (name === role.name && stored === role.keys) return false;
+    const holders = (db.prepare(`SELECT device_id FROM po_project_members WHERE project_ulid = ? AND role_ulid = ?`).all(projectUlid, roleUlid) as Array<{ device_id: string }>)
+      .map((h) => ({ device: h.device_id, before: projectKeys(db, h.device_id, projectUlid).has("note.view") }));
+    db.prepare(`UPDATE po_roles SET name = ?, keys = ? WHERE ulid = ?`).run(name, stored, roleUlid);
+    for (const h of holders) syncReplays(db, h.device, projectUlid, h.before);
+    return true;
+  }).immediate();
+}
+
+export function deleteProjectRole(db: Store, actor: string | null, projectUlid: string, roleUlid: string): void {
+  db.transaction(() => {
+    if (actor !== null) requireProjectKey(db, actor, projectUlid, "role.manage");
+    const role = projectRoleRow(db, projectUlid, roleUlid);
+    if (role.is_starter) throw new StoreError(`${role.name} is a built-in role and can't be deleted.`, 409);
+    if (actor !== null) requireOutranks(db, actor, "project", projectUlid, grant("project", role.keys));
+    refuseHeld(role.name, projectRoleHolders(db, projectUlid)[roleUlid]);
+    db.prepare(`DELETE FROM po_roles WHERE ulid = ?`).run(roleUlid);
+  }).immediate();
+}
+
+// ---------------------------------------------------------------- office roles (S3)
+// The project rules above, in office scope, with office.role.manage and the office keys:
+// - the rank rule (S3-1) and no escalation (S3-14), exactly as for project roles;
+// - built-ins (S3-2): Office admin is fixed (name, keys, existence), because the
+//   office counts admins by name (liveOfficeAdmins, isSoleOfficeAdmin) and "one
+//   Office admin always" means nothing if its keys could shrink. Office member's
+//   name and existence are fixed, because a new device is given the role found by
+//   that exact name (newMemberOfficeRole, a case-sensitive match: a rename,
+//   even of case, would break every join); its keys can change.
+// - S3-3/S3-4/S3-6 as for project roles; names are unique within the office.
+// No replays move: no office key is note.view (replays follow project keys only).
+function officeRoleRow(db: Store, roleUlid: string): RoleRow {
+  const r = db.prepare(`SELECT ulid, name, keys, is_starter FROM po_office_roles WHERE ulid = ?`).get(roleUlid) as RoleRow | undefined;
+  if (!r) throw new StoreError("No such role.", 404);
+  return r;
+}
+
+/** S3-2: "all" for Office admin (fixed), "name" for Office member (keys editable), null otherwise. */
+export function officeRoleLock(r: { name: string; is_starter: number | boolean }): "all" | "name" | null {
+  if (!(r.is_starter === 1 || r.is_starter === true)) return null;
+  return r.name === OFFICE_ADMIN ? "all" : r.name === OFFICE_MEMBER ? "name" : null;
+}
+
+export function createOfficeRole(db: Store, actor: string | null, input: { name: unknown; keys: unknown }): { ulid: string; name: string; keys: string[] } {
+  return db.transaction(() => {
+    if (actor !== null) requireOfficeKey(db, actor, "office.role.manage");
+    const name = checkRoleName(db, "office", null, input.name, null);
+    const keys = checkGivenKeys("office", input.keys);
+    if (actor !== null) requireHoldsAll(db, actor, "office", null, keys);
+    const ulid = newUlid();
+    const stored = storedForm("office", keys);
+    db.prepare(`INSERT INTO po_office_roles (ulid, name, keys, is_starter) VALUES (?, ?, ?, 0)`).run(ulid, name, stored);
+    return { ulid, name, keys: JSON.parse(stored) as string[] };
+  }).immediate();
+}
+
+/** Rename and/or re-key an office role. True when something changed. */
+export function updateOfficeRole(db: Store, actor: string | null, roleUlid: string, input: { name?: unknown; keys?: unknown }): boolean {
+  return db.transaction(() => {
+    if (actor !== null) requireOfficeKey(db, actor, "office.role.manage");
+    const role = officeRoleRow(db, roleUlid);
+    const lock = officeRoleLock(role);
+    if (lock === "all") throw new StoreError(`The ${OFFICE_ADMIN} role can't be renamed or changed.`, 409);
+    if (lock === "name" && input.name !== undefined && (typeof input.name !== "string" || input.name.trim() !== role.name)) {
+      throw new StoreError(`The ${OFFICE_MEMBER} role can't be renamed.`, 409);
+    }
+    if (actor !== null) requireOutranks(db, actor, "office", null, grant("office", role.keys));
+    const name = input.name === undefined || lock === "name" ? role.name : checkRoleName(db, "office", null, input.name, role);
+    let stored = role.keys;
+    if (input.keys !== undefined) {
+      const given = checkGivenKeys("office", input.keys);
+      if (actor !== null) requireHoldsAll(db, actor, "office", null, given);
+      stored = rekeyed("office", role.keys, given);
+    }
+    if (name === role.name && stored === role.keys) return false;
+    db.prepare(`UPDATE po_office_roles SET name = ?, keys = ? WHERE ulid = ?`).run(name, stored, roleUlid);
+    return true;
+  }).immediate();
+}
+
+export function deleteOfficeRole(db: Store, actor: string | null, roleUlid: string): void {
+  db.transaction(() => {
+    if (actor !== null) requireOfficeKey(db, actor, "office.role.manage");
+    const role = officeRoleRow(db, roleUlid);
+    if (role.is_starter) throw new StoreError(`${role.name} is a built-in role and can't be deleted.`, 409);
+    if (actor !== null) requireOutranks(db, actor, "office", null, grant("office", role.keys));
+    refuseHeld(role.name, officeRoleHolders(db)[roleUlid]);
+    db.prepare(`DELETE FROM po_office_roles WHERE ulid = ?`).run(roleUlid);
+  }).immediate();
+}
+
+/** GET /v1/office/members (S3-7): live, joined devices with their office role, and every office role with its holder count (S3-3). */
+export function listOfficeMembers(db: Store) {
+  const members = db
+    .prepare(
+      `SELECT m.device_id, m.name, r.name AS role, x.role_ulid, m.last_seen_at FROM po_office_members x
+         JOIN po_members m ON m.device_id = x.device_id AND m.revoked_at IS NULL AND m.joined_at IS NOT NULL
+         JOIN po_office_roles r ON r.ulid = x.role_ulid ORDER BY m.name, m.device_id`,
+    )
+    .all();
+  const held = officeRoleHolders(db);
+  const roles = (db.prepare(`SELECT ulid, name, keys, is_starter FROM po_office_roles ORDER BY name`).all() as RoleRow[]).map((r) => ({
+    ulid: r.ulid, name: r.name, keys: [...storedKeysOf("office", r.keys)], is_starter: r.is_starter === 1, locked: officeRoleLock(r),
+    holders: held[r.ulid]?.holders ?? 0,
+  }));
+  return { members, roles };
+}
+
+/**
+ * Each device holds one office role (R13). Like a project role: the actor must
+ * outrank the target's current office role (S3-1) and hold every key of the new
+ * one (S3-14). `actor = null` = the office machine's CLI (unguarded).
+ */
 export function setOfficeRole(db: Store, actor: string | null, deviceId: string, roleName: string): void {
   db.transaction(() => {
     if (actor !== null) requireOfficeKey(db, actor, "office.role.manage");
+    if (actor !== null) requireOutranks(db, actor, "office", null, grant("office", officeRoleKeys(db, deviceId)));
     if (!liveMember(db, deviceId)) throw new StoreError(`${deviceId} is not a member of this office`, 404);
     const role = db.prepare(`SELECT ulid, keys FROM po_office_roles WHERE name = ?`).get(roleName) as { ulid: string; keys: string } | undefined;
     if (!role) throw new StoreError(`this office has no role called "${roleName}"`, 404);
@@ -222,8 +544,13 @@ export function setOfficeRole(db: Store, actor: string | null, deviceId: string,
   }).immediate();
 }
 
-/** revokeMember's guard: never leave the office without an admin or a project without an Owner. */
-export function assertRevocable(db: Store, deviceId: string): void {
+/**
+ * revokeMember's guard: never leave the office without an admin or a project
+ * without an Owner. With an `actor` (an office member, not the office CLI), the
+ * actor must also outrank the device's office role (S3-1).
+ */
+export function assertRevocable(db: Store, deviceId: string, actor: string | null = null): void {
+  if (actor !== null) requireOutranks(db, actor, "office", null, grant("office", officeRoleKeys(db, deviceId)));
   if (isSoleOfficeAdmin(db, deviceId)) {
     throw new StoreError("this is the only Office admin; make someone else Office admin first", 409);
   }

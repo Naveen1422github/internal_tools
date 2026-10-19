@@ -7,6 +7,8 @@ import Tasks from './pages/Tasks';
 import Health from './pages/Health';
 import NeedsMerge from './pages/NeedsMerge';
 import Merge from './pages/Merge';
+import Team from './pages/Team';
+import Refused from './pages/Refused';
 
 export default function App() {
   return (
@@ -19,6 +21,8 @@ export default function App() {
         <Route path="/health" element={<Health />} />
         <Route path="/needs-merge" element={<NeedsMerge />} />
         <Route path="/merge/:ref" element={<Merge />} />
+        <Route path="/team" element={<Team />} />
+        <Route path="/refused" element={<Refused />} />
       </Routes>
     </AppShell>
   );

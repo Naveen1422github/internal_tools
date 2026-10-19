@@ -10,6 +10,23 @@ import { addEntryAsync, type AddEntryArgs } from "../ops/add.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { findProject, isTeamProject, notFound } from "../projects.js";
 import { isCopiedToValue } from "../entry-write.js";
+import { formatEntryRef } from "../entry-ref.js";
+
+/** No refused change has this id on this laptop. */
+export class RefusedNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RefusedNotFoundError";
+  }
+}
+
+/** A refused change can only be copied into a solo project. */
+export class TeamTargetError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TeamTargetError";
+  }
+}
 
 export interface RefusedRow {
   ulid: string;
@@ -57,6 +74,26 @@ export function listRefused(db: DB): RefusedRow[] {
   return (db.prepare(`SELECT * FROM refused_changes ORDER BY at, ulid`).all() as RawRow[]).map(toRow);
 }
 
+/**
+ * A refusal as a person knows it, the same on the CLI and the web: the note's
+ * number when it has one, else its title; the project's code. "-" for none.
+ */
+export function describeRefused(db: DB, row: Pick<RefusedRow, "note_ulid" | "project_ulid">): { note: string; project_code: string } {
+  return { note: noteLabel(db, row.note_ulid), project_code: projectCode(db, row.project_ulid) };
+}
+
+function noteLabel(db: DB, ulid: string | null): string {
+  if (!ulid) return "-";
+  const n = db.prepare(`SELECT id, series, title FROM entries WHERE ulid = ?`).get(ulid) as { id: number | null; series: string; title: string } | undefined;
+  if (!n) return "-";
+  return n.id !== null && n.id !== undefined ? formatEntryRef(n.id, n.series) : n.title;
+}
+
+function projectCode(db: DB, ulid: string | null): string {
+  if (!ulid) return "-";
+  return (db.prepare(`SELECT code FROM projects WHERE ulid = ?`).get(ulid) as { code: string } | undefined)?.code ?? "-";
+}
+
 export function isRefusedNote(db: DB, ulid: string): boolean {
   return !!db.prepare(`SELECT 1 FROM refused_changes WHERE note_ulid = ? LIMIT 1`).get(ulid);
 }
@@ -68,7 +105,7 @@ export function isRefusedCreation(db: DB, ulid: string): boolean {
 
 function getRefused(db: DB, id: string): RefusedRow {
   const raw = db.prepare(`SELECT * FROM refused_changes WHERE ulid = ?`).get(id) as RawRow | undefined;
-  if (!raw) throw new Error(`[collab] no refused change "${id}" on this laptop.`);
+  if (!raw) throw new RefusedNotFoundError(`[collab] no refused change "${id}" on this laptop.`);
   return toRow(raw);
 }
 
@@ -134,7 +171,7 @@ export async function copyRefused(db: DB, id: string, toCode: string): Promise<{
   const target = findProject(db, toCode);
   if (!target) throw notFound(db, toCode);
   if (isTeamProject(target)) {
-    throw new Error(`[collab] ${target.code} is a team project. Copy this note into a solo project instead (\`collab project list\` shows which are solo).`);
+    throw new TeamTargetError(`[collab] ${target.code} is a team project. Copy this note into a solo project instead (\`collab project list\` shows which are solo).`);
   }
   ensureCrsqlite(db);
   const local = (r.note_ulid

@@ -7,7 +7,11 @@ import {
   registerProject, addMember, revokeMember,
   type Member, type Store,
 } from "./store.js";
-import { officeKeys, projectKeys, requireOfficeKey, requireProjectKey, setProjectMember, setOfficeRole } from "./access.js";
+import {
+  officeKeys, projectKeys, requireOfficeKey, requireProjectKey, setProjectMember, setOfficeRole,
+  createProjectRole, updateProjectRole, deleteProjectRole, isOwnerRole, projectRoleHolders,
+  createOfficeRole, updateOfficeRole, deleteOfficeRole, listOfficeMembers,
+} from "./access.js";
 import { sanitizeKeys, type AccessPayload } from "@collab-mcp/core";
 import { acceptChanges, fetchDeliveries, fetchReplay, lastSeq } from "./deliveries.js";
 
@@ -102,15 +106,20 @@ function requireMembership(db: Store, device: string, projectUlid: string): void
 function membersOf(db: Store, projectUlid: string) {
   const members = db
     .prepare(
-      `SELECT m.device_id, m.name, r.name AS role, m.last_seen_at FROM po_project_members x
+      `SELECT m.device_id, m.name, r.name AS role, x.role_ulid, m.last_seen_at FROM po_project_members x
          JOIN po_members m ON m.device_id = x.device_id AND m.revoked_at IS NULL
          JOIN po_roles r ON r.ulid = x.role_ulid WHERE x.project_ulid = ? ORDER BY m.name, m.device_id`,
     )
     .all(projectUlid);
-  const roles = (db.prepare(`SELECT ulid, name, keys FROM po_roles WHERE project_ulid = ? ORDER BY name`).all(projectUlid) as Array<{ ulid: string; name: string; keys: string }>).map((r) => {
+  const held = projectRoleHolders(db, projectUlid);
+  const roles = (db.prepare(`SELECT ulid, name, keys, is_starter FROM po_roles WHERE project_ulid = ? ORDER BY name`).all(projectUlid) as Array<{ ulid: string; name: string; keys: string; is_starter: number }>).map((r) => {
     let parsed: unknown = [];
     try { parsed = JSON.parse(r.keys); } catch { /* grants nothing */ }
-    return { ulid: r.ulid, name: r.name, keys: sanitizeKeys("project", parsed) };
+    // S3-2: Owner's name and keys are fixed ("all"); the other project roles lock nothing.
+    const locked: "all" | "name" | null = isOwnerRole(r) ? "all" : null;
+    // S3-3: every holder, revoked and not-yet-joined included: the count the delete rule uses.
+    const holders = held[r.ulid]?.holders ?? 0;
+    return { ulid: r.ulid, name: r.name, keys: sanitizeKeys("project", parsed), is_starter: r.is_starter === 1, locked, holders };
   });
   return { members, roles };
 }
@@ -257,11 +266,20 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         return openStream(res, me);
       case "POST /v1/office/members": {
         const b = await readJson(req, maxBody);
-        requireOfficeKey(o.store, me.device_id, "office.member.add");
-        const { deviceId, secret } = addMember(o.store, String(b?.name ?? ""));
+        // S3-14: office.member.add and every key of the role the new device gets, in addMember's transaction.
+        const { deviceId, secret } = addMember(o.store, String(b?.name ?? ""), { actor: me.device_id });
         ring("access", {});
         log(`${me.name}: added member ${deviceId}`);
         return send(res, 200, { device_id: deviceId, secret });
+      }
+      case "GET /v1/office/members":
+        // S3-7: any live member (authenticate already refused revoked devices).
+        return send(res, 200, listOfficeMembers(o.store));
+      case "POST /v1/office/roles": {
+        const b = await readJson(req, maxBody);
+        const role = createOfficeRole(o.store, me.device_id, { name: b?.name, keys: b?.keys });
+        ring("access", {});
+        return send(res, 200, { role });
       }
     }
     // Parameterised routes (one small matcher; the switch keeps the fixed ones).
@@ -280,6 +298,37 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
       if (setProjectMember(o.store, me.device_id, ulid, device, role)) ring("access", {});
       return send(res, 200, { ok: true });
     }
+    if ((m = /^POST \/v1\/projects\/([^/]+)\/roles$/.exec(route))) {
+      const ulid = param(m[1]);
+      const b = await readJson(req, maxBody);
+      requireMembership(o.store, me.device_id, ulid);
+      const role = createProjectRole(o.store, me.device_id, ulid, { name: b?.name, keys: b?.keys });
+      ring("access", {});
+      return send(res, 200, { role });
+    }
+    if ((m = /^(PUT|DELETE) \/v1\/projects\/([^/]+)\/roles\/([^/]+)$/.exec(route))) {
+      const ulid = param(m[2]), role = param(m[3]);
+      const b = m[1] === "PUT" ? await readJson(req, maxBody) : (req.resume(), {});
+      requireMembership(o.store, me.device_id, ulid);
+      if (m[1] === "PUT") {
+        if (updateProjectRole(o.store, me.device_id, ulid, role, { name: b?.name, keys: b?.keys })) ring("access", {});
+      } else {
+        deleteProjectRole(o.store, me.device_id, ulid, role);
+        ring("access", {});
+      }
+      return send(res, 200, { ok: true });
+    }
+    if ((m = /^(PUT|DELETE) \/v1\/office\/roles\/([^/]+)$/.exec(route))) {
+      const role = param(m[2]);
+      const b = m[1] === "PUT" ? await readJson(req, maxBody) : (req.resume(), {});
+      if (m[1] === "PUT") {
+        if (updateOfficeRole(o.store, me.device_id, role, { name: b?.name, keys: b?.keys })) ring("access", {});
+      } else {
+        deleteOfficeRole(o.store, me.device_id, role);
+        ring("access", {});
+      }
+      return send(res, 200, { ok: true });
+    }
     if ((m = /^PUT \/v1\/office\/members\/([^/]+)$/.exec(route))) {
       const b = await readJson(req, maxBody);
       const device = param(m[1]);
@@ -294,7 +343,7 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
       requireOfficeKey(o.store, me.device_id, "office.member.revoke");
       const who = param(m[1]);
       if (!o.store.prepare(`SELECT 1 FROM po_members WHERE device_id = ?`).get(who)) throw new StoreError(`no member called ${who}`, 404);
-      revokeMember(o.store, who, { deviceOnly: true });
+      revokeMember(o.store, who, { deviceOnly: true, actor: me.device_id });
       ring("access", {});
       return send(res, 200, { ok: true });
     }

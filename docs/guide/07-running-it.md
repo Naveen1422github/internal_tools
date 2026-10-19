@@ -16,6 +16,10 @@ All commands are run from `frontend2\internal-tools` unless noted. `C` below mea
 | Keep a refused note in a solo project | `C refused copy <id> --to <SOLO CODE>` |
 | Throw a refused change away | `C refused delete <id>` |
 | Web UI | `C web`, then open `http://127.0.0.1:7473` |
+| Manage members and roles on the web | `http://127.0.0.1:7473/team` ("Team" in the sidebar) |
+| Refused changes on the web | `http://127.0.0.1:7473/refused` ("Refused changes" in the sidebar, shown only when there are some) |
+
+**The Team page needs an updated post office.** It asks the office for every answer. An office still on the old code shows "The post office needs updating before roles can be managed here." Update and restart the office. Laptops need no migration; rebuild a laptop to see the screens. "Team" only appears when the notebook is connected to a post office and is in a team project or holds an office role.
 
 **Trap:** running the CLI from inside `internal-tools/` picks up an empty stray `collab.db` there and fails with "no such table: entries". Set `COLLAB_DB_PATH` to `internal-tools/mcp/collab.db`, or run it from a folder whose `.collab` names your notebook.
 

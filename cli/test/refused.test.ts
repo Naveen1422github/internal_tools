@@ -72,6 +72,22 @@ test('refused list: id, project, kind, the note (its number) and the reason', as
   });
 });
 
+test('refused list output is pinned byte for byte: header and padded columns', async () => {
+  await withWorld(async (w) => {
+    const { refusal } = await setup(w);
+    // A second refusal with no project and no note prints "-" in both columns.
+    const other = w.db((d) => recordRefusal(d, { noteUlid: null, projectUlid: null, kind: 'new', key: null, reason: 'gone', cells: [] }));
+    const at = w.db((d) => d.prepare(`SELECT ulid, at FROM refused_changes`).all() as Array<{ ulid: string; at: string }>);
+    const when = (u: string) => at.find((r) => r.ulid === u)!.at;
+    const r = await w.run(['refused', 'list']);
+    assert.equal(r.code, 0, r.err.join(' | '));
+    assert.equal(r.out[0], 'ID                          WHEN                 PROJECT  KIND  NOTE                      REASON');
+    assert.ok(r.out.includes(`${refusal}  ${when(refusal).padEnd(21)}TM       edit  NV-1                      You need "Edit notes" (note.edit) in TM to do this`), r.out.join('\n'));
+    assert.ok(r.out.includes(`${other}  ${when(other).padEnd(21)}-        new   -                         gone`), r.out.join('\n'));
+    assert.equal(r.out.length, 3);
+  });
+});
+
 test('refused list shows the title when the note has no number yet', async () => {
   await withWorld(async (w) => {
     await setup(w);
@@ -80,6 +96,7 @@ test('refused list shows the title when the note has no number yet', async () =>
     });
     const r = await w.run(['refused', 'list']);
     assert.match(r.out.join(' | '), /Kept title/);
+    assert.match(r.out[1], /edit  Kept title                You need/);
   });
 });
 

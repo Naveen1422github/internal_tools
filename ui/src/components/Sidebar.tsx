@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { needsMerge } from '../api/client';
+import { needsMerge, refusedList, teamOverview } from '../api/client';
 
 const links = [
   { to: '/', label: 'Dashboard', end: true },
@@ -25,6 +25,31 @@ export default function Sidebar() {
     const t = setInterval(load, 30_000);
     return () => { alive = false; clearInterval(t); };
   }, []);
+  // S3-10: changes the post office refused; shown only when there are some.
+  // Any failure hides it rather than keep a stale count.
+  const [refused, setRefused] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const load = () => refusedList().then((r) => { if (alive) setRefused(r.results.length); }).catch(() => { if (alive) setRefused(0); });
+    load();
+    const t = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  // S3-11: "Team" only for a notebook connected to a post office that is in a
+  // team project or holds an office role. Asked every 30 s like the counts, so it
+  // appears once the office can be reached. S3-12: a failed poll changes nothing,
+  // so "Team" once shown stays (the page itself says the office can't be reached)
+  // and one never shown stays hidden; only an answer can hide it again.
+  const [team, setTeam] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const load = () => teamOverview()
+      .then((o) => { if (alive) setTeam(o.connected && (o.projects.length > 0 || o.office !== null)); })
+      .catch(() => {});
+    load();
+    const t = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
   return (
     <nav className="w-56 shrink-0 border-r border-gray-200 dark:border-gray-800 p-3 flex flex-col gap-1">
       <div className="px-2 py-3 font-semibold tracking-tight">Knowledge Workspace</div>
@@ -38,6 +63,12 @@ export default function Sidebar() {
           {l.label}
         </NavLink>
       ))}
+      {team && <NavLink to="/team" className={navClass}>Team</NavLink>}
+      {refused > 0 && (
+        <NavLink to="/refused" className={navClass}>
+          Refused changes<span className="ml-2 rounded-full bg-amber-400 text-black px-2 text-xs">{refused}</span>
+        </NavLink>
+      )}
       {count > 0 && (
         <NavLink to="/needs-merge" className={navClass}>
           Needs merge<span className="ml-2 rounded-full bg-amber-400 text-black px-2 text-xs">{count}</span>
