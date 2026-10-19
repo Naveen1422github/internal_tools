@@ -298,8 +298,35 @@ describe('Roles tab', () => {
     expect(h.className).toContain('min-w-0');
   });
 
+  it('the count on a card is the office\'s holder count when it sends one, removed devices included', async () => {
+    await rolesAt('/team?scope=SH', () => api.teamProject.mockResolvedValue({
+      ...projectRoster(),
+      roles: projectRoster().roles.map((r) => (r.name === 'Zeta' ? { ...r, holders: 2 } : r.name === 'Contributor' ? { ...r, holders: 3 } : { ...r, holders: 0 })),
+    }));
+    card('Zeta').getByText('2 members');
+    card('Contributor').getByText('3 members');
+    card('auditors').getByText('No members');
+    // The office's count wins over the members list (which leaves out removed devices).
+    card('Owner').getByText('No members');
+  });
+
+  it('a held custom role\'s Delete is disabled with a visible reason', async () => {
+    await rolesAt('/team?scope=SH', () => api.teamProject.mockResolvedValue({
+      ...projectRoster(),
+      roles: projectRoster().roles.map((r) => (r.name === 'Zeta' ? { ...r, holders: 1 } : { ...r, holders: 0 })),
+    }));
+    const reason = 'Give its members another role before deleting it.';
+    const del = card('Zeta').getByRole('button', { name: 'Delete' }) as HTMLButtonElement;
+    expect(del.disabled).toBe(true);
+    expect(del.title).toBe(reason);
+    const line = card('Zeta').getByText(reason);
+    expect((del.getAttribute('aria-describedby') ?? '').split(' ')).toContain(line.id);
+    expect((card('auditors').getByRole('button', { name: 'Delete' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(card('auditors').queryByText(reason)).toBeNull();
+  });
+
   it('delete asks first, then shows the office\'s 409 word for word', async () => {
-    const held = 'This role is held by 2 members. Give them another role first.';
+    const held = '2 members hold Zeta. Give them another role first.';
     await rolesAt('/team?scope=SH', () => api.teamDeleteRole.mockRejectedValue(refusal(409, held)));
     fireEvent.click(card('Zeta').getByRole('button', { name: 'Delete' }));
     const confirm = await screen.findByRole('dialog');

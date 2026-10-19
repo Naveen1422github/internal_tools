@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { requestJson, openEventStream, newUlid } from '@collab-mcp/core';
 import { office } from './office.js';
 import { setProjectMember } from '../src/access.js';
+import { addMember } from '../src/store.js';
 
 type O = Awaited<ReturnType<typeof office>>;
 const NOTES = ['note.view', 'note.create', 'note.edit.own', 'note.edit.any', 'note.supersede', 'note.archive', 'note.copy.out'];
@@ -91,22 +92,26 @@ test('unknown, office-scope and inactive keys are refused by name; names clash c
     for (const key of ['note.fly', 'office.module.share', 'task.create', 'project.delete']) {
       const res = await post({ name: 'Bad', keys: ['note.view', key] });
       assert.equal(res.status, 400, key);
-      assert.equal(res.body.error, `"${key}" is not a permission that can be given`);
+      assert.equal(res.body.error, `"${key}" is not a permission that can be given.`);
     }
-    assert.equal((await post({ name: 'Bad', keys: 'note.view' })).status, 400, 'keys must be a list');
+    const notList = await post({ name: 'Bad', keys: 'note.view' });
+    assert.deepEqual([notList.status, notList.body.error], [400, 'Keys must be a list of permissions.']);
     for (const name of ['owner', 'EDITOR', ' Reader ', 'contributor']) {
       const res = await post({ name, keys: [] });
       assert.equal(res.status, 409, name);
-      assert.equal(res.body.error, `"${name.trim()}" is the name of a built-in role`);
+      assert.equal(res.body.error, `"${name.trim()}" is the name of a built-in role.`);
     }
-    assert.equal((await post({ name: '   ', keys: [] })).status, 400);
-    assert.equal((await post({ keys: [] })).status, 400);
-    assert.equal((await post({ name: 'x'.repeat(41), keys: [] })).status, 400);
+    for (const body of [{ name: '   ', keys: [] }, { keys: [] }]) {
+      const res = await post(body);
+      assert.deepEqual([res.status, res.body.error], [400, 'A role needs a name.']);
+    }
+    const long = await post({ name: 'x'.repeat(41), keys: [] });
+    assert.deepEqual([long.status, long.body.error], [400, 'A role name can be at most 40 characters.']);
     assert.equal((await post({ name: 'x'.repeat(40), keys: [] })).status, 200);
     assert.equal((await post({ name: 'Reviewer', keys: [] })).status, 200);
     const clash = await post({ name: 'reviewer', keys: [] });
     assert.equal(clash.status, 409);
-    assert.equal(clash.body.error, 'SH already has a role called "Reviewer"');
+    assert.equal(clash.body.error, 'SH already has a role called "Reviewer".');
     assert.equal(roleRow(o, p, 'Bad'), undefined);
     // renaming into a clash is refused too
     const other = await post({ name: 'Other', keys: [] });
@@ -126,7 +131,7 @@ test('S3-6: names clash case-insensitively beyond ASCII; control characters are 
     assert.equal((await post({ name: 'Équipe', keys: [] })).status, 200);
     const clash = await post({ name: 'équipe', keys: [] });
     assert.equal(clash.status, 409);
-    assert.equal(clash.body.error, 'SH already has a role called "Équipe"');
+    assert.equal(clash.body.error, 'SH already has a role called "Équipe".');
     // the same letter written decomposed (E + combining acute) clashes too
     const nfd = await post({ name: 'e\u0301quipe', keys: [] });
     assert.equal(nfd.status, 409);
@@ -137,7 +142,7 @@ test('S3-6: names clash case-insensitively beyond ASCII; control characters are 
     for (const name of ['Bad\u0000name', 'Bad\nname', 'Bad\tname', 'Bad\u001bname', 'Bad\u007fname']) {
       const res = await post({ name, keys: [] });
       assert.equal(res.status, 400, JSON.stringify(name));
-      assert.equal(res.body.error, 'a role name can\'t contain control characters');
+      assert.equal(res.body.error, 'A role name can\'t contain control characters.');
     }
     const ren = await requestJson(o.target(n), 'PUT', `/v1/projects/${p}/roles/${other.body.role.ulid}`, { name: 'Line\nbreak' });
     assert.equal(ren.status, 400);
@@ -154,11 +159,11 @@ test('renaming, re-keying or deleting Owner -> 409; Editor can be renamed and re
     for (const body of [{ name: 'Boss' }, { keys: ['note.view'] }, { name: 'Owner', keys: [] }, {}]) {
       const res = await requestJson(o.target(n), 'PUT', `/v1/projects/${p}/roles/${owner.ulid}`, body);
       assert.equal(res.status, 409, JSON.stringify(body));
-      assert.equal(res.body.error, "The Owner role can't be renamed or changed");
+      assert.equal(res.body.error, "The Owner role can't be renamed or changed.");
     }
     const del = await requestJson(o.target(n), 'DELETE', `/v1/projects/${p}/roles/${owner.ulid}`);
     assert.equal(del.status, 409);
-    assert.equal(del.body.error, "Owner is a built-in role and can't be deleted");
+    assert.equal(del.body.error, "Owner is a built-in role and can't be deleted.");
     assert.deepEqual(roleById(o, owner.ulid), { name: 'Owner', keys: ownerKeys });
     // the last-Owner rule still holds after the refused attempts (Review Focus 2/5)
     const demote = await requestJson(o.target(n), 'PUT', `/v1/projects/${p}/members/${n.device}`, { role: 'Reader' });
@@ -178,19 +183,19 @@ test('renaming, re-keying or deleting Owner -> 409; Editor can be renamed and re
     const reader = roleRow(o, p, 'Reader')!;
     const dr = await requestJson(o.target(n), 'DELETE', `/v1/projects/${p}/roles/${reader.ulid}`);
     assert.equal(dr.status, 409);
-    assert.equal(dr.body.error, "Reader is a built-in role and can't be deleted");
+    assert.equal(dr.body.error, "Reader is a built-in role and can't be deleted.");
     const dw = await requestJson(o.target(n), 'DELETE', `/v1/projects/${p}/roles/${editor.ulid}`);
-    assert.equal(dw.body.error, "Writer is a built-in role and can't be deleted");
+    assert.equal(dw.body.error, "Writer is a built-in role and can't be deleted.");
     // S3-6: a built-in name only for the role that holds it now: once renamed, Editor can't take "Editor" back
     const back = await requestJson(o.target(n), 'PUT', `/v1/projects/${p}/roles/${editor.ulid}`, { name: 'Editor' });
     assert.equal(back.status, 409);
-    assert.equal(back.body.error, '"Editor" is the name of a built-in role');
+    assert.equal(back.body.error, '"Editor" is the name of a built-in role.');
     assert.equal(roleById(o, editor.ulid)!.name, 'Writer');
     // ... and no other starter can take it either
     const contributor = roleRow(o, p, 'Contributor')!;
     const steal = await requestJson(o.target(n), 'PUT', `/v1/projects/${p}/roles/${contributor.ulid}`, { name: 'editor' });
     assert.equal(steal.status, 409);
-    assert.equal(steal.body.error, '"editor" is the name of a built-in role');
+    assert.equal(steal.body.error, '"editor" is the name of a built-in role.');
     assert.equal(roleById(o, contributor.ulid)!.name, 'Contributor');
     // a starter may still change the case of its own built-in name
     assert.equal((await requestJson(o.target(n), 'PUT', `/v1/projects/${p}/roles/${contributor.ulid}`, { name: 'CONTRIBUTOR' })).status, 200);
@@ -228,14 +233,18 @@ test('deleting a held role -> 409 with the count, revoked holders included; an u
     const id = made.body.role.ulid as string;
     setProjectMember(o.store, null, p, r.device, 'Reviewer');
     setProjectMember(o.store, null, p, x.device, 'Reviewer');
+    const live = await requestJson(o.target(n), 'DELETE', `/v1/projects/${p}/roles/${id}`);
+    assert.equal(live.status, 409);
+    assert.equal(live.body.error, '2 members hold Reviewer. Give them another role first.');
     revoke(o, x.device);
     const two = await requestJson(o.target(n), 'DELETE', `/v1/projects/${p}/roles/${id}`);
     assert.equal(two.status, 409);
-    assert.equal(two.body.error, '2 members hold Reviewer. Give them another role first');
+    // The office CLI refuses revoked devices, so there is nothing to tell them to run.
+    assert.equal(two.body.error, "2 members hold Reviewer, including 1 removed device. It can't be deleted while a removed device still holds it.");
     setProjectMember(o.store, null, p, r.device, 'Reader');
     const one = await requestJson(o.target(n), 'DELETE', `/v1/projects/${p}/roles/${id}`);
     assert.equal(one.status, 409);
-    assert.equal(one.body.error, '1 member holds Reviewer. Give them another role first', 'the revoked holder still counts');
+    assert.equal(one.body.error, "1 member holds Reviewer, including 1 removed device. It can't be deleted while a removed device still holds it.", 'the revoked holder still counts');
     o.store.prepare(`DELETE FROM po_project_members WHERE device_id = ?`).run(x.device);
     assert.equal((await requestJson(o.target(n), 'DELETE', `/v1/projects/${p}/roles/${id}`)).status, 200);
     assert.equal(roleById(o, id), undefined);
@@ -320,12 +329,16 @@ test('a non-member gets the same 404 for every role route; nothing is rung', asy
   } finally { await o.stop(); }
 });
 
-test('membersOf marks built-in and locked roles', async () => {
+test('membersOf marks built-in and locked roles, and counts every holder, revoked and not-yet-joined included (S3-3)', async () => {
   const o = await office();
   try {
-    const { n, r, p } = await team(o);
+    const { n, r, x, p } = await team(o);
     await requestJson(o.target(n), 'POST', `/v1/projects/${p}/roles`, { name: 'Reviewer', keys: ['note.view'] });
     setProjectMember(o.store, null, p, r.device, 'Reviewer');
+    setProjectMember(o.store, null, p, x.device, 'Reviewer');
+    revoke(o, x.device);
+    const waiting = addMember(o.store, 'Waiting').deviceId;   // never joined
+    setProjectMember(o.store, null, p, waiting, 'Reviewer');
     const res = await requestJson(o.target(n), 'GET', `/v1/projects/${p}/members`);
     assert.equal(res.status, 200);
     const roles = res.body.roles as Array<{ ulid: string; name: string; keys: string[]; is_starter: boolean; locked: string | null }>;
@@ -336,5 +349,8 @@ test('membersOf marks built-in and locked roles', async () => {
     const members = res.body.members as Array<{ device_id: string; role: string; role_ulid: string }>;
     assert.equal(members.find((m) => m.device_id === r.device)!.role_ulid, by('Reviewer').ulid);
     assert.equal(members.find((m) => m.device_id === n.device)!.role_ulid, by('Owner').ulid);
+    assert.equal(members.some((m) => m.device_id === x.device), false, 'a revoked device is not listed');
+    const holders = Object.fromEntries(roles.map((q) => [q.name, (q as { holders?: number }).holders]));
+    assert.deepEqual(holders, { Contributor: 0, Editor: 0, Owner: 1, Reader: 0, Reviewer: 3 }, 'the count the delete rule uses');
   } finally { await o.stop(); }
 });

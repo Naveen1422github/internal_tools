@@ -51,6 +51,11 @@ export function orderRoles(roles: TeamRole[]): TeamRole[] {
 /** A member's display name. */
 export const memberName = (m: TeamMember) => m.name ?? m.device_id;
 
+/** How many hold a role: the office's count when it sends one (removed devices included), else the members listed. */
+export function holderCount(role: TeamRole, members: TeamMember[]): number {
+  return role.holders ?? holdersOf(role, members).length;
+}
+
 /** The members holding a role, by name. */
 export function holdersOf(role: TeamRole, members: TeamMember[]): TeamMember[] {
   return members.filter((m) => m.role_ulid === role.ulid);

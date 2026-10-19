@@ -266,7 +266,7 @@ interface RoleRow { ulid: string; name: string; keys: string; is_starter: number
 
 function projectRoleRow(db: Store, projectUlid: string, roleUlid: string): RoleRow {
   const r = db.prepare(`SELECT ulid, name, keys, is_starter FROM po_roles WHERE ulid = ? AND project_ulid = ?`).get(roleUlid, projectUlid) as RoleRow | undefined;
-  if (!r) throw new StoreError("no such role", 404); // a role of another project is just as missing
+  if (!r) throw new StoreError("No such role.", 404); // a role of another project is just as missing
   return r;
 }
 
@@ -282,26 +282,26 @@ export function isOwnerRole(r: { name: string; is_starter: number | boolean }): 
  */
 function checkRoleName(db: Store, scope: Scope, projectUlid: string | null, raw: unknown, self: RoleRow | null): string {
   const name = typeof raw === "string" ? raw.trim() : "";
-  if (!name) throw new StoreError("a role needs a name");
-  if (CONTROL.test(name)) throw new StoreError("a role name can't contain control characters");
-  if (name.length > ROLE_NAME_MAX) throw new StoreError(`a role name can be at most ${ROLE_NAME_MAX} characters`);
+  if (!name) throw new StoreError("A role needs a name.");
+  if (CONTROL.test(name)) throw new StoreError("A role name can't contain control characters.");
+  if (name.length > ROLE_NAME_MAX) throw new StoreError(`A role name can be at most ${ROLE_NAME_MAX} characters.`);
   const folded = foldName(name);
-  if (STARTER_NAMES[scope].includes(folded) && !(self && foldName(self.name) === folded)) throw new StoreError(`"${name}" is the name of a built-in role`, 409);
+  if (STARTER_NAMES[scope].includes(folded) && !(self && foldName(self.name) === folded)) throw new StoreError(`"${name}" is the name of a built-in role.`, 409);
   const others = (scope === "project"
     ? db.prepare(`SELECT ulid, name FROM po_roles WHERE project_ulid = ? AND ulid <> ?`).all(projectUlid, self?.ulid ?? "")
     : db.prepare(`SELECT ulid, name FROM po_office_roles WHERE ulid <> ?`).all(self?.ulid ?? "")) as Array<{ name: string }>;
   const clash = others.find((r) => foldName(r.name) === folded);
-  if (clash) throw new StoreError(`${scope === "project" ? codeOf(db, projectUlid!) : "this office"} already has a role called "${clash.name}"`, 409);
+  if (clash) throw new StoreError(`${scope === "project" ? codeOf(db, projectUlid!) : "This office"} already has a role called "${clash.name}".`, 409);
   return name;
 }
 
 /** S3-4: the keys of a request, all active keys of the scope, in catalog order. */
 function checkGivenKeys(scope: Scope, raw: unknown): Set<string> {
-  if (!Array.isArray(raw)) throw new StoreError("keys must be a list of permissions");
+  if (!Array.isArray(raw)) throw new StoreError("Keys must be a list of permissions.");
   const active = new Set(keysOf(scope));
   const out = new Set<string>();
   for (const k of raw) {
-    if (typeof k !== "string" || !active.has(k)) throw new StoreError(`"${String(k)}" is not a permission that can be given`);
+    if (typeof k !== "string" || !active.has(k)) throw new StoreError(`"${String(k)}" is not a permission that can be given.`);
     out.add(k);
   }
   return out;
@@ -336,6 +336,43 @@ function rekeyed(scope: Scope, storedNow: string, given: Set<string>): string {
   return next.size !== now.size || [...next].some((k) => !now.has(k)) ? storedForm(scope, next) : storedNow;
 }
 
+/**
+ * S3-3: every row pointing at a role, by role ULID: revoked and not-yet-joined
+ * devices included, because a dangling role_ulid drops out of every JOIN. The
+ * same count is the role list's `holders` and the delete rule's. `removed` =
+ * revoked devices (LEFT JOIN: a row with no member row counts as a holder, not as removed).
+ */
+export interface RoleHolders { holders: number; removed: number }
+const HOLDERS_SQL = (table: string, where: string) =>
+  `SELECT x.role_ulid, COUNT(*) AS holders, SUM(CASE WHEN m.revoked_at IS NOT NULL THEN 1 ELSE 0 END) AS removed
+     FROM ${table} x LEFT JOIN po_members m ON m.device_id = x.device_id ${where} GROUP BY x.role_ulid`;
+function holdersByRole(rows: Array<{ role_ulid: string; holders: number; removed: number }>): Record<string, RoleHolders> {
+  const out: Record<string, RoleHolders> = {};
+  for (const r of rows) out[r.role_ulid] = { holders: r.holders, removed: r.removed ?? 0 };
+  return out;
+}
+export function projectRoleHolders(db: Store, projectUlid: string): Record<string, RoleHolders> {
+  return holdersByRole(db.prepare(HOLDERS_SQL("po_project_members", "WHERE x.project_ulid = ?")).all(projectUlid) as Array<{ role_ulid: string; holders: number; removed: number }>);
+}
+export function officeRoleHolders(db: Store): Record<string, RoleHolders> {
+  return holdersByRole(db.prepare(HOLDERS_SQL("po_office_members", "")).all() as Array<{ role_ulid: string; holders: number; removed: number }>);
+}
+
+/**
+ * S3-3's refusal. A revoked device can't be given another role (the office CLI's
+ * set-project-role / set-office-role refuse revoked devices too), so then the
+ * refusal says why instead of what to run.
+ */
+function refuseHeld(name: string, h: RoleHolders | undefined): void {
+  if (!h || h.holders === 0) return;
+  const held = `${h.holders} ${h.holders === 1 ? "member holds" : "members hold"} ${name}`;
+  if (h.removed === 0) throw new StoreError(`${held}. Give them another role first.`, 409);
+  throw new StoreError(
+    `${held}, including ${h.removed} removed ${h.removed === 1 ? "device" : "devices"}. It can't be deleted while a removed device still holds it.`,
+    409,
+  );
+}
+
 export function createProjectRole(db: Store, actor: string | null, projectUlid: string, input: { name: unknown; keys: unknown }): { ulid: string; name: string; keys: string[] } {
   return db.transaction(() => {
     if (actor !== null) requireProjectKey(db, actor, projectUlid, "role.manage");
@@ -354,7 +391,7 @@ export function updateProjectRole(db: Store, actor: string | null, projectUlid: 
   return db.transaction(() => {
     if (actor !== null) requireProjectKey(db, actor, projectUlid, "role.manage");
     const role = projectRoleRow(db, projectUlid, roleUlid);
-    if (isOwnerRole(role)) throw new StoreError("The Owner role can't be renamed or changed", 409);
+    if (isOwnerRole(role)) throw new StoreError("The Owner role can't be renamed or changed.", 409);
     if (actor !== null) requireOutranks(db, actor, "project", projectUlid, grant("project", role.keys));
     const name = input.name === undefined ? role.name : checkRoleName(db, "project", projectUlid, input.name, role);
     let stored = role.keys;
@@ -376,10 +413,9 @@ export function deleteProjectRole(db: Store, actor: string | null, projectUlid: 
   db.transaction(() => {
     if (actor !== null) requireProjectKey(db, actor, projectUlid, "role.manage");
     const role = projectRoleRow(db, projectUlid, roleUlid);
-    if (role.is_starter) throw new StoreError(`${role.name} is a built-in role and can't be deleted`, 409);
+    if (role.is_starter) throw new StoreError(`${role.name} is a built-in role and can't be deleted.`, 409);
     if (actor !== null) requireOutranks(db, actor, "project", projectUlid, grant("project", role.keys));
-    const n = (db.prepare(`SELECT COUNT(*) n FROM po_project_members WHERE project_ulid = ? AND role_ulid = ?`).get(projectUlid, roleUlid) as { n: number }).n;
-    if (n > 0) throw new StoreError(`${n} ${n === 1 ? "member holds" : "members hold"} ${role.name}. Give them another role first`, 409);
+    refuseHeld(role.name, projectRoleHolders(db, projectUlid)[roleUlid]);
     db.prepare(`DELETE FROM po_roles WHERE ulid = ?`).run(roleUlid);
   }).immediate();
 }
@@ -397,7 +433,7 @@ export function deleteProjectRole(db: Store, actor: string | null, projectUlid: 
 // No replays move: no office key is note.view (replays follow project keys only).
 function officeRoleRow(db: Store, roleUlid: string): RoleRow {
   const r = db.prepare(`SELECT ulid, name, keys, is_starter FROM po_office_roles WHERE ulid = ?`).get(roleUlid) as RoleRow | undefined;
-  if (!r) throw new StoreError("no such role", 404);
+  if (!r) throw new StoreError("No such role.", 404);
   return r;
 }
 
@@ -426,9 +462,9 @@ export function updateOfficeRole(db: Store, actor: string | null, roleUlid: stri
     if (actor !== null) requireOfficeKey(db, actor, "office.role.manage");
     const role = officeRoleRow(db, roleUlid);
     const lock = officeRoleLock(role);
-    if (lock === "all") throw new StoreError(`The ${OFFICE_ADMIN} role can't be renamed or changed`, 409);
+    if (lock === "all") throw new StoreError(`The ${OFFICE_ADMIN} role can't be renamed or changed.`, 409);
     if (lock === "name" && input.name !== undefined && (typeof input.name !== "string" || input.name.trim() !== role.name)) {
-      throw new StoreError(`The ${OFFICE_MEMBER} role can't be renamed`, 409);
+      throw new StoreError(`The ${OFFICE_MEMBER} role can't be renamed.`, 409);
     }
     if (actor !== null) requireOutranks(db, actor, "office", null, grant("office", role.keys));
     const name = input.name === undefined || lock === "name" ? role.name : checkRoleName(db, "office", null, input.name, role);
@@ -448,15 +484,14 @@ export function deleteOfficeRole(db: Store, actor: string | null, roleUlid: stri
   db.transaction(() => {
     if (actor !== null) requireOfficeKey(db, actor, "office.role.manage");
     const role = officeRoleRow(db, roleUlid);
-    if (role.is_starter) throw new StoreError(`${role.name} is a built-in role and can't be deleted`, 409);
+    if (role.is_starter) throw new StoreError(`${role.name} is a built-in role and can't be deleted.`, 409);
     if (actor !== null) requireOutranks(db, actor, "office", null, grant("office", role.keys));
-    const n = (db.prepare(`SELECT COUNT(*) n FROM po_office_members WHERE role_ulid = ?`).get(roleUlid) as { n: number }).n;
-    if (n > 0) throw new StoreError(`${n} ${n === 1 ? "member holds" : "members hold"} ${role.name}. Give them another role first`, 409);
+    refuseHeld(role.name, officeRoleHolders(db)[roleUlid]);
     db.prepare(`DELETE FROM po_office_roles WHERE ulid = ?`).run(roleUlid);
   }).immediate();
 }
 
-/** GET /v1/office/members (S3-7): live, joined devices with their office role, and every office role. */
+/** GET /v1/office/members (S3-7): live, joined devices with their office role, and every office role with its holder count (S3-3). */
 export function listOfficeMembers(db: Store) {
   const members = db
     .prepare(
@@ -465,8 +500,10 @@ export function listOfficeMembers(db: Store) {
          JOIN po_office_roles r ON r.ulid = x.role_ulid ORDER BY m.name, m.device_id`,
     )
     .all();
+  const held = officeRoleHolders(db);
   const roles = (db.prepare(`SELECT ulid, name, keys, is_starter FROM po_office_roles ORDER BY name`).all() as RoleRow[]).map((r) => ({
     ulid: r.ulid, name: r.name, keys: [...storedKeysOf("office", r.keys)], is_starter: r.is_starter === 1, locked: officeRoleLock(r),
+    holders: held[r.ulid]?.holders ?? 0,
   }));
   return { members, roles };
 }

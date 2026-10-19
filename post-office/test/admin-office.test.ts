@@ -55,18 +55,18 @@ test('Office admin cannot be renamed, re-keyed or deleted; Office member cannot 
     for (const body of [{ name: 'Boss' }, { keys: ['office.project.create'] }, { name: 'Office admin', keys: [] }, { name: 'OFFICE ADMIN' }, {}]) {
       const res = await requestJson(o.target(n), 'PUT', `/v1/office/roles/${admin.ulid}`, body);
       assert.equal(res.status, 409, JSON.stringify(body));
-      assert.equal(res.body.error, "The Office admin role can't be renamed or changed");
+      assert.equal(res.body.error, "The Office admin role can't be renamed or changed.");
     }
     const delAdmin = await requestJson(o.target(n), 'DELETE', `/v1/office/roles/${admin.ulid}`);
     assert.equal(delAdmin.status, 409);
-    assert.equal(delAdmin.body.error, "Office admin is a built-in role and can't be deleted");
+    assert.equal(delAdmin.body.error, "Office admin is a built-in role and can't be deleted.");
     assert.deepEqual(roleById(o, admin.ulid), { name: admin.name, keys: admin.keys });
 
     const member = roleRow(o, 'Office member')!;
     for (const name of ['Staff', 'office member', 'OFFICE MEMBER', 'Office admin', 7]) {
       const res = await requestJson(o.target(n), 'PUT', `/v1/office/roles/${member.ulid}`, { name });
       assert.equal(res.status, 409, String(name));
-      assert.equal(res.body.error, "The Office member role can't be renamed");
+      assert.equal(res.body.error, "The Office member role can't be renamed.");
     }
     assert.equal(roleById(o, member.ulid)!.name, 'Office member');
     // keeping the exact name (trimmed) is fine; keys change
@@ -75,7 +75,7 @@ test('Office admin cannot be renamed, re-keyed or deleted; Office member cannot 
     assert.deepEqual(roleById(o, member.ulid), { name: 'Office member', keys: JSON.stringify(['office.project.create', 'office.module.share']) });
     const delMember = await requestJson(o.target(n), 'DELETE', `/v1/office/roles/${member.ulid}`);
     assert.equal(delMember.status, 409);
-    assert.equal(delMember.body.error, "Office member is a built-in role and can't be deleted");
+    assert.equal(delMember.body.error, "Office member is a built-in role and can't be deleted.");
     assert.ok(roleById(o, member.ulid));
   } finally { await o.stop(); }
 });
@@ -154,14 +154,17 @@ test('a custom office role is created, assigned via PUT /v1/office/members/:d, a
       assert.deepEqual(access.body.office, { role: 'Keeper', keys: ['office.module.share'] });
 
       setOfficeRole(o.store, null, x.device, 'Keeper');
+      const live = await requestJson(o.target(n), 'DELETE', `/v1/office/roles/${id}`);
+      assert.equal(live.status, 409);
+      assert.equal(live.body.error, '2 members hold Keeper. Give them another role first.');
       revoke(o, x.device);
       const two = await requestJson(o.target(n), 'DELETE', `/v1/office/roles/${id}`);
       assert.equal(two.status, 409);
-      assert.equal(two.body.error, '2 members hold Keeper. Give them another role first');
+      assert.equal(two.body.error, "2 members hold Keeper, including 1 removed device. It can't be deleted while a removed device still holds it.");
       setOfficeRole(o.store, null, r.device, 'Office member');
       const one = await requestJson(o.target(n), 'DELETE', `/v1/office/roles/${id}`);
       assert.equal(one.status, 409);
-      assert.equal(one.body.error, '1 member holds Keeper. Give them another role first', 'the revoked holder still counts');
+      assert.equal(one.body.error, "1 member holds Keeper, including 1 removed device. It can't be deleted while a removed device still holds it.", 'the revoked holder still counts');
       o.store.prepare(`DELETE FROM po_office_members WHERE device_id = ?`).run(x.device);
       const ringsBefore = ev.count();
       assert.equal((await requestJson(o.target(n), 'DELETE', `/v1/office/roles/${id}`)).status, 200);
@@ -171,7 +174,7 @@ test('a custom office role is created, assigned via PUT /v1/office/members/:d, a
       for (const method of ['PUT', 'DELETE'] as const) {
         const res = await requestJson(o.target(n), method, `/v1/office/roles/${id}`, method === 'PUT' ? { name: 'Back' } : undefined);
         assert.equal(res.status, 404, method);
-        assert.deepEqual(res.body, { error: 'no such role' });
+        assert.deepEqual(res.body, { error: 'No such role.' });
       }
     } finally { ev.close(); }
   } finally { await o.stop(); }
@@ -186,25 +189,25 @@ test('office role names and keys: unknown and project-scope keys refused by name
     for (const key of ['office.fly', 'note.view', 'role.manage']) {
       const res = await post({ name: 'Bad', keys: ['office.project.create', key] });
       assert.equal(res.status, 400, key);
-      assert.equal(res.body.error, `"${key}" is not a permission that can be given`);
+      assert.equal(res.body.error, `"${key}" is not a permission that can be given.`);
     }
     assert.equal((await post({ name: 'Bad', keys: 'office.project.create' })).status, 400, 'keys must be a list');
     for (const name of ['office admin', ' Office Member ']) {
       const res = await post({ name, keys: [] });
       assert.equal(res.status, 409, name);
-      assert.equal(res.body.error, `"${name.trim()}" is the name of a built-in role`);
+      assert.equal(res.body.error, `"${name.trim()}" is the name of a built-in role.`);
     }
     assert.equal((await post({ name: '   ', keys: [] })).status, 400);
     assert.equal((await post({ keys: [] })).status, 400);
     assert.equal((await post({ name: 'x'.repeat(41), keys: [] })).status, 400);
-    assert.equal((await post({ name: 'Bad\nname', keys: [] })).body.error, 'a role name can\'t contain control characters');
+    assert.equal((await post({ name: 'Bad\nname', keys: [] })).body.error, 'A role name can\'t contain control characters.');
     assert.equal(roleCount(o), before);
     // a project starter name is not an office one
     assert.equal((await post({ name: 'Owner', keys: [] })).status, 200);
     assert.equal((await post({ name: 'Équipe', keys: [] })).status, 200);
     const clash = await post({ name: 'éQUIPE', keys: [] });
     assert.equal(clash.status, 409);
-    assert.equal(clash.body.error, 'this office already has a role called "Équipe"');
+    assert.equal(clash.body.error, 'This office already has a role called "Équipe".');
     const other = await post({ name: 'Other', keys: [] });
     assert.equal((await requestJson(o.target(n), 'PUT', `/v1/office/roles/${other.body.role.ulid}`, { name: 'équipe' })).status, 409);
     assert.equal((await requestJson(o.target(n), 'PUT', `/v1/office/roles/${other.body.role.ulid}`, { name: 'OTHER' })).status, 200, 'a role may change the case of its own name');
@@ -217,7 +220,7 @@ test('office role names and keys: unknown and project-scope keys refused by name
   } finally { await o.stop(); }
 });
 
-test('GET /v1/office/members lists live members with their office role', async () => {
+test('GET /v1/office/members lists live members with their office role; each role counts every holder (S3-3)', async () => {
   const o = await office();
   try {
     const { n, r, x } = await team(o);
@@ -237,9 +240,9 @@ test('GET /v1/office/members lists live members with their office role', async (
     assert.ok(members[0].last_seen_at);
     const roles = res.body.roles as Array<{ ulid: string; name: string; keys: string[]; is_starter: boolean; locked: string | null }>;
     const by = (name: string) => roles.find((q) => q.name === name)!;
-    assert.deepEqual(by('Office admin'), { ulid: admin.ulid, name: 'Office admin', keys: keysOf('office'), is_starter: true, locked: 'all' });
-    assert.deepEqual(by('Office member'), { ulid: member.ulid, name: 'Office member', keys: ['office.project.create'], is_starter: true, locked: 'name' });
-    assert.deepEqual(by('Keeper'), { ulid: keeper, name: 'Keeper', keys: ['office.module.share'], is_starter: false, locked: null }, 'stored keys are sanitized');
+    assert.deepEqual(by('Office admin'), { ulid: admin.ulid, name: 'Office admin', keys: keysOf('office'), is_starter: true, locked: 'all', holders: 1 });
+    assert.deepEqual(by('Office member'), { ulid: member.ulid, name: 'Office member', keys: ['office.project.create'], is_starter: true, locked: 'name', holders: 2 }, 'the revoked X and the waiting device');
+    assert.deepEqual(by('Keeper'), { ulid: keeper, name: 'Keeper', keys: ['office.module.share'], is_starter: false, locked: null, holders: 1 }, 'stored keys are sanitized');
     assert.equal(roles.length, 3);
     // a revoked device reads nothing
     await assert.rejects(requestJson(o.target(x), 'GET', '/v1/office/members'), { name: 'AccessRevokedError' });

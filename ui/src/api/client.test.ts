@@ -123,9 +123,9 @@ describe('team and refused calls', () => {
   });
 
   it('a 409 or 503 keeps its text and status, on GET too', async () => {
-    reply(409, { error: '2 members hold Lead. Give them another role first' });
+    reply(409, { error: '2 members hold Lead. Give them another role first.' });
     const err = await api.teamDeleteRole({ scope: 'project', project: 'P1', role: 'R1' }).catch((e) => e);
-    expect([err.status, err.message]).toEqual([409, '2 members hold Lead. Give them another role first']);
+    expect([err.status, err.message]).toEqual([409, '2 members hold Lead. Give them another role first.']);
     reply(503, { error: "The post office can't be reached right now." });
     const down = await api.teamProject('P1').catch((e) => e);
     expect([down.status, down.message]).toEqual([503, "The post office can't be reached right now."]);

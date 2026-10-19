@@ -9,7 +9,7 @@ import {
 } from "./store.js";
 import {
   officeKeys, projectKeys, requireOfficeKey, requireProjectKey, setProjectMember, setOfficeRole,
-  createProjectRole, updateProjectRole, deleteProjectRole, isOwnerRole,
+  createProjectRole, updateProjectRole, deleteProjectRole, isOwnerRole, projectRoleHolders,
   createOfficeRole, updateOfficeRole, deleteOfficeRole, listOfficeMembers,
 } from "./access.js";
 import { sanitizeKeys, type AccessPayload } from "@collab-mcp/core";
@@ -111,12 +111,15 @@ function membersOf(db: Store, projectUlid: string) {
          JOIN po_roles r ON r.ulid = x.role_ulid WHERE x.project_ulid = ? ORDER BY m.name, m.device_id`,
     )
     .all(projectUlid);
+  const held = projectRoleHolders(db, projectUlid);
   const roles = (db.prepare(`SELECT ulid, name, keys, is_starter FROM po_roles WHERE project_ulid = ? ORDER BY name`).all(projectUlid) as Array<{ ulid: string; name: string; keys: string; is_starter: number }>).map((r) => {
     let parsed: unknown = [];
     try { parsed = JSON.parse(r.keys); } catch { /* grants nothing */ }
     // S3-2: Owner's name and keys are fixed ("all"); the other project roles lock nothing.
     const locked: "all" | "name" | null = isOwnerRole(r) ? "all" : null;
-    return { ulid: r.ulid, name: r.name, keys: sanitizeKeys("project", parsed), is_starter: r.is_starter === 1, locked };
+    // S3-3: every holder, revoked and not-yet-joined included: the count the delete rule uses.
+    const holders = held[r.ulid]?.holders ?? 0;
+    return { ulid: r.ulid, name: r.name, keys: sanitizeKeys("project", parsed), is_starter: r.is_starter === 1, locked, holders };
   });
   return { members, roles };
 }

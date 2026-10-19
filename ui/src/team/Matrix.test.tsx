@@ -94,6 +94,20 @@ describe('Who can do what', () => {
     expect(header('Reader').textContent).toContain('No members');
   });
 
+  it('a role held only by removed devices shows the office\'s count, not "No members"', async () => {
+    api.teamOverview.mockResolvedValue(overview());
+    api.teamProject.mockResolvedValue({
+      ...projectRoster(),
+      roles: projectRoster().roles.map((r) => (r.name === 'Auditors' ? { ...r, holders: 2 } : r)),
+    });
+    render(<MemoryRouter initialEntries={['/team?scope=SH']}><Routes><Route path="/team" element={<Team />} /></Routes></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Who can do what' }));
+    const table = await screen.findByRole('table');
+    const header = within(table).getAllByRole('columnheader').find((th) => th.querySelector('[data-role-name]')?.textContent === 'Auditors')!;
+    expect(header.textContent).toContain('2 members');
+    expect(header.textContent).not.toContain('No members');
+  });
+
   it('no inactive key row; rows grouped by area; laptop-checked rows carry the note', async () => {
     const table = await matrixAt('/team?scope=SH');
     expect(table.textContent).not.toMatch(/task\.|Create tasks|project\.make_solo|project\.delete/);

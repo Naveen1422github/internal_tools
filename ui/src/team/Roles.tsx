@@ -2,13 +2,15 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { teamCreateRole, teamDeleteRole, teamUpdateRole, type TeamRole } from '../api/client';
 import { activeKeys, labelOf } from './catalog';
 import RoleEditor from './RoleEditor';
-import { holdersOf, needSentence, orderRoles, whereOf, type TeamTabProps } from './view';
+import { holderCount, needSentence, orderRoles, whereOf, type TeamTabProps } from './view';
 
 /** What the editor panel is showing: a new role (blank or duplicated), or an existing one. */
 type Editing =
   | { kind: 'new'; name: string; keys: string[] }
   | { kind: 'existing'; role: TeamRole };
 
+/** S3-3: the office refuses to delete a role anyone holds; the button says so first. */
+const HELD = 'Give its members another role before deleting it.';
 const countOf = (n: number) => (n === 0 ? 'No members' : n === 1 ? '1 member' : `${n} members`);
 const button =
   'rounded-md border border-gray-300 dark:border-gray-700 px-3 py-1 text-sm hover:bg-gray-100 dark:hover:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed';
@@ -94,6 +96,9 @@ export default function Roles(props: TeamTabProps) {
       <div className="grid gap-3 md:grid-cols-2">
         {roles.map((r) => {
           const keys = r.keys.filter((k) => active.includes(k));
+          const count = holderCount(r, roster.members);
+          const held = !r.is_starter && count > 0;
+          const heldId = `${whyId}-held-${r.ulid}`;
           return (
             <article key={r.ulid} aria-label={r.name} className="border border-gray-200 dark:border-gray-800 rounded-lg p-4 space-y-3">
               <div className="flex flex-wrap items-center gap-2">
@@ -101,7 +106,7 @@ export default function Roles(props: TeamTabProps) {
                 {r.is_starter && (
                   <span className="rounded-full bg-gray-200 dark:bg-gray-800 px-2 text-xs text-gray-700 dark:text-gray-300">Built-in</span>
                 )}
-                <span className="text-sm text-gray-500">{countOf(holdersOf(r, roster.members).length)}</span>
+                <span className="text-sm text-gray-500">{countOf(count)}</span>
               </div>
               {keys.length > 0 ? (
                 <ul className="flex flex-wrap gap-1">
@@ -140,9 +145,9 @@ export default function Roles(props: TeamTabProps) {
                 {!r.is_starter && (
                   <button
                     type="button"
-                    disabled={!canManage}
-                    title={why}
-                    aria-describedby={described}
+                    disabled={!canManage || held}
+                    title={why ?? (held ? HELD : undefined)}
+                    aria-describedby={[described, held ? heldId : undefined].filter(Boolean).join(' ') || undefined}
                     onClick={(e) => askDelete(r, e.currentTarget)}
                     className={button}
                   >
@@ -150,6 +155,7 @@ export default function Roles(props: TeamTabProps) {
                   </button>
                 )}
               </div>
+              {held && <p id={heldId} className="text-sm text-gray-600 dark:text-gray-400">{HELD}</p>}
             </article>
           );
         })}

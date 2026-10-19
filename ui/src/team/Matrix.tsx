@@ -1,5 +1,5 @@
 import { CATALOG } from './catalog';
-import { LAPTOP_NOTE, holdersOf, memberName, orderRoles, type TeamTabProps } from './view';
+import { LAPTOP_NOTE, holderCount, holdersOf, memberName, orderRoles, type TeamTabProps } from './view';
 
 /**
  * The "Who can do what" tab (S3-8): roles against permissions, read-only. The
@@ -24,11 +24,13 @@ export default function Matrix({ scope, roster }: TeamTabProps) {
             <th scope="col" className="px-3 py-2 text-xs font-semibold text-gray-500">Permission</th>
             {roles.map((r) => {
               const holders = holdersOf(r, roster.members);
+              // Removed devices are not listed by name, but they still hold the role.
+              const count = holderCount(r, roster.members);
               return (
                 <th key={r.ulid} scope="col" className="px-3 py-2 min-w-32 font-normal">
                   <span data-role-name className="block font-semibold">{r.name}</span>
                   <span className="block text-xs text-gray-500">
-                    {holders.length ? holders.map(memberName).join(', ') : 'No members'}
+                    {holders.length ? holders.map(memberName).join(', ') : count === 0 ? 'No members' : count === 1 ? '1 member' : `${count} members`}
                   </span>
                 </th>
               );

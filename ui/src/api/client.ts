@@ -242,6 +242,11 @@ export interface TeamRole {
   is_starter: boolean;
   /** "all": name and keys are fixed (Owner, Office admin); "name": only the name (Office member). */
   locked: 'all' | 'name' | null;
+  /**
+   * Every device the office has on this role, removed and not-yet-joined ones
+   * included: the count its delete rule uses (S3-3). Absent from an older office.
+   */
+  holders?: number;
 }
 export interface TeamRoster { members: TeamMember[]; roles: TeamRole[] }
 /** `project` is the project's ULID; required for the project scope. */

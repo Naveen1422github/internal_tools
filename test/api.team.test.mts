@@ -100,6 +100,7 @@ test('role/create then project shows the role; a role key edit is visible on the
   const read = async () => (await srv.api(`/api/team/project?ulid=${tm.ulid}`)).body.roles.find((x: any) => x.ulid === id);
   assert.deepEqual((await read()).keys, ['note.view']);
   assert.equal((await read()).is_starter, false);
+  assert.equal((await read()).holders, 0);
   const up = await srv.api('/api/team/role/update', { scope: 'project', project: tm.ulid, role: id, name: 'Senior reviewer', keys: ['note.view', 'note.create'] });
   assert.deepEqual([up.status, up.body], [200, { ok: true }]);
   const after = await read();
@@ -122,8 +123,11 @@ test('office scope: role/create, assign with member/set, list with GET /api/team
   assert.equal(list.status, 200);
   assert.equal(list.body.members.find((m: any) => m.device_id === srv.b.device).role, 'Project maker');
   assert.ok(list.body.roles.some((x: any) => x.name === 'Office admin' && x.locked === 'all'));
+  // The office's holder count reaches the laptop as it was sent (S3-3).
+  assert.equal(list.body.roles.find((x: any) => x.name === 'Project maker').holders, 1);
   const held = await srv.api('/api/team/role/delete', { scope: 'office', role: made.body.role.ulid });
   assert.equal(held.status, 409, JSON.stringify(held.body));
+  assert.equal(held.body.error, '1 member holds Project maker. Give them another role first.');
   await srv.api('/api/team/member/set', { scope: 'office', device: srv.b.device, role: 'Office member' });
   const del = await srv.api('/api/team/role/delete', { scope: 'office', role: made.body.role.ulid });
   assert.deepEqual([del.status, del.body], [200, { ok: true }]);
