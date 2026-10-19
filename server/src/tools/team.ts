@@ -4,6 +4,7 @@ import {
   getDb, postOfficeTargetFromDb, requestJson, listProjects, isUlid,
   AccessRevokedError, SchemaMismatchError, PinMismatchError,
 } from '@collab-mcp/core';
+import { NOT_CONNECTED, REVOKED, UNREACHABLE } from './office-errors.js';
 
 // RnR S3 (team admin): the web UI asks the post office as this laptop's device;
 // the office decides. Its status and wording pass through unchanged (Review
@@ -14,10 +15,7 @@ const db = getDb();
 type Send = (status: number, body: any) => void;
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
-const NOT_CONNECTED = "This notebook isn't connected to a post office.";
 const NEEDS_UPDATE = 'The post office needs updating before roles can be managed here.';
-const REVOKED = "This laptop's access to the post office was revoked.";
-const UNREACHABLE = "The post office can't be reached right now.";
 
 const enc = encodeURIComponent;
 const isText = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
