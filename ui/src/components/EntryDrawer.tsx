@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useUi } from '../store/ui';
 import { getEntry, entryByUlid, upsertEntry, supersede, deleteEntry, type Entry, type EntryRef, type LinkTarget } from '../api/client';
 import Drawer from './Drawer';
+import CopyNote from './CopyNote';
 import Markdown from './Markdown';
 import { useSyncOverview } from '../sync/useSyncOverview';
 import { shareLabel, saveNote, SHARED_LABEL, PRIVATE_LABEL } from '../sync/view';
@@ -24,6 +25,7 @@ export default function EntryDrawer() {
   const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<Partial<Entry>>({});
+  const [copying, setCopying] = useState(false);
   const sync = useSyncOverview();
 
   useEffect(() => {
@@ -48,7 +50,9 @@ export default function EntryDrawer() {
   const handleSave = async () => {
     if (!entry) return;
     try {
-      const res = await upsertEntry({ ...editData, id: noteRefOf(entry) });
+      // A note's project is fixed once it exists (copy it to move it): never sent with an edit.
+      const { project: _project, project_ulid: _projectUlid, ...edit } = editData;
+      const res = await upsertEntry({ ...edit, id: noteRefOf(entry) });
       if (res.ok) {
         setIsEditing(false);
         const updated = await reload(entry);
@@ -129,6 +133,19 @@ export default function EntryDrawer() {
              </div>
              <div className="text-xs font-mono text-gray-400">{formatEntryRef(entry.id, entry.series)}</div>
           </header>
+
+          {entry.project !== undefined && (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-gray-500">Project</span>
+              {entry.project ? (
+                <span className="rounded bg-violet-50 px-1.5 py-0.5 font-bold text-violet-700 dark:bg-violet-900/20 dark:text-violet-300">
+                  {entry.project.code} · {entry.project.name}{entry.project.mode === 'team' ? ' (team)' : ''}{entry.project.left ? ', left: read-only' : ''}
+                </span>
+              ) : (
+                <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600 dark:bg-gray-800 dark:text-gray-400">No project (E series)</span>
+              )}
+            </div>
+          )}
 
           {entry.needs_merge === 1 && (
             <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded text-sm text-amber-800 dark:text-amber-200 flex items-center justify-between">
@@ -246,11 +263,13 @@ export default function EntryDrawer() {
              ) : (
                <>
                  <button onClick={() => setIsEditing(true)} className="w-full py-2 px-4 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded text-sm font-medium transition-colors">Edit Entry</button>
+                 <button onClick={() => setCopying(true)} disabled={!entry.ulid} className="w-full py-2 px-4 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded text-sm font-medium transition-colors disabled:opacity-50">Copy to another project</button>
                  <button onClick={handleSupersede} className="w-full py-2 px-4 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded text-sm font-medium transition-colors">Supersede</button>
                  <button onClick={handleDelete} className="w-full py-2 px-4 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded text-sm font-medium transition-colors">Delete</button>
                </>
              )}
           </div>
+          {copying && <CopyNote entry={entry} onClose={() => setCopying(false)} />}
         </div>
       )}
     </Drawer>

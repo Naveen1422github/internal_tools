@@ -25,6 +25,9 @@ export interface Entry {
   ulid?: string;
   /** 0005+: the note at superseded_by_ulid (J17). null = not superseded; absent = older file. */
   superseded_target?: LinkTarget | null;
+  /** UI parity Task 10: the note's project (search results carry its ULID, a note read the project). */
+  project_ulid?: string | null;
+  project?: { code: string; name: string; mode: string; left: boolean } | null;
 }
 
 /** The note at the other end of a link, found by its ULID (J17; core's LinkTarget). */
@@ -109,6 +112,8 @@ function qs(params: Record<string, string | undefined>): string {
 export const search = (p: {
   q?: string; type?: string; module?: string; agent?: string;
   kind?: string; category?: string; since?: string;
+  /** A project's code, or "none" for notes in no project. */
+  project?: string;
 } = {}) => getJson<{ results: Entry[] }>(`/api/collab/search${qs(p)}`);
 
 // A note number: an integer is an E note; "SH-12" names a project note (stage B1).
@@ -123,7 +128,7 @@ export const entryByUlid = (ulid: string) =>
  * omitted, core decides (the module's binding). A refusal keeps its own sentence:
  * a 403 here is usually a role refusal, not a stale page (UI parity Task 9).
  */
-export const upsertEntry = (body: Omit<Partial<Entry>, 'id'> & { id?: number | string; project?: string }) =>
+export const upsertEntry = (body: Omit<Partial<Entry>, 'id' | 'project'> & { id?: number | string; project?: string }) =>
   sendJson<{ ok: boolean; id: number; series?: string; pending?: boolean; ulid?: string }>('POST', `/api/collab/entry/upsert`, body);
 /** Where a new note would land, in core's words. */
 export interface NoteDestination { project: { code: string; name: string; mode: string } | null; why: 'named' | 'bound' | 'folder' | 'none'; line: string }

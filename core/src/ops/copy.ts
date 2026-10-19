@@ -16,13 +16,16 @@ import { findProject, isLeftProject, isTeamProject, notFound, listProjects, type
 import { resolveAllocator, allocateWithRetry, SAVE_ATTEMPT } from "../sync/allocator.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { assertCan } from "../access/can.js";
-import { newUlid } from "../ulid.js";
+import { newUlid, isUlid, parseNoteRef } from "../ulid.js";
 import type { RefType } from "../constants.js";
 
 export { COPIED_TO_PREFIX };
 
 export interface CopyArgs {
-  /** A module slug (its E notes) or a project code/ULID; `module:` / `project:` remove any doubt. */
+  /**
+   * A module slug (its E notes) or a project code/ULID; `module:` / `project:` remove any doubt.
+   * `note:<SH-12 | E-00012 | ULID>` is one note (UI parity Task 10: "copy this note to another project").
+   */
   from: string;
   /** The target project's code or ULID. */
   to: string;
@@ -37,7 +40,7 @@ export interface CopySkip { ulid: string; ref: string; title: string; reason: st
 
 export interface CopyPlan {
   args: CopyArgs;
-  source: { kind: "module" | "project"; name: string; label: string; project_ulid?: string };
+  source: { kind: "module" | "project" | "note"; name: string; label: string; project_ulid?: string; note_ulid?: string };
   target: { ulid: string; code: string; name: string; mode: "solo" | "team" };
   filters: { author: string | null; since: string | null };
   items: CopyItem[];
@@ -76,8 +79,21 @@ function resolveSource(db: DB, raw: string): CopyPlan["source"] {
     if (!moduleExists(db, s)) throw new Error(`[collab] no module "${s}" in this notebook`);
     return { kind: "module", name: s, label: `module ${s} (E notes)` };
   };
-  const m = /^(project|module):(.+)$/i.exec(v);
-  if (m) return m[1].toLowerCase() === "project" ? asProject(m[2].trim()) : asModule(m[2].trim());
+  const asNote = (s: string): CopyPlan["source"] => {
+    const ref = isUlid(s) ? null : parseNoteRef(s);
+    const row = (isUlid(s)
+      ? db.prepare(`SELECT ulid, id, series, project_ulid FROM entries WHERE ulid = ? AND deleted_at IS NULL`).get(s)
+      : ref ? db.prepare(`SELECT ulid, id, series, project_ulid FROM entries WHERE series = ? AND id = ? AND deleted_at IS NULL ORDER BY ulid LIMIT 1`).get(ref.series, ref.id) : undefined
+    ) as { ulid: string; id: number | null; series: string; project_ulid: string | null } | undefined;
+    if (!row) throw new Error(`[collab] no note "${s}" in this notebook`);
+    const name = formatEntryRef(row.id, row.series);
+    return { kind: "note", name, label: `note ${name}`, note_ulid: row.ulid, ...(row.project_ulid ? { project_ulid: row.project_ulid } : {}) };
+  };
+  const m = /^(project|module|note):(.+)$/i.exec(v);
+  if (m) {
+    const kind = m[1].toLowerCase();
+    return kind === "project" ? asProject(m[2].trim()) : kind === "note" ? asNote(m[2].trim()) : asModule(m[2].trim());
+  }
   const p = findProject(db, v);
   const isModule = moduleExists(db, v);
   if (p && isModule) {
@@ -139,7 +155,10 @@ export function planCopy(db: DB, args: CopyArgs): CopyPlan {
 
   const where = ["e.deleted_at IS NULL"];
   const params: unknown[] = [];
-  if (source.kind === "project") {
+  if (source.kind === "note") {
+    where.push("e.ulid = ?");
+    params.push(source.note_ulid);
+  } else if (source.kind === "project") {
     where.push("e.project_ulid = ?");
     params.push(source.project_ulid);
   } else {

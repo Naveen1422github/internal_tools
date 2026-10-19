@@ -35,7 +35,8 @@ export default function DraftCard({ draft }: { draft: Partial<Entry>; validation
     setSaving(true);
     setSaveError(null);
     try {
-      const res = await upsertEntry(edited);
+      const { project: _project, ...draft } = edited;
+      const res = await upsertEntry(draft);
       if (res.ok) setSaved({ id: res.id, series: res.series });
     } catch (e: any) {
       setSaveError(e?.message || 'Save failed.');

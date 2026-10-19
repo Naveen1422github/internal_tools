@@ -47,3 +47,22 @@ test('create with a project: the note lands there and is numbered by it; "none" 
   const edit = await post('/api/collab/entry/upsert', { ...note, id: 'NV-1', project: 'none' });
   assert.equal(edit.status, 400);
 });
+
+// UI parity Task 10: notes show their project, and can be filtered by it.
+test('search filters by project (a code, or none); the note read names its project', async () => {
+  const nv = await post('/api/collab/entry/upsert', { ...note, title: 'only in NV', project: 'NV' });
+  const e = await post('/api/collab/entry/upsert', { ...note, title: 'only in E', project: 'none' });
+  const inNv = await get('/api/collab/search?project=NV');
+  assert.ok(inNv.body.results.length > 0);
+  assert.ok(inNv.body.results.every((r: any) => r.series === 'NV' && r.project_ulid));
+  const inE = await get('/api/collab/search?project=none');
+  assert.ok(inE.body.results.some((r: any) => r.title === 'only in E'));
+  assert.ok(inE.body.results.every((r: any) => r.series === 'E' && r.project_ulid === null));
+  assert.deepEqual((await get('/api/collab/search?project=ZZ')).body.results, []);
+  const one = await get(`/api/collab/entry?id=NV-${nv.body.id}`);
+  assert.deepEqual(one.body.project, { code: 'NV', name: 'Navi', mode: 'solo', left: false });
+  assert.equal((await get(`/api/collab/entry?id=${e.body.id}`)).body.project, null);
+  // Saving back what a read returned (the drawer's edit) still works: its project object is ignored.
+  const back = await post('/api/collab/entry/upsert', { ...one.body, id: `NV-${nv.body.id}`, title: 'edited' });
+  assert.equal(back.status, 200, JSON.stringify(back.body));
+});

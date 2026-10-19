@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
   deleteEntry: vi.fn(),
   search: vi.fn(),
   modules: vi.fn(async () => ({ results: [] })),
+  projectsList: vi.fn(async () => ({ projects: [], modules: [], copy_modules: [], office_url: null, me: null })),
 }));
 vi.mock('../api/client', () => api);
 vi.mock('../sync/useSyncOverview', () => ({ useSyncOverview: () => null }));

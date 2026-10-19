@@ -4,7 +4,7 @@ import {
   addEntry, addEntryAsync, deleteEntry, supersede, doctor,
   editEntry, EntryNotFoundError, reassignModule, upsertModule, deleteModule,
   liveEntry, ftsJoin, readSyncOverview, NeedsMergeError, formatEntryRef, ReadOnlyNoteError,
-  AccessDeniedError, getEntryByUlid, isUlid, getEntryByRef, parseNoteRef, hasSeries, listBindings, noteDestination, ProjectNotFoundError, type NoteRef,
+  AccessDeniedError, getEntryByUlid, isUlid, getEntryByRef, parseNoteRef, hasSeries, listBindings, noteDestination, ProjectNotFoundError, findProject, type NoteRef,
 } from '@collab-mcp/core';
 
 const db = getDb();
@@ -24,11 +24,11 @@ const refKey = (r: NoteRef) => `${r.series}:${r.id}`;
 /** The series column, or 'E' on a notebook from before migration 0009. */
 const seriesCol = (alias = '') => (hasSeries(db) ? `${alias}series` : `'E' AS series`);
 
-export function runSearch(db: any, { q = '', type, module, agent, kind = 'signal', category, since }: any = {}) {
+export function runSearch(db: any, { q = '', type, module, agent, kind = 'signal', category, since, project }: any = {}) {
   if (!db) throw new Error('Database not available');
 
   let query = `
-    SELECT e.id, ${hasSeries(db) ? 'e.series' : `'E' AS series`}, e.type, e.kind, e.category, e.title, e.summary, e.module, e.agent, e.created_at,
+    SELECT e.id, ${hasSeries(db) ? 'e.series, e.project_ulid' : `'E' AS series, NULL AS project_ulid`}, e.type, e.kind, e.category, e.title, e.summary, e.module, e.agent, e.created_at,
            snippet(entries_fts, -1, '[[HL]]', '[[/HL]]', '...', 10) as snippet
     FROM entries_fts
     ${ftsJoin(db, 'e')}
@@ -59,6 +59,16 @@ export function runSearch(db: any, { q = '', type, module, agent, kind = 'signal
   if (since) {
     query += ` AND e.created_at >= ?`;
     params.push(since);
+  }
+  // UI parity Task 10: a project's notes (its code), or "none" for notes in no project (E).
+  if (project && hasSeries(db)) {
+    if (String(project).toLowerCase() === 'none') query += ` AND e.project_ulid IS NULL`;
+    else {
+      const p = findProject(db, String(project));
+      if (!p) return [];
+      query += ` AND e.project_ulid = ?`;
+      params.push(p.ulid);
+    }
   }
   // Prefix-match + escape via the shared core helper so "cus" -> "cus"* recalls
   // partial words and special chars can't throw FTS5 syntax errors.
@@ -99,11 +109,12 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     const kind = url.searchParams.get('kind') || 'signal';
     const category = url.searchParams.get('category');
     const since = url.searchParams.get('since');
+    const project = url.searchParams.get('project');
 
     if (!db) return send(500, { error: 'Database not available' });
 
     try {
-      const rows = runSearch(db, { q, type, module, agent, kind, category, since });
+      const rows = runSearch(db, { q, type, module, agent, kind, category, since, project });
       send(200, { results: rows });
     } catch (err: any) {
       send(errStatus(err), { error: err.message });
@@ -208,7 +219,10 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
         entry = getEntryByRef(db, ref);
       }
       if (!entry) return send(404, { error: 'Not found' });
-      send(200, entry);
+      // UI parity Task 10: the note's project, so the drawer can show it.
+      const pu = (entry as any).project_ulid as string | null | undefined;
+      const p = pu ? findProject(db, pu) : null;
+      send(200, { ...entry, project: p ? { code: p.code, name: p.name, mode: p.mode, left: !!p.left_at } : null });
     } catch (err: any) {
       send(errStatus(err), { error: err.message });
     }
@@ -217,8 +231,9 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
   'POST /api/collab/entry/upsert': async (req, res, send, body) => {
     const { id, type, title, summary, description, agent, module, modules, category, task_id, refs, project } = body;
     // UI parity Task 9: the New note form names a project (a code, or "none"); omitted = core's default.
-    if (project !== undefined && (typeof project !== 'string' || !project.trim())) return send(400, { error: 'project must be a project code, or "none".' });
-    if (project !== undefined && id) return send(400, { error: "A note's project is set when it is created; copy it to move it." });
+    // An edit may carry back the note's own project object from a read: it is ignored; a code is a move, refused.
+    if (id && typeof project === 'string') return send(400, { error: "A note's project is set when it is created; copy it to move it." });
+    if (!id && project !== undefined && (typeof project !== 'string' || !project.trim())) return send(400, { error: 'project must be a project code, or "none".' });
     const v = validateEntryInput({ type, title, summary, category });
     if (!v.ok) return send(400, { error: v.errors[0] });
     const resolvedCategory = v.category!;
