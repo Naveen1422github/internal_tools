@@ -118,6 +118,33 @@ test('unknown, office-scope and inactive keys are refused by name; names clash c
   } finally { await o.stop(); }
 });
 
+test('S3-6: names clash case-insensitively beyond ASCII; control characters are refused', async () => {
+  const o = await office();
+  try {
+    const { n, p } = await team(o);
+    const post = (body: unknown) => requestJson(o.target(n), 'POST', `/v1/projects/${p}/roles`, body);
+    assert.equal((await post({ name: 'Équipe', keys: [] })).status, 200);
+    const clash = await post({ name: 'équipe', keys: [] });
+    assert.equal(clash.status, 409);
+    assert.equal(clash.body.error, 'SH already has a role called "Équipe"');
+    // the same letter written decomposed (E + combining acute) clashes too
+    const nfd = await post({ name: 'e\u0301quipe', keys: [] });
+    assert.equal(nfd.status, 409);
+    // renaming into a non-ASCII clash is refused
+    const other = await post({ name: 'Straße', keys: [] });
+    assert.equal(other.status, 200);
+    assert.equal((await requestJson(o.target(n), 'PUT', `/v1/projects/${p}/roles/${other.body.role.ulid}`, { name: 'ÉQUIPE' })).status, 409);
+    for (const name of ['Bad\u0000name', 'Bad\nname', 'Bad\tname', 'Bad\u001bname', 'Bad\u007fname']) {
+      const res = await post({ name, keys: [] });
+      assert.equal(res.status, 400, JSON.stringify(name));
+      assert.equal(res.body.error, 'a role name can\'t contain control characters');
+    }
+    const ren = await requestJson(o.target(n), 'PUT', `/v1/projects/${p}/roles/${other.body.role.ulid}`, { name: 'Line\nbreak' });
+    assert.equal(ren.status, 400);
+    assert.equal(roleById(o, other.body.role.ulid)!.name, 'Straße');
+  } finally { await o.stop(); }
+});
+
 test('renaming, re-keying or deleting Owner -> 409; Editor can be renamed and re-keyed; Editor keeps its stored task.* keys', async () => {
   const o = await office();
   try {
@@ -154,9 +181,20 @@ test('renaming, re-keying or deleting Owner -> 409; Editor can be renamed and re
     assert.equal(dr.body.error, "Reader is a built-in role and can't be deleted");
     const dw = await requestJson(o.target(n), 'DELETE', `/v1/projects/${p}/roles/${editor.ulid}`);
     assert.equal(dw.body.error, "Writer is a built-in role and can't be deleted");
-    // a starter may take back its built-in name
-    assert.equal((await requestJson(o.target(n), 'PUT', `/v1/projects/${p}/roles/${editor.ulid}`, { name: 'Editor' })).status, 200);
-    assert.equal(roleById(o, editor.ulid)!.name, 'Editor');
+    // S3-6: a built-in name only for the role that holds it now: once renamed, Editor can't take "Editor" back
+    const back = await requestJson(o.target(n), 'PUT', `/v1/projects/${p}/roles/${editor.ulid}`, { name: 'Editor' });
+    assert.equal(back.status, 409);
+    assert.equal(back.body.error, '"Editor" is the name of a built-in role');
+    assert.equal(roleById(o, editor.ulid)!.name, 'Writer');
+    // ... and no other starter can take it either
+    const contributor = roleRow(o, p, 'Contributor')!;
+    const steal = await requestJson(o.target(n), 'PUT', `/v1/projects/${p}/roles/${contributor.ulid}`, { name: 'editor' });
+    assert.equal(steal.status, 409);
+    assert.equal(steal.body.error, '"editor" is the name of a built-in role');
+    assert.equal(roleById(o, contributor.ulid)!.name, 'Contributor');
+    // a starter may still change the case of its own built-in name
+    assert.equal((await requestJson(o.target(n), 'PUT', `/v1/projects/${p}/roles/${contributor.ulid}`, { name: 'CONTRIBUTOR' })).status, 200);
+    assert.equal(roleById(o, contributor.ulid)!.name, 'CONTRIBUTOR');
   } finally { await o.stop(); }
 });
 

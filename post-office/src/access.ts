@@ -4,6 +4,7 @@ import { StoreError, getMeta, setMeta, type Store } from "./store.js";
 import { OFFICE_ORIGIN, lastSeq, prep } from "./deliveries.js";
 
 // RnR (R1, R13): the office owns who may do what. Tables live in PO_SCHEMA.
+/** The one fixed project role (S3-2): the office finds Owners by this name. */
 const OWNER = "Owner";
 const OFFICE_ADMIN = "Office admin";
 const OFFICE_MEMBER = "Office member";
@@ -253,7 +254,10 @@ export function syncReplays(db: Store, deviceId: string, projectUlid: string, be
 //   project, and never a starter name (a starter role may keep or take back one).
 // `actor = null` = the office machine's CLI: no keys checked, the structural rules still hold.
 const ROLE_NAME_MAX = 40;
-const STARTER_NAMES = STARTER_PROJECT_ROLES.map((r) => r.name.toLowerCase());
+/** One fold for every name comparison (S3-6): NFC first, so "É" and "E\u0301" meet; full Unicode case, not SQLite's ASCII-only lower(). */
+const foldName = (s: string) => s.normalize("NFC").toLowerCase();
+const STARTER_NAMES = STARTER_PROJECT_ROLES.map((r) => foldName(r.name));
+const CONTROL = /[\u0000-\u001f\u007f]/;
 
 interface RoleRow { ulid: string; name: string; keys: string; is_starter: number }
 
@@ -263,18 +267,25 @@ function projectRoleRow(db: Store, projectUlid: string, roleUlid: string): RoleR
   return r;
 }
 
-function isOwnerRole(r: RoleRow): boolean {
-  return r.is_starter === 1 && r.name === OWNER;
+/** S3-2: the starter Owner role (a custom role can never be named "Owner", S3-6). */
+export function isOwnerRole(r: { name: string; is_starter: number | boolean }): boolean {
+  return (r.is_starter === 1 || r.is_starter === true) && r.name === OWNER;
 }
 
-/** S3-6. `self` = the role being renamed (it may keep its own name, in any case). */
+/**
+ * S3-6. `self` = the role being renamed: it may keep its own name in any case,
+ * and that is the only way to hold a built-in name (a renamed Editor can't take
+ * "Editor" back, and Contributor can't take it either).
+ */
 function checkRoleName(db: Store, projectUlid: string, raw: unknown, self: RoleRow | null): string {
   const name = typeof raw === "string" ? raw.trim() : "";
   if (!name) throw new StoreError("a role needs a name");
+  if (CONTROL.test(name)) throw new StoreError("a role name can't contain control characters");
   if (name.length > ROLE_NAME_MAX) throw new StoreError(`a role name can be at most ${ROLE_NAME_MAX} characters`);
-  if (STARTER_NAMES.includes(name.toLowerCase()) && !self?.is_starter) throw new StoreError(`"${name}" is the name of a built-in role`, 409);
-  const clash = db.prepare(`SELECT ulid, name FROM po_roles WHERE project_ulid = ? AND lower(name) = lower(?) AND ulid <> ?`)
-    .get(projectUlid, name, self?.ulid ?? "") as { name: string } | undefined;
+  const folded = foldName(name);
+  if (STARTER_NAMES.includes(folded) && !(self && foldName(self.name) === folded)) throw new StoreError(`"${name}" is the name of a built-in role`, 409);
+  const others = db.prepare(`SELECT ulid, name FROM po_roles WHERE project_ulid = ? AND ulid <> ?`).all(projectUlid, self?.ulid ?? "") as Array<{ name: string }>;
+  const clash = others.find((r) => foldName(r.name) === folded);
   if (clash) throw new StoreError(`${codeOf(db, projectUlid)} already has a role called "${clash.name}"`, 409);
   return name;
 }

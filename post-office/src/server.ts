@@ -9,7 +9,7 @@ import {
 } from "./store.js";
 import {
   officeKeys, projectKeys, requireOfficeKey, requireProjectKey, setProjectMember, setOfficeRole,
-  createProjectRole, updateProjectRole, deleteProjectRole,
+  createProjectRole, updateProjectRole, deleteProjectRole, isOwnerRole,
 } from "./access.js";
 import { sanitizeKeys, type AccessPayload } from "@collab-mcp/core";
 import { acceptChanges, fetchDeliveries, fetchReplay, lastSeq } from "./deliveries.js";
@@ -114,7 +114,7 @@ function membersOf(db: Store, projectUlid: string) {
     let parsed: unknown = [];
     try { parsed = JSON.parse(r.keys); } catch { /* grants nothing */ }
     // S3-2: Owner's name and keys are fixed ("all"); the other project roles lock nothing.
-    const locked: "all" | "name" | null = r.is_starter === 1 && r.name === "Owner" ? "all" : null;
+    const locked: "all" | "name" | null = isOwnerRole(r) ? "all" : null;
     return { ulid: r.ulid, name: r.name, keys: sanitizeKeys("project", parsed), is_starter: r.is_starter === 1, locked };
   });
   return { members, roles };
