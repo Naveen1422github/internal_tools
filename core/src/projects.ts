@@ -108,6 +108,23 @@ export function leftProjectError(p: Project): ReadOnlyNoteError {
 
 const FIXES = "Fix: rename one of them (`collab project rename <code> <new name>`), or use a different notebook.";
 
+/**
+ * A core refusal in the web UI's words (UI parity): the same sentence, with
+ * each terminal command replaced by the screen that does it. The CLI and MCP
+ * keep the original. One place, next to the messages it rewrites.
+ */
+export function forTheWeb(message: string): string {
+  return message
+    .replace(/^\[collab(-mcp)?\] /, "")
+    .replace(/^the post office refused: (.*?)\. Fix: rename one of them .*$/, "$1. Rename one of the projects on the Projects page.")
+    .replace(` ${FIXES}`, " Rename one of them on the Projects page.")
+    .replace(/ See `collab project list`\.$/, "")
+    .replace(/Write into another project \(collab project use <code>\), or copy its notes into a solo project: collab copy --from \S+ --to <solo code>$/,
+      "Write into another project, or copy its notes into a solo project (Projects, Copy notes here).")
+    .replace(/To edit it, copy it into a solo project: collab copy --from \S+ --to <solo code>$/,
+      "To edit it, copy it into a solo project (Copy to another project, in the note).");
+}
+
 export function createProject(db: DB, args: { name: string; code: string; mode?: "solo" }): Project {
   needs0009(db);
   const mode = (args.mode ?? "solo") as string;

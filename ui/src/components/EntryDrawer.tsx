@@ -258,7 +258,13 @@ export default function EntryDrawer() {
              ) : (
                <>
                  <button onClick={() => setIsEditing(true)} className="w-full py-2 px-4 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded text-sm font-medium transition-colors">Edit Entry</button>
-                 <button onClick={() => setCopying(true)} disabled={!entry.ulid || !!entry.deleted_at} className="w-full py-2 px-4 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded text-sm font-medium transition-colors disabled:opacity-50">Copy to another project</button>
+                 {(() => {
+                   const why = entry.deleted_at ? "A deleted note can't be copied." : !entry.ulid ? 'This note has no ULID yet, so it cannot be copied.' : null;
+                   return (<>
+                 <button onClick={() => setCopying(true)} disabled={!!why} title={why ?? undefined} className="w-full py-2 px-4 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded text-sm font-medium transition-colors disabled:opacity-50">Copy to another project</button>
+                 {why && <p className="text-xs text-gray-500">{why}</p>}
+                   </>);
+                 })()}
                  <button onClick={() => setSuperseding(true)} className="w-full py-2 px-4 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded text-sm font-medium transition-colors">Supersede</button>
                  <button onClick={() => setDeleting(true)} className="w-full py-2 px-4 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded text-sm font-medium transition-colors">Delete</button>
                </>

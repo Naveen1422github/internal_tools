@@ -83,9 +83,9 @@ export default function Projects() {
   const after = async (message: string) => {
     setOpen(null);
     toast(message);
-    // A new team project brings new keys: read them before its row is judged against them.
-    await loadOffice();
-    await load();
+    // Both at once: a solo change never waits for the office. A new team project's
+    // keys arrive with the overview (its row says "Checking the post office…" until then).
+    await Promise.all([load(), loadOffice()]);
   };
 
   const heading = <h1 className="text-2xl font-bold tracking-tight">Projects</h1>;
@@ -281,7 +281,7 @@ function RenameDialog({ row, onCancel, onDone }: { row: ProjectRow; onCancel: ()
       busy={a.busy}
       error={a.error}
       onCancel={onCancel}
-      onConfirm={() => a.run(async () => { const r = await projectRename(row.code, name.trim()); await onDone(`Project ${r.project.code} is now named ${r.project.name}.`); })}
+      onConfirm={() => a.run(async () => { const r = await projectRename(row.code, name.trim()); await onDone(r.line); })}
     >
       <label className="block space-y-1 text-sm">
         <span>New name</span>
@@ -314,9 +314,7 @@ function PromoteDialog({ row, url, onCancel, onDone }: { row: ProjectRow; url: s
       onCancel={onCancel}
       onConfirm={() => a.run(async () => {
         const r = await projectPromote(row.code);
-        await onDone(r.already
-          ? `Project ${r.project.code} is already a team project of this notebook's post office.`
-          : `Project ${r.project.code} is now a team project; the next note is ${r.next}.`);
+        await onDone(r.lines.join('\n')); // collab project promote's own lines
       })}
     >
       <p className="text-sm">{promoteText(row, url)}</p>

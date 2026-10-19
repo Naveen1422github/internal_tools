@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   closeDb, collabStartDir, createProjectOp, currentProject, findCollabFile, findProject, getDb,
-  notFound, promoteProject, renameProject, resolveDbPath, promotedLines, type Project,
+  notFound, promoteProject, renameProject, resolveDbPath, promotedLines, renamedLine, type Project,
   projectCreatedLines, projectListLines, projectListRows, bindModule, unbindModule, bindChangeLine,
 } from "@collab-mcp/core";
 import { failPlain, type CliResult, type Io } from "./io.js";
@@ -94,7 +94,7 @@ export async function runProject(args: string[], io: Io): Promise<CliResult> {
         const [code, ...nameWords] = words(rest);
         if (!code || nameWords.length === 0) { io.err("usage: collab project rename <code> <new name>"); return { code: 2 }; }
         const p = await renameProject(getDb(), code, nameWords.join(" "));
-        io.out(`Project ${p.code} is now named ${p.name}.`);
+        io.out(renamedLine(p));
         return { code: 0 };
       }
       case "list": {

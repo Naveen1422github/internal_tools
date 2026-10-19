@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { settingsAddress, settingsAutostart, settingsView, type SettingsView } from '../api/client';
+import { settingsAddress, settingsAutostart, settingsName, settingsView, type SettingsView } from '../api/client';
 import { buttonClass, primaryClass } from '../components/Dialog';
 import { toast } from '../components/Toast';
 
@@ -15,6 +15,9 @@ export default function Settings() {
   const [fatal, setFatal] = useState<string | null>(null);
   const load = useCallback(() => settingsView().then((v) => { setView(v); setFatal(null); }).catch((e) => setFatal((e as Error).message)), []);
   useEffect(() => { load(); }, [load]);
+  // Asked on its own: the page shows at once, the name when the office answers.
+  const [name, setName] = useState<{ name: string | null; error: string | null } | null>(null);
+  useEffect(() => { settingsName().then(setName).catch((e) => setName({ name: null, error: (e as Error).message })); }, []);
 
   const heading = <h1 className="text-2xl font-bold tracking-tight">Settings</h1>;
   if (fatal) return <div className="space-y-4">{heading}<p className="text-sm">{fatal}</p></div>;
@@ -26,7 +29,7 @@ export default function Settings() {
       <section className={card}>
         <h2 className="font-semibold">This laptop</h2>
         <div className={row}><span className="text-gray-500">Notebook</span><span>{view.notebook ? <>{view.notebook.described} <span className="break-all text-gray-500">({view.notebook.path})</span></> : '—'}</span></div>
-        <div className={row}><span className="text-gray-500">Member name</span><span>{view.name ?? (view.name_error ?? (view.device_id ? 'Not known' : 'Not shared with a post office'))}</span></div>
+        <div className={row}><span className="text-gray-500">Member name</span><span>{!view.device_id ? 'Not shared with a post office' : !name ? 'Asking the post office…' : name.name ?? name.error ?? 'Not known'}</span></div>
         <div className={row}><span className="text-gray-500">Device id</span><span className="font-mono text-xs break-all">{view.device_id ?? 'None: this notebook has not joined a post office'}</span></div>
       </section>
       <AddressSection view={view} onSaved={load} />

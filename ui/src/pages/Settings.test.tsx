@@ -7,9 +7,9 @@ import { MemoryRouter } from 'react-router-dom';
 const VIEW = () => ({
   notebook: { name: 'main', path: '/data/main/notebook.db', described: 'notebook main (the default)' },
   device_id: 'd-0123456789', post_office: { url: 'https://192.168.1.10:7443', fingerprint: 'ab' },
-  name: 'Naveen', name_error: null, autostart: false, courier_notebook: '/data/main/notebook.db', courier_available: true, open_notebook: '/data/main/notebook.db',
+  autostart: false, courier_notebook: '/data/main/notebook.db', courier_available: true, open_notebook: '/data/main/notebook.db',
 });
-const api = vi.hoisted(() => ({ settingsView: vi.fn(), settingsAddress: vi.fn(), settingsAutostart: vi.fn() }));
+const api = vi.hoisted(() => ({ settingsView: vi.fn(), settingsName: vi.fn(), settingsAddress: vi.fn(), settingsAutostart: vi.fn() }));
 vi.mock('../api/client', () => api);
 
 import Settings from './Settings';
@@ -17,6 +17,7 @@ import Toaster, { useToasts } from '../components/Toast';
 
 function page(setup?: () => void) {
   api.settingsView.mockResolvedValue(VIEW());
+  api.settingsName.mockResolvedValue({ name: 'Naveen', error: null });
   setup?.();
   render(<MemoryRouter><Settings /><Toaster /></MemoryRouter>);
 }
@@ -34,7 +35,7 @@ describe('Settings page', () => {
   });
 
   it('offline: the name says why it is unavailable; the device id still shows', async () => {
-    page(() => api.settingsView.mockResolvedValue({ ...VIEW(), name: null, name_error: "Name unavailable: the post office can't be reached right now." }));
+    page(() => api.settingsName.mockResolvedValue({ name: null, error: "Name unavailable: the post office can't be reached right now." }));
     await screen.findByText("Name unavailable: the post office can't be reached right now.");
     screen.getByText('d-0123456789');
   });
@@ -67,7 +68,7 @@ describe('Settings page', () => {
   });
 
   it('a notebook with no post office says so, with no address form', async () => {
-    page(() => api.settingsView.mockResolvedValue({ ...VIEW(), device_id: null, post_office: null, name: null, autostart: null }));
+    page(() => api.settingsView.mockResolvedValue({ ...VIEW(), device_id: null, post_office: null, autostart: null }));
     await screen.findByText("This notebook isn't connected to a post office.");
     expect(screen.queryByLabelText('The post office moved? Its new address')).toBeNull();
   });

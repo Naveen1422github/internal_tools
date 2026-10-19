@@ -73,6 +73,7 @@ import {
   bindChangeLine,
   promoteProject,
   promotedLines,
+  renamedLine,
   renameProject,
   notFound,
   teamListLines,
@@ -1585,7 +1586,7 @@ server.registerTool(
   async (args) => {
     try {
       const p = await renameProject(db, args.project, args.name);
-      return { content: [{ type: "text", text: `Project ${p.code} is now named ${p.name}.` }], structuredContent: structured({ project: p }) };
+      return { content: [{ type: "text", text: renamedLine(p) }], structuredContent: structured({ project: p }) };
     } catch (e) {
       return toolError(e);
     }

@@ -188,8 +188,9 @@ export interface NoteDestination {
  * the same rule (resolveProjectArg, folder included). Throws what the save
  * would throw for an unknown or left project; writes nothing.
  */
-export function noteDestination(db: DB, args: { module?: string; project?: string }): NoteDestination {
-  const p = resolveProjectArg(db, { type: "decision", title: "", summary: "", module: args.module, project: args.project }, true);
+export function noteDestination(db: DB, args: { module?: string; project?: string }, opts: { folder?: boolean } = {}): NoteDestination {
+  // `folder: false`: a caller with no folder of its own (the web server) skips the .collab step.
+  const p = resolveProjectArg(db, { type: "decision", title: "", summary: "", module: args.module, project: args.project }, opts.folder !== false);
   const why: NoteDestination["why"] = !p ? "none"
     : args.project !== undefined ? "named"
     : boundProjectFor(db, args.module)?.ulid === p.ulid ? "bound" : "folder";

@@ -4,7 +4,7 @@ import {
   addEntry, addEntryAsync, deleteEntry, supersede, doctor,
   editEntry, EntryNotFoundError, reassignModule, upsertModule, deleteModule,
   liveEntry, ftsJoin, readSyncOverview, NeedsMergeError, formatEntryRef, ReadOnlyNoteError,
-  AccessDeniedError, getEntryByUlid, isUlid, getEntryByRef, parseNoteRef, hasSeries, listBindings, noteDestination, ProjectNotFoundError, findProject, type NoteRef,
+  AccessDeniedError, getEntryByUlid, isUlid, getEntryByRef, parseNoteRef, hasSeries, listBindings, noteDestination, ProjectNotFoundError, findProject, forTheWeb, type NoteRef,
 } from '@collab-mcp/core';
 
 const db = getDb();
@@ -258,11 +258,13 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       }));
 
       if (!id) {
-        // Create: core owns id/ulid/author/links at every schema level.
+        // Create: core owns id/ulid/author/links at every schema level. No project named: the
+        // module's binding decides, never the folder the web server was started in (it has none).
+        const where = project !== undefined ? project : (noteDestination(db, { module: primaryModule ?? undefined }, { folder: false }).project?.code ?? 'none');
         const { id: newId, series, ulid } = await addEntryAsync(db, {
           type, title, summary, description, agent: agent || undefined,
           module: primaryModule ?? undefined, modules: orderedModules, category: resolvedCategory as any,
-          task_id: task_id || undefined, refs: normRefs, ...(project !== undefined ? { project } : {}),
+          task_id: task_id || undefined, refs: normRefs, project: where,
         });
         // Stage C: id null = saved pending; reach it by ulid until the courier numbers it.
         return send(200, { ok: true, id: newId, series, pending: newId === null, ulid });
@@ -279,7 +281,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       send(200, { ok: true, id: r.id });
     } catch (err: any) {
       // Core's sentence without its "[collab] " prefix: the web shows it as is (UI parity Task 9).
-      const error = String(err.message).replace(/^\[collab(-mcp)?\] /, '');
+      const error = forTheWeb(String(err.message));
       if (err instanceof EntryNotFoundError) return send(404, { error });
       if (err instanceof NeedsMergeError) return send(409, { error }); // V9: settle it on /merge/:id
       if (err instanceof ReadOnlyNoteError) return send(403, { error }); // a team you left (stage B2, P11)
@@ -294,10 +296,11 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     const module = url.searchParams.get('module') || undefined;
     const project = url.searchParams.get('project') || undefined;
     try {
-      send(200, noteDestination(db, { module, project }));
+      // The web server has no folder of its own: its notes never follow the .collab it was started under.
+      send(200, noteDestination(db, { module, project }, { folder: false }));
     } catch (err: any) {
       const status = err instanceof ProjectNotFoundError ? 404 : err instanceof ReadOnlyNoteError ? 403 : errStatus(err);
-      send(status, { error: String(err.message).replace(/^\[collab\] /, '') });
+      send(status, { error: forTheWeb(String(err.message)) });
     }
   },
 

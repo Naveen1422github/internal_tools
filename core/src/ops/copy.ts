@@ -15,7 +15,7 @@ import { resolveAuthor } from "../author.js";
 import { findProject, isLeftProject, isTeamProject, notFound, listProjects, type Project } from "../projects.js";
 import { resolveAllocator, allocateWithRetry, SAVE_ATTEMPT } from "../sync/allocator.js";
 import { ensureCrsqlite } from "../sync/extension.js";
-import { assertCan } from "../access/can.js";
+import { assertCan, can } from "../access/can.js";
 import { newUlid, isUlid, parseNoteRef } from "../ulid.js";
 import type { RefType } from "../constants.js";
 
@@ -227,7 +227,7 @@ export async function applyCopy(db: DB, plan: CopyPlan): Promise<CopyResult> {
   // target needs note.create. The copied-to breadcrumbs on the originals are
   // not gated here (an open Task 3 question).
   if (now.source.project_ulid) assertCan(db, now.source.project_ulid, "note.copy.out");
-  assertCan(db, target.ulid, "note.create");
+  assertCan(db, target.ulid, "note.create"); // the same checks as copyRefusal, which asks without throwing
 
   // Numbers for a team target, asked BEFORE the transaction (never inside it).
   // Solo: no allocator, no network, ever (rule 4).
@@ -361,4 +361,17 @@ export function copyResultLines(r: CopyResult): string[] {
   if (waiting) out.push(`${notes(waiting)} wait for their number from the post office: ${r.pending_reason}`);
   if (r.plan.skipped.length) out.push(`Skipped ${r.plan.skipped.length} already copied.`);
   return out;
+}
+
+/**
+ * Why this plan would be refused (applyCopy's own R8 checks), or null: so a
+ * page can say so before showing the list (UI parity Task 7a).
+ */
+export function copyRefusal(db: DB, plan: CopyPlan): string | null {
+  for (const [ulid, key] of [[plan.source.project_ulid ?? null, "note.copy.out"], [plan.target.ulid, "note.create"]] as const) {
+    if (key === "note.copy.out" && !ulid) continue;
+    const c = can(db, ulid, key);
+    if (!c.ok) return c.reason;
+  }
+  return null;
 }

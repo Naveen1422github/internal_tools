@@ -58,3 +58,8 @@ export function promotedLines(db: DB, p: Project, wasTeam: boolean): string[] {
     "Its notes keep their numbers; the courier sends them to the team on its next sync.",
   ];
 }
+
+/** `collab project rename` / collab_project_rename / the Projects page, word for word. */
+export function renamedLine(p: Project): string {
+  return `Project ${p.code} is now named ${p.name}.`;
+}

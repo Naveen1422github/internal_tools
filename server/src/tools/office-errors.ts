@@ -4,7 +4,7 @@
 // own refusals pass through word for word; only a failure to reach it at all
 // gets a sentence of ours.
 import {
-  AccessDeniedError, AccessRevokedError, NotConnectedError, OfficeRefusedError, OfficeUnreachableError, PinMismatchError,
+  forTheWeb, AccessDeniedError, AccessRevokedError, NotConnectedError, OfficeRefusedError, OfficeUnreachableError, PinMismatchError,
   ProjectClashError, ProjectNotFoundError, ReadOnlyNoteError, SchemaMismatchError,
 } from '@collab-mcp/core';
 
@@ -12,8 +12,8 @@ export const NOT_CONNECTED = "This notebook isn't connected to a post office.";
 export const REVOKED = "This laptop's access to the post office was revoked.";
 export const UNREACHABLE = "The post office can't be reached right now.";
 
-/** Core's message without its "[collab] " / "[collab-mcp] " prefix. */
-export const plain = (msg: string) => msg.replace(/^\[collab(-mcp)?\] /, '');
+/** Core's message for the web: no "[collab] " prefix, and screens instead of terminal commands. */
+export const plain = (msg: string) => forTheWeb(msg);
 
 /**
  * An HTTP status and `{ error }` for an error thrown by a core operation, or

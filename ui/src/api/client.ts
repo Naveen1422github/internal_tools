@@ -284,7 +284,7 @@ export const teamOffice = () => sendJson<TeamRoster>('GET', '/api/team/office');
 /** `role` is the role's name. */
 export const teamSetMember = (b: InScope & { device: string; role: string }) =>
   sendJson<{ ok: true }>('POST', '/api/team/member/set', b);
-/** Project scope only: revoking a device from the office stays on the CLI (S3-7). */
+/** Project scope only: revoking a device from the office is teamRevoke (UI parity D4). */
 export const teamRemoveMember = (b: { project: string; device: string }) =>
   sendJson<{ ok: true }>('POST', '/api/team/member/remove', b);
 /** UI parity D2: `collab team invite` on the web. The join code is shown once: never store it. */
@@ -345,8 +345,8 @@ export const projectsList = () => sendJson<ProjectList>('GET', '/api/projects');
 export const projectCreate = (b: { name: string; code: string; team: boolean }) =>
   sendJson<{ project: Project; lines: string[] }>('POST', '/api/projects/create', b);
 export const projectPromote = (code: string) =>
-  sendJson<{ project: Project; next?: string; already?: true }>('POST', '/api/projects/promote', { code });
-export const projectRename = (code: string, name: string) => sendJson<{ project: Project }>('POST', '/api/projects/rename', { code, name });
+  sendJson<{ project: Project; next?: string; already?: true; lines: string[] }>('POST', '/api/projects/promote', { code });
+export const projectRename = (code: string, name: string) => sendJson<{ project: Project; line: string }>('POST', '/api/projects/rename', { code, name });
 export const projectBind = (module: string, code: string) => sendJson<{ line: string }>('POST', '/api/projects/bind', { module, code });
 export const projectUnbind = (module: string) => sendJson<{ line: string }>('POST', '/api/projects/unbind', { module });
 /** `collab copy` on the web: list what would be copied, then copy exactly that list. */
@@ -373,9 +373,6 @@ export interface SettingsView {
   notebook: { name: string | null; path: string; described: string } | null;
   device_id: string | null;
   post_office: { url: string; fingerprint: string } | null;
-  /** This device's name at the post office; null with name_error when it can't be asked. */
-  name: string | null;
-  name_error: string | null;
   /** Start sync at login; null when this machine's courier isn't set up. */
   autostart: boolean | null;
   courier_notebook: string | null;
@@ -383,5 +380,7 @@ export interface SettingsView {
   open_notebook: string | null;
 }
 export const settingsView = () => sendJson<SettingsView>('GET', '/api/settings');
+/** This device's name at the post office; null with `error` when it can't be asked. */
+export const settingsName = () => sendJson<{ name: string | null; error: string | null }>('GET', '/api/settings/name');
 export const settingsAddress = (url: string) => sendJson<{ url: string; line: string }>('POST', '/api/settings/address', { url });
 export const settingsAutostart = (on: boolean) => sendJson<{ on: boolean; lines: string[] }>('POST', '/api/settings/autostart', { on });

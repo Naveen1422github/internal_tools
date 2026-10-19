@@ -30,7 +30,7 @@ const bad = (msg: string): never => { throw new BadRequest(msg); };
 let outage = false;
 
 /** The office's answer, or the error to send instead. Read the target per request: setup may run while the server is up. */
-async function ask(method: Method, path: string, body?: unknown): Promise<{ ok: true; body: any } | { ok: false; status: number; error: string }> {
+export async function ask(method: Method, path: string, body?: unknown): Promise<{ ok: true; body: any } | { ok: false; status: number; error: string }> {
   const target = postOfficeTargetFromDb(db);
   if (!target) return { ok: false, status: 409, error: NOT_CONNECTED };
   try {
@@ -114,7 +114,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     await forward(send, 'PUT', path, { role: b.role });
   }),
 
-  // Project scope only: revoking a device stays on the CLI (S3-7).
+  // Project scope only: revoking a device from the office is POST /api/team/revoke (UI parity D4).
   'POST /api/team/member/remove': guarded(async (_req, send, b) => {
     const project = projectOf(b);
     if (!isDevice(b.device)) bad('Choose a member.');

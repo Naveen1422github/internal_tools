@@ -46,6 +46,7 @@ test('the folder\'s .collab decides when nothing else does; a folder naming a le
     const d = noteDestination(t.db, {});
     assert.deepEqual([d.why, d.project?.code], ['folder', 'NV']);
     assert.equal(d.line, "It goes into NV (Navi) because this folder's .collab names it. It stays on this laptop.");
+    assert.equal(noteDestination(t.db, {}, { folder: false }).why, 'none', 'the web server has no folder of its own');
     t.db.prepare(`INSERT INTO projects (ulid, name, code, mode, team) VALUES ('01JPR0JECTTM00000000000000', 'Team', 'TM', 'team', 'fp')`).run();
     markProjectLeft(t.db, 'TM');
     writeFileSync(join(dir, '.collab'), `notebook = t\nproject = 01JPR0JECTTM00000000000000\n`);

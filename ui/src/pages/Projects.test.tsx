@@ -121,7 +121,7 @@ describe('Projects page', () => {
   });
 
   it('rename sends the new name', async () => {
-    page(() => api.projectRename.mockResolvedValue({ project: { code: 'NV', name: 'Navigator' } }));
+    page(() => api.projectRename.mockResolvedValue({ project: { code: 'NV', name: 'Navigator' }, line: 'Project NV is now named Navigator.' }));
     fireEvent.click((await rowOf('NV')).getByRole('button', { name: 'Rename' }));
     fireEvent.change(dialog().getByLabelText('New name'), { target: { value: 'Navigator' } });
     fireEvent.click(dialog().getByRole('button', { name: 'Rename' }));
@@ -130,7 +130,7 @@ describe('Projects page', () => {
   });
 
   it('promote asks first, explaining what changes, with the next number', async () => {
-    page(() => api.projectPromote.mockResolvedValue({ project: { code: 'NV' }, next: 'NV-5' }));
+    page(() => api.projectPromote.mockResolvedValue({ project: { code: 'NV' }, next: 'NV-5', lines: ['Project NV (Navi) is now a team project: the next note is NV-5.'] }));
     const nv = await rowOf('NV');
     await waitFor(() => expect(disabled(nv.getByRole('button', { name: 'Make team project' }))).toBe(false));
     fireEvent.click(nv.getByRole('button', { name: 'Make team project' }));
@@ -141,7 +141,7 @@ describe('Projects page', () => {
     expect(api.projectPromote).not.toHaveBeenCalled();
     fireEvent.click(dialog().getByRole('button', { name: 'Make team project' }));
     await waitFor(() => expect(api.projectPromote).toHaveBeenCalledWith('NV'));
-    await screen.findByText('Project NV is now a team project; the next note is NV-5.');
+    await screen.findByText('Project NV (Navi) is now a team project: the next note is NV-5.');
   });
 
   it('bind and unbind show core\'s line; a left project can\'t be bound to', async () => {
@@ -163,14 +163,14 @@ describe('Projects page', () => {
   it('promote: a project with no notes starts at CODE-1; an already-team answer says so', async () => {
     page(() => {
       api.projectsList.mockResolvedValue({ ...LIST(), projects: [row({ ulid: 'u-em', name: 'Empty', code: 'EM', highest: 0 })] });
-      api.projectPromote.mockResolvedValue({ project: { code: 'EM' }, already: true });
+      api.projectPromote.mockResolvedValue({ project: { code: 'EM' }, already: true, lines: ["Project EM (Empty) is already a team project of this notebook's post office."] });
     });
     const em = await rowOf('EM');
     await waitFor(() => expect(disabled(em.getByRole('button', { name: 'Make team project' }))).toBe(false));
     fireEvent.click(em.getByRole('button', { name: 'Make team project' }));
     dialog().getByText(/Its notes keep their numbers; new notes start at EM-1 at the post office/);
     fireEvent.click(dialog().getByRole('button', { name: 'Make team project' }));
-    await screen.findByText("Project EM is already a team project of this notebook's post office.");
+    await screen.findByText("Project EM (Empty) is already a team project of this notebook's post office.");
     expect(api.projectsList).toHaveBeenCalledTimes(2);
   });
 
@@ -197,7 +197,7 @@ describe('Projects page', () => {
     screen.getByRole('dialog');
     fireEvent.click(dialog().getByRole('button', { name: 'Working…' }));
     expect(api.projectRename).toHaveBeenCalledTimes(1);
-    finish({ project: { code: 'NV', name: 'Navigator' } });
+    finish({ project: { code: 'NV', name: 'Navigator' }, line: 'Project NV is now named Navigator.' });
     await screen.findByText('Project NV is now named Navigator.');
   });
 

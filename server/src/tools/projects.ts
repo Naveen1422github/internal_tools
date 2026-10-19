@@ -6,7 +6,7 @@ import http from 'node:http';
 import {
   getDb, projectListRows, createProjectOp, projectCreatedLines, promoteProject, renameProject, highestNumberOf,
   bindModule, unbindModule, bindChangeLine, findProject, notFound, getSyncValue, SYNC_KEYS,
-  planCopy, applyCopy, copyPlanLines, copyResultLines, can, resolveAuthor, type CopyArgs,
+  planCopy, applyCopy, copyPlanLines, copyResultLines, copyRefusal, resolveAuthor, promotedLines, renamedLine, type CopyArgs,
 } from '@collab-mcp/core';
 import { coreFailure } from './office-errors.js';
 
@@ -84,15 +84,16 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     const before = findProject(db, code);
     if (!before) throw notFound(db, code);
     const p = await promoteProject(db, code);
-    // Already a team project of this office: nothing changed, and its numbers are the office's.
-    if (before.mode === 'team') return send(200, { project: p, already: true });
+    // collab project promote's own lines (core promotedLines). Already team: nothing changed.
+    const lines = promotedLines(db, p, before.mode === 'team');
+    if (before.mode === 'team') return send(200, { project: p, already: true, lines });
     // What promoteProject sent as the office's seed: the office continues after it.
-    send(200, { project: p, next: `${p.code}-${highestNumberOf(db, p.code) + 1}` });
+    send(200, { project: p, next: `${p.code}-${highestNumberOf(db, p.code) + 1}`, lines });
   }),
 
   'POST /api/projects/rename': guarded(async (send, b) => {
     const p = await renameProject(db, text(b.code, 'Choose a project.'), text(b.name, 'Give the project a name.'));
-    send(200, { project: p });
+    send(200, { project: p, line: renamedLine(p) });
   }),
 
   'POST /api/projects/bind': guarded((send, b) => {
@@ -102,11 +103,9 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
   // `collab copy` on the web (UI parity Task 7a): the same list -> ask -> copy, with core's lines.
   'POST /api/projects/copy/plan': guarded((send, b) => {
     const plan = planCopy(db, copyArgs(b));
-    // The same checks applyCopy makes, asked now, so a refusal comes before the list, not after it.
-    for (const [ulid, key] of [[plan.source.project_ulid ?? null, 'note.copy.out'], [plan.target.ulid, 'note.create']] as const) {
-      const c = can(db, ulid, key);
-      if (!c.ok) return send(403, { error: c.reason });
-    }
+    // applyCopy's own checks, asked now, so a refusal comes before the list, not after it.
+    const refused = copyRefusal(db, plan);
+    if (refused) return send(403, { error: refused });
     send(200, { source: plan.source, target: plan.target, filters: plan.filters, items: plan.items, skipped: plan.skipped, lines: copyPlanLines(plan) });
   }),
 

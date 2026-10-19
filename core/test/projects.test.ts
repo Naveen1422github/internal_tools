@@ -89,3 +89,17 @@ test('a pre-0009 notebook: every function says it needs migration 0009', async (
     assert.throws(() => findProject(t.db as any, 'AB'), /needs migration 0009/);
   } finally { t.cleanup(); }
 });
+
+// UI parity (whole-branch review): the web shows screens, not terminal commands.
+test('forTheWeb: the same refusal with the commands replaced by screens', async () => {
+  const { forTheWeb } = await import('../src/projects.js');
+  assert.equal(forTheWeb('[collab] this notebook already has a project named "Navi" (NV). Fix: rename one of them (`collab project rename <code> <new name>`), or use a different notebook.'),
+    'this notebook already has a project named "Navi" (NV). Rename one of them on the Projects page.');
+  assert.equal(forTheWeb('[collab] the post office refused: that project name is taken. Fix: rename one of them (`collab project rename <code> <new name>`), or use a different notebook.'),
+    'that project name is taken. Rename one of the projects on the Projects page.');
+  assert.equal(forTheWeb('[collab] no project "ZZ" in this notebook. Known: NV. See `collab project list`.'), 'no project "ZZ" in this notebook. Known: NV.');
+  assert.equal(forTheWeb('[collab] OL (Old) is a team you left: its notes are read-only and no note can be added to it. Write into another project (collab project use <code>), or copy its notes into a solo project: collab copy --from OL --to <solo code>'),
+    'OL (Old) is a team you left: its notes are read-only and no note can be added to it. Write into another project, or copy its notes into a solo project (Projects, Copy notes here).');
+  assert.equal(forTheWeb('[collab] OL-3 is a note of OL (Old), a team you left: it is read-only. To edit it, copy it into a solo project: collab copy --from OL --to <solo code>'),
+    'OL-3 is a note of OL (Old), a team you left: it is read-only. To edit it, copy it into a solo project (Copy to another project, in the note).');
+});

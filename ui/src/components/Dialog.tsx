@@ -50,7 +50,7 @@ export default function Dialog({
     if (onConfirm && !confirmDisabled && !busy) onConfirm();
   };
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onCancel(); }}>
+    <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/30 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onCancel(); }}>
       <div
         ref={box}
         role="dialog"

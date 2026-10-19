@@ -23,8 +23,8 @@ test('settings: the notebook, the device id, the name the office knows, and the 
   const r = await srv.api('/api/settings');
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.device_id, srv.a.device);
-  assert.equal(r.body.name, 'a');
-  assert.equal(r.body.name_error, null);
+  const n = await srv.api('/api/settings/name');
+  assert.deepEqual(n.body, { name: 'a', error: null });
   assert.equal(r.body.post_office.url, core.getSyncValue(srv.db, core.SYNC_KEYS.url));
   assert.equal(path.resolve(r.body.notebook.path), path.resolve(srv.a.path));
   assert.equal(r.body.autostart, null, 'no courier set up in this temp folder');
@@ -73,7 +73,7 @@ test('a courier set up for another notebook: its start-at-login is not shown as 
 test('office down: the name is unavailable, the rest still shows', async () => {
   await srv.office.down();
   const r = await srv.api('/api/settings');
-  assert.equal(r.status, 200);
-  assert.deepEqual([r.body.name, r.body.device_id], [null, srv.a.device]);
-  assert.equal(r.body.name_error, "Name unavailable: the post office can't be reached right now.");
+  assert.deepEqual([r.status, r.body.device_id], [200, srv.a.device]);
+  const n = await srv.api('/api/settings/name');
+  assert.deepEqual(n.body, { name: null, error: "Name unavailable: the post office can't be reached right now." });
 });

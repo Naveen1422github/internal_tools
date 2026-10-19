@@ -4,8 +4,8 @@
 // sync autostart`). The last two are the courier's own functions, loaded at run
 // time the way the CLI loads the courier (D11): no new package dependency.
 import http from 'node:http';
-import { getDb, thisLaptop, postOfficeTargetFromDb, requestJson, lastResolution, samePath } from '@collab-mcp/core';
-import { UNREACHABLE } from './office-errors.js';
+import { getDb, thisLaptop, postOfficeTargetFromDb, lastResolution, samePath } from '@collab-mcp/core';
+import { ask as askOffice } from './team.js';
 
 const db = getDb();
 type Send = (status: number, body: any) => void;
@@ -22,25 +22,21 @@ async function courier(): Promise<CourierModule | null> {
   try { return (await import('@collab-mcp/courier' as string)) as CourierModule; } catch { return null; }
 }
 
-/** This device's name, as the office knows it; null and why when it can't be asked. */
+/** This device's name, as the office knows it; null and why when it can't be asked (the team routes' words). */
 async function nameAtOffice(device: string | null): Promise<{ name: string | null; error: string | null }> {
-  const target = postOfficeTargetFromDb(db);
-  if (!target || !device) return { name: null, error: null };
-  try {
-    const r = await requestJson(target, 'GET', '/v1/status', undefined, { timeoutMs: 4000 });
-    if (r.status !== 200) return { name: null, error: String(r.body?.error ?? `The post office answered ${r.status}.`) };
-    const members = (Array.isArray(r.body?.members) ? r.body.members : []) as Array<{ device_id: string; name: string }>;
-    const me = members.find((m) => m.device_id === device);
-    return { name: me?.name ?? null, error: null };
-  } catch {
-    return { name: null, error: `Name unavailable: ${UNREACHABLE[0].toLowerCase()}${UNREACHABLE.slice(1)}` };
-  }
+  if (!postOfficeTargetFromDb(db) || !device) return { name: null, error: null };
+  const r = await askOffice('GET', '/v1/status');
+  if (!r.ok) return { name: null, error: `Name unavailable: ${r.error.charAt(0).toLowerCase()}${r.error.slice(1)}` };
+  const members = (Array.isArray(r.body?.members) ? r.body.members : []) as Array<{ device_id: string; name: string }>;
+  return { name: members.find((m) => m.device_id === device)?.name ?? null, error: null };
 }
 
 export const routes: Record<string, (req: http.IncomingMessage, res: http.ServerResponse, send: Send, body: any) => Promise<any>> = {
+  // The name is asked separately (GET /api/settings/name): the page never waits for the office.
+  'GET /api/settings/name': async (_req, _res, send) => send(200, await nameAtOffice(thisLaptop(db).device_id)),
+
   'GET /api/settings': async (_req, _res, send) => {
     const me = thisLaptop(db);
-    const { name, error } = await nameAtOffice(me.device_id);
     const c = await courier();
     const cfg = c ? c.readCourierConfig(c.courierDir()) : null;
     const open = lastResolution()?.path ?? null;
@@ -48,8 +44,6 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     const mine = !!cfg && !!open && samePath(cfg.dbPath, open);
     send(200, {
       ...me,
-      name,
-      name_error: error,
       // Start-at-login belongs to the courier set up on this machine; null: not set up (or another notebook's).
       autostart: mine ? cfg!.autostart : null,
       courier_notebook: cfg ? cfg.dbPath : null,

@@ -172,9 +172,10 @@ describe('Refused changes page', () => {
     await rowOf('SH-7');
     expect(screen.queryByRole('combobox')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Copy' })).toBeNull();
-    const code = screen.getByText('collab project create <name>');
-    expect(code.tagName).toBe('CODE');
-    expect(code.parentElement!.textContent).toBe('Create a solo project first: collab project create <name>.');
+    // UI parity: the hint points at the Projects page, not a command.
+    const link = screen.getByRole('link', { name: 'Projects' });
+    expect(link.getAttribute('href')).toBe('/projects');
+    expect(link.parentElement!.textContent).toBe('Create a solo project first, on the Projects page (“New project”).');
   });
 
   it('with nothing refused it says so, with no hint', async () => {
