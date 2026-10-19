@@ -270,7 +270,9 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         const { deviceId, secret } = addMember(o.store, String(b?.name ?? ""), { actor: me.device_id });
         ring("access", {});
         log(`${me.name}: added member ${deviceId}`);
-        return send(res, 200, { device_id: deviceId, secret });
+        // UI parity D2: when the code expires, so a page needn't hard-code it (additive; older laptops ignore it).
+        const expires = (o.store.prepare(`SELECT join_expires_at FROM po_members WHERE device_id = ?`).get(deviceId) as { join_expires_at: string }).join_expires_at;
+        return send(res, 200, { device_id: deviceId, secret, expires_at: expires });
       }
       case "GET /v1/office/members":
         // S3-7: any live member (authenticate already refused revoked devices).

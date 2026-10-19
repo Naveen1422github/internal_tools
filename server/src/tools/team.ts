@@ -1,7 +1,7 @@
 // file: server/src/tools/team.ts
 import http from 'node:http';
 import {
-  getDb, postOfficeTargetFromDb, requestJson, listProjects, isUlid,
+  getDb, postOfficeTargetFromDb, requestJson, listProjects, isUlid, formatJoinCode,
   AccessRevokedError, SchemaMismatchError, PinMismatchError,
 } from '@collab-mcp/core';
 import { NOT_CONNECTED, REVOKED, UNREACHABLE } from './office-errors.js';
@@ -119,6 +119,26 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     const project = projectOf(b);
     if (!isDevice(b.device)) bad('Choose a member.');
     await forward(send, 'DELETE', `/v1/projects/${enc(project)}/members/${enc(b.device)}`);
+  }),
+
+  // UI parity D2: `collab team invite` on the web. The office checks office.member.add and
+  // no escalation; the join code is made by core's formatJoinCode, exactly as the CLI does.
+  // The secret is in this answer only: never logged, never stored here.
+  'POST /api/team/invite': guarded(async (_req, send, b) => {
+    const name = isText(b.name) ? b.name.trim() : bad('Give the person a name.');
+    const target = postOfficeTargetFromDb(db);
+    if (!target) return send(409, { error: NOT_CONNECTED });
+    const r = await ask('POST', '/v1/office/members', { name });
+    if (!r.ok) return send(r.status, { error: r.error });
+    const join_code = formatJoinCode({ url: target.url, fingerprint: target.fingerprint, device: r.body.device_id, secret: r.body.secret });
+    send(200, { device_id: r.body.device_id, name, join_code, ...(r.body.expires_at ? { expires_at: r.body.expires_at } : {}) });
+  }),
+
+  // UI parity D4: `collab team revoke` on the web (replaces S3-7). The office checks
+  // office.member.revoke and the rank rule.
+  'POST /api/team/revoke': guarded(async (_req, send, b) => {
+    if (!isDevice(b.device)) bad('Choose a member.');
+    await forward(send, 'DELETE', `/v1/office/members/${enc(b.device)}`);
   }),
 
   'POST /api/team/role/create': guarded(async (_req, send, b) => {

@@ -226,6 +226,72 @@ test('after member/set, the second laptop\'s courier refreshes access on the acc
   }
 });
 
+// UI parity Task 4: invite and revoke, through the same office endpoints as `collab team invite|revoke`.
+test('invite: the join code is the CLI\'s (formatJoinCode), redeems once, and the secret is never logged', async () => {
+  const logged: string[] = [];
+  const realLog = console.log, realErr = console.error;
+  console.log = (...a: unknown[]) => { logged.push(a.join(' ')); };
+  console.error = (...a: unknown[]) => { logged.push(a.join(' ')); };
+  let r: any;
+  try {
+    r = await srv.api('/api/team/invite', { name: '  Rinku  ' });
+  } finally { console.log = realLog; console.error = realErr; }
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(Object.keys(r.body).sort(), ['device_id', 'expires_at', 'join_code', 'name']);
+  assert.equal(r.body.name, 'Rinku');
+  const jc = core.parseJoinCode(r.body.join_code);
+  assert.deepEqual([jc.url, jc.device], [syncValue(core.SYNC_KEYS.url), r.body.device_id]);
+  assert.equal(core.normalizeFingerprint(jc.fingerprint), core.normalizeFingerprint(syncValue(core.SYNC_KEYS.fingerprint)));
+  assert.ok(logged.every((l) => !l.includes(jc.secret)), 'the secret never reaches a log line');
+  const join = await core.requestJson({ url: jc.url, fingerprint: jc.fingerprint }, 'POST', '/v1/join', { device: jc.device, secret: jc.secret });
+  assert.equal(join.status, 200);
+  const again = await core.requestJson({ url: jc.url, fingerprint: jc.fingerprint }, 'POST', '/v1/join', { device: jc.device, secret: jc.secret });
+  assert.equal(again.status, 403, 'one-time');
+  const blank = await srv.api('/api/team/invite', { name: '   ' });
+  assert.deepEqual([blank.status, blank.body], [400, { error: 'Give the person a name.' }]);
+});
+
+test('invite without office.member.add -> the office\'s 403 sentence; nobody is added', async () => {
+  po.setOfficeRole(srv.office.store, null, srv.b.device, 'Office admin');
+  po.setOfficeRole(srv.office.store, null, srv.a.device, 'Office member');
+  const count = () => srv.office.store.prepare(`SELECT COUNT(*) c FROM po_members`).get().c;
+  const before = count();
+  try {
+    const r = await srv.api('/api/team/invite', { name: 'Nope' });
+    assert.equal(r.status, 403);
+    assert.deepEqual(r.body, { error: 'You need "Add office members" (office.member.add) in this office to do this' });
+    assert.equal(count(), before);
+  } finally {
+    po.setOfficeRole(srv.office.store, null, srv.a.device, 'Office admin');
+  }
+});
+
+test('revoke: a lower-ranked device is refused naming the key; a successful revoke cuts the device off', async () => {
+  const victim = await srv.api('/api/team/invite', { name: 'Temp' });
+  const jc = core.parseJoinCode(victim.body.join_code);
+  const joined = await core.requestJson({ url: jc.url, fingerprint: jc.fingerprint }, 'POST', '/v1/join', { device: jc.device, secret: jc.secret });
+  const temp = { url: jc.url, fingerprint: jc.fingerprint, auth: { device: jc.device, key: joined.body.key }, schema: core.latestMigration(srv.db) };
+  assert.equal((await core.requestJson(temp, 'GET', '/v1/status')).status, 200);
+  // b holds Office admin meanwhile, so a can be an Office member (who can't revoke anyone).
+  po.setOfficeRole(srv.office.store, null, srv.b.device, 'Office admin');
+  po.setOfficeRole(srv.office.store, null, srv.a.device, 'Office member');
+  try {
+    const no = await srv.api('/api/team/revoke', { device: jc.device });
+    assert.equal(no.status, 403);
+    assert.deepEqual(no.body, { error: 'You need "Revoke office members" (office.member.revoke) in this office to do this' });
+  } finally {
+    po.setOfficeRole(srv.office.store, null, srv.a.device, 'Office admin');
+  }
+  const ok = await srv.api('/api/team/revoke', { device: jc.device });
+  assert.deepEqual([ok.status, ok.body], [200, { ok: true }]);
+  await assert.rejects(core.requestJson(temp, 'GET', '/v1/status'), core.AccessRevokedError, 'every request from it is refused');
+  const missing = await srv.api('/api/team/revoke', { device: 'd-nobody' });
+  assert.equal(missing.status, 404);
+  const bad = await srv.api('/api/team/revoke', { device: '..' });
+  assert.deepEqual([bad.status, bad.body], [400, { error: 'Choose a member.' }]);
+  po.setOfficeRole(srv.office.store, null, srv.b.device, 'Office member');
+});
+
 // Last: the office stays down.
 test('office down -> 503 plain message', async () => {
   await srv.office.down();
