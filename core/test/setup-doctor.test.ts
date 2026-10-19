@@ -115,10 +115,13 @@ test('claude: a file-path entry is a warning with the replacement; collab mcp is
     assert.match(c.fix, /"command": "collab", "args": \["mcp"\]/);
     writeFileSync(f, JSON.stringify({ mcpServers: { collab: { command: 'collab', args: ['mcp'] } } }));
     assert.equal(by(await run(), 'claude.registered').mark, 'ok');
+    // INSTALL.md's Windows fallback form counts as registered too.
+    writeFileSync(f, JSON.stringify({ mcpServers: { collab: { command: 'cmd', args: ['/c', 'collab', 'mcp'] } } }));
+    assert.equal(by(await run(), 'claude.registered').mark, 'ok');
     rmSync(f);
     c = by(await run(), 'claude.registered');
     assert.equal(c.mark, 'warn');
-    assert.match(c.fix, /claude mcp add/);
+    assert.match(c.fix, /claude mcp add --scope user collab -- collab mcp/);
   } finally { s.done(); }
 });
 

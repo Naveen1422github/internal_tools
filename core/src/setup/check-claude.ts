@@ -6,9 +6,9 @@ import type { GroupState, SetupCheck, SetupContext } from "./types.js";
 const G = "claude" as const;
 const REPLACEMENT = 'replace that entry with: "collab": { "command": "collab", "args": ["mcp"] }';
 
-/** ~/.claude.json plus every .mcp.json from cwd up to the filesystem root. */
-export function defaultClaudeConfigFiles(cwd: string): string[] {
-  const files = [join(homedir(), ".claude.json")];
+/** Claude Code's user config (~/.claude.json, or in CLAUDE_CONFIG_DIR when set) plus every .mcp.json from cwd up to the filesystem root. */
+export function defaultClaudeConfigFiles(cwd: string, env: NodeJS.ProcessEnv = process.env): string[] {
+  const files = [join(env.CLAUDE_CONFIG_DIR || homedir(), ".claude.json")];
   let dir = resolve(cwd);
   for (;;) {
     files.push(join(dir, ".mcp.json"));
@@ -46,12 +46,16 @@ function entries(file: string, cwd: string): Entry[] {
 }
 
 const runsFromPath = (e: Entry) => e.args.some((a) => a.replace(/\\/g, "/").endsWith("mcp/dist/server.js"));
-const runsCommand = (e: Entry) => /(^|[\\/])collab(\.cmd)?$/.test(e.command) && e.args.length === 1 && e.args[0] === "mcp";
+const isCollab = (s: string) => /(^|[\\/])collab(\.cmd)?$/.test(s);
+// `collab mcp`, or INSTALL.md's Windows fallback `cmd /c collab mcp`.
+const runsCommand = (e: Entry) =>
+  (isCollab(e.command) && e.args.length === 1 && e.args[0] === "mcp") ||
+  (/(^|[\\/])cmd(\.exe)?$/i.test(e.command) && e.args.length === 3 && e.args[0].toLowerCase() === "/c" && isCollab(e.args[1]) && e.args[2] === "mcp");
 
 export function checkClaude(ctx: SetupContext, _st: GroupState): SetupCheck[] {
   const mine = ctx.claudeConfigFiles.flatMap((f) => entries(f, ctx.cwd)).filter((e) => e.key === "collab" || runsFromPath(e) || runsCommand(e));
   if (mine.length === 0) {
-    return [{ group: G, id: "claude.registered", mark: "warn", text: "collab isn't registered in Claude Code", fix: "claude mcp add collab -- collab mcp" }];
+    return [{ group: G, id: "claude.registered", mark: "warn", text: "collab isn't registered in Claude Code", fix: "claude mcp add --scope user collab -- collab mcp" }];
   }
   const fromPath = mine.find(runsFromPath);
   if (fromPath) return [{ group: G, id: "claude.registered", mark: "warn", text: `Claude Code runs collab from a file path (${fromPath.file})`, fix: REPLACEMENT }];

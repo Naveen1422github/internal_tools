@@ -55,6 +55,7 @@ for (const [w, name] of Object.entries(BUNDLED)) {
   copy(`${w}/dist`, `node_modules/${name}/dist`);
 }
 if (existsSync(join(ROOT, 'README.md'))) copy('README.md', 'README.md');
+if (existsSync(join(ROOT, 'INSTALL.md'))) copy('INSTALL.md', 'INSTALL.md');
 if (existsSync(join(ROOT, 'LICENSE'))) copy('LICENSE', 'LICENSE');
 
 // 3. Released migrations only (never staged/); an empty add-on folder for postinstall.

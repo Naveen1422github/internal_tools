@@ -8,5 +8,5 @@
   "engines": { "node": ">=20.9.0" },
   "dependencies": {},
   "bundleDependencies": ["@collab-mcp/core", "@collab-mcp/courier", "@collab-mcp/post-office", "@collab-mcp/server", "collab-mcp"],
-  "files": ["addon-manifest.json", "build-info.json", "cli/dist", "ui/dist", "mcp/migrations", "vendor", "node_modules", "README.md"]
+  "files": ["addon-manifest.json", "build-info.json", "cli/dist", "ui/dist", "mcp/migrations", "vendor", "node_modules", "README.md", "INSTALL.md"]
 }
