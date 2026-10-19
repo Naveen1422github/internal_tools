@@ -62,4 +62,18 @@ describe('Modules page: share with the team', () => {
     await screen.findByText('g');
     expect(screen.queryByRole('button', { name: 'Share with the team' })).toBeNull();
   });
+
+  it('sent anyway, the office\'s 403 sentence is shown; a module bound to a project says its notes follow the project', async () => {
+    const no = 'You need "Share modules" (office.module.share) in this office to do this';
+    page(() => {
+      api.modules.mockResolvedValue({ results: [{ slug: 'ledger', name: 'Ledger', status: 'active', shared: true, bound_project: 'SH' }] });
+      api.moduleShare.mockRejectedValue(Object.assign(new Error(no), { status: 403 }));
+    });
+    await open();
+    await screen.findByText(/This module is bound to SH: its new notes go to SH and follow that project, not this switch/);
+    const stop = await screen.findByRole('button', { name: 'Stop sharing' });
+    await waitFor(() => expect(disabled(stop)).toBe(false));
+    fireEvent.click(stop);
+    expect((await screen.findByRole('alert')).textContent).toContain(no);
+  });
 });

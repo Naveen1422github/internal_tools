@@ -4,7 +4,7 @@ import {
   addEntry, addEntryAsync, deleteEntry, supersede, doctor,
   editEntry, EntryNotFoundError, reassignModule, upsertModule, deleteModule,
   liveEntry, ftsJoin, readSyncOverview, NeedsMergeError, formatEntryRef, ReadOnlyNoteError,
-  AccessDeniedError, getEntryByUlid, isUlid, getEntryByRef, parseNoteRef, hasSeries, type NoteRef,
+  AccessDeniedError, getEntryByUlid, isUlid, getEntryByRef, parseNoteRef, hasSeries, listBindings, type NoteRef,
 } from '@collab-mcp/core';
 
 const db = getDb();
@@ -367,7 +367,10 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
   // --- MODULES ---
   'GET /api/collab/modules': async (req, res, send) => {
     try {
-      const rows = db.prepare('SELECT * FROM modules ORDER BY slug').all();
+      // UI parity Task 7c: the project a module is bound to, if any (its notes follow that project).
+      const bound = new Map(listBindings(db).map((b) => [b.module, b.project_code]));
+      const rows = (db.prepare('SELECT * FROM modules ORDER BY slug').all() as any[])
+        .map((r) => (bound.has(r.slug) ? { ...r, bound_project: bound.get(r.slug) } : r));
       // Sharing on: each module says whether it goes to the team (absent when off).
       const overview = readSyncOverview(db);
       const shared = overview.enabled ? new Set(overview.sharedModules) : null;

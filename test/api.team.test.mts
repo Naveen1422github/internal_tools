@@ -306,6 +306,7 @@ test('module share: the office decides (office.module.share); its answer lists t
   const on = await srv.api('/api/sync/share', { slug: 'ledger', shared: true });
   assert.equal(on.status, 200, JSON.stringify(on.body));
   assert.ok(on.body.shared.includes('ledger'));
+  assert.ok(core.readSyncOverview(srv.db).sharedModules.includes('ledger'), 'this laptop shows it at once');
   const off = await srv.api('/api/sync/share', { slug: 'ledger', shared: false });
   assert.ok(!off.body.shared.includes('ledger'));
   po.setOfficeRole(srv.office.store, null, srv.b.device, 'Office admin');
@@ -317,6 +318,8 @@ test('module share: the office decides (office.module.share); its answer lists t
     po.setOfficeRole(srv.office.store, null, srv.a.device, 'Office admin');
     po.setOfficeRole(srv.office.store, null, srv.b.device, 'Office member');
   }
+  const slug = await srv.api('/api/sync/share', { slug: 'Not A Slug', shared: true });
+  assert.equal(slug.status, 400, JSON.stringify(slug.body));
   const bad = await srv.api('/api/sync/share', { slug: 'ledger', shared: 'yes' });
   assert.deepEqual([bad.status, bad.body], [400, { error: '"shared" must be true or false.' }]);
 });

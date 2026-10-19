@@ -5,7 +5,7 @@ import {
   loadCrsqlite, isCrsqliteLoaded, isSyncEnabled, getSyncValue, setSyncValue, postOfficeTargetFromDb,
   readOwnChanges, decodeChange, applyChanges, reindexFts, requestJson, openEventStream, hasSeries, hasProjectLeft,
   sendContext, sendVerdictOf, resolveAllocator, allocateWithRetry, formatEntryRef,
-  upsertTeamProjectFromOffice, localClashOf, projectClashText, assignPendingNumber,
+  upsertTeamProjectFromOffice, localClashOf, projectClashText, assignPendingNumber, rememberSharedModules,
   writeAccessCache, markProjectLeft, clearProjectLeft, recordRefusal, entryUlidOf,
   AccessRevokedError, SchemaMismatchError, PinMismatchError, COURIER_PORT_KEY,
   type PostOfficeTarget, type WireChange, type EventStream, type NotePlace, type ProjectClash, type AccessPayload,
@@ -523,8 +523,7 @@ export class Courier {
   private async refreshModules(): Promise<void> {
     const r = await requestJson(this.target, "GET", "/v1/modules");
     if (r.status !== 200 || !Array.isArray(r.body?.shared)) throw new Error(`the post office did not list the shared modules (${r.status})`);
-    const next = JSON.stringify([...(r.body.shared as string[])].sort());
-    if (next !== getSyncValue(this.db, K.shared)) setSyncValue(this.db, K.shared, next);
+    rememberSharedModules(this.db, r.body.shared as string[]);
   }
 
   /**

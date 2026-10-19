@@ -112,7 +112,8 @@ export default function EntryDrawer() {
                   <h2 className="text-xl font-bold leading-tight">{entry.title}</h2>
                 )}
                 {(() => {
-                  const label = shareLabel(entry.module, sync);
+                  // A note in a project follows its project, not its module's sharing.
+                  const label = entry.series && entry.series !== 'E' ? null : shareLabel(entry.module, sync);
                   if (!label && !entry.author) return null;
                   return (
                     <div className="mt-1 text-xs text-gray-500 flex items-center gap-1">

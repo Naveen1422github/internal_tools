@@ -10,7 +10,9 @@ import { needSentence } from '../team/view';
 
 const NOT_CONNECTED = "This notebook isn't connected to a post office.";
 
-export default function ShareToggle({ slug, shared, onChange }: { slug: string; shared: boolean; onChange: (shared: string[]) => void }) {
+export default function ShareToggle({ slug, shared, boundProject, onChange }: {
+  slug: string; shared: boolean; boundProject?: string; onChange: (shared: string[]) => void;
+}) {
   const [why, setWhy] = useState<string | null>('Checking the post office…');
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -29,7 +31,9 @@ export default function ShareToggle({ slug, shared, onChange }: { slug: string; 
     try {
       const r = await moduleShare(slug, !shared);
       onChange(r.shared);
-      toast(shared ? `${slug} is no longer shared with the team.` : `${slug} is now shared with the whole team.`);
+      toast(shared
+        ? `${slug} is no longer shared with the team. Notes already sent stay with the team.`
+        : `${slug} is now shared with the whole team.`);
     } catch (e) {
       toast((e as Error).message, 'error');
     } finally { setBusy(false); }
@@ -40,6 +44,12 @@ export default function ShareToggle({ slug, shared, onChange }: { slug: string; 
         {shared ? 'Stop sharing' : 'Share with the team'}
       </button>
       {why && <p className="text-xs text-gray-500">{why}</p>}
+      {boundProject && (
+        <p className="text-xs text-gray-500">
+          This module is bound to {boundProject}: its new notes go to {boundProject} and follow that project, not this switch.
+          Sharing covers its notes in no project.
+        </p>
+      )}
     </div>
   );
 }

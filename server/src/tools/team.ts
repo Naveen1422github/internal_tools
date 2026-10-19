@@ -1,7 +1,7 @@
 // file: server/src/tools/team.ts
 import http from 'node:http';
 import {
-  getDb, postOfficeTargetFromDb, requestJson, listProjects, isUlid, formatJoinCode,
+  getDb, postOfficeTargetFromDb, requestJson, listProjects, isUlid, formatJoinCode, rememberSharedModules,
   AccessRevokedError, SchemaMismatchError, PinMismatchError,
 } from '@collab-mcp/core';
 import { NOT_CONNECTED, REVOKED, UNREACHABLE } from './office-errors.js';
@@ -145,7 +145,11 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
   'POST /api/sync/share': guarded(async (_req, send, b) => {
     if (!isText(b.slug)) bad('Choose a module.');
     if (typeof b.shared !== 'boolean') bad('"shared" must be true or false.');
-    await forward(send, 'POST', '/v1/modules', { slug: b.slug, shared: b.shared });
+    const r = await ask('POST', '/v1/modules', { slug: b.slug, shared: b.shared });
+    if (!r.ok) return send(r.status, { error: r.error });
+    // This laptop shows the change at once; the courier's next `modules` ring writes the same list.
+    if (Array.isArray(r.body?.shared)) rememberSharedModules(db, r.body.shared);
+    send(200, r.body);
   }),
 
   'POST /api/team/role/create': guarded(async (_req, send, b) => {

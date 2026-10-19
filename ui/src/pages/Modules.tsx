@@ -94,6 +94,7 @@ export default function Modules() {
                       <ShareToggle
                         slug={m.slug}
                         shared={m.shared}
+                        boundProject={m.bound_project}
                         onChange={(list) => setModuleList((ms) => ms.map((x) => (x.shared === undefined ? x : { ...x, shared: list.includes(x.slug) })))}
                       />
                     </div>
