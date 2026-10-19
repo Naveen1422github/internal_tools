@@ -12,6 +12,7 @@ import { postOfficeTargetFromDb } from "./sync/http-allocator.js";
 import { requestJson, type PostOfficeTarget } from "./sync/http.js";
 import { formatEntryRef } from "./entry-ref.js";
 import { assertCan } from "./access/can.js";
+import { OfficeRefusedError, OfficeUnreachableError } from "./sync/errors.js";
 
 export interface Project {
   ulid: string;
@@ -154,14 +155,15 @@ async function registerAtOffice(
   try {
     r = await requestJson(target, "POST", "/v1/projects", body, { timeoutMs: 5000 });
   } catch (e) {
-    throw new Error(`[collab] ${doing} needs the post office; ${nothing}. The post office at ${target.url} could not be reached: ${(e as Error).message}`);
+    throw new OfficeUnreachableError(`[collab] ${doing} needs the post office; ${nothing}. The post office at ${target.url} could not be reached: ${(e as Error).message}`, e);
   }
   if (r.status === 200) return;
   if (r.status === 409) throw new ProjectClashError(`[collab] the post office refused: ${r.body?.error ?? "a clash"}. ${FIXES}`);
+  const said = typeof r.body?.error === "string" ? r.body.error : null;
   if (r.status === 404) {
-    throw new Error(`[collab] the post office at ${target.url} keeps no team projects yet: update it first; ${nothing}`);
+    throw new OfficeRefusedError(`[collab] the post office at ${target.url} keeps no team projects yet: update it first; ${nothing}`, 404, said);
   }
-  throw new Error(`[collab] the post office at ${target.url} answered ${r.status}${r.body?.error ? `: ${r.body.error}` : ""}; ${nothing}`);
+  throw new OfficeRefusedError(`[collab] the post office at ${target.url} answered ${r.status}${said ? `: ${said}` : ""}; ${nothing}`, r.status, said);
 }
 
 /**

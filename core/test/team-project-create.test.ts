@@ -130,3 +130,36 @@ test('createProject still refuses team mode, pointing at the team commands', () 
     assert.throws(() => createProject(t.db, { name: 'x', code: 'XX', mode: 'team' } as any), /--team|createTeamProject/);
   } finally { t.cleanup(); }
 });
+
+// UI parity D7: the web server needs the office's status and sentence, not a string to parse.
+test('typed errors: office down -> OfficeUnreachableError; office 403 -> OfficeRefusedError with its sentence', async () => {
+  const { OfficeUnreachableError, OfficeRefusedError } = await import('../src/sync/errors.js');
+  const down = await fakeOffice();
+  const t = shared(down.url, down.fingerprint);
+  try {
+    await down.close();
+    await assert.rejects(createTeamProject(t.db, { name: 'Support hub', code: 'SH' }), (e: Error) =>
+      e instanceof OfficeUnreachableError && /creating a team project needs the post office; nothing was created/.test(e.message));
+  } finally { t.cleanup(); }
+  const sentence = 'You need "Create projects" (office.project.create) in this office to do this';
+  const no = await stubServer((_req, res) => { res.writeHead(403); res.end(JSON.stringify({ error: sentence })); });
+  const t2 = shared(no.url, no.fingerprint);
+  try {
+    createProject(t2.db, { name: 'Navi', code: 'NV' });
+    for (const p of [createTeamProject(t2.db, { name: 'Support hub', code: 'SH' }), promoteProject(t2.db, 'NV')]) {
+      await assert.rejects(p, (e: any) =>
+        e instanceof OfficeRefusedError && e.status === 403 && e.officeError === sentence
+        && e.message.includes(`answered 403: ${sentence}`));
+    }
+  } finally { await no.close(); t2.cleanup(); }
+});
+
+test('typed errors: an office without team projects (404) is an OfficeRefusedError with status 404', async () => {
+  const { OfficeRefusedError } = await import('../src/sync/errors.js');
+  const old = await stubServer((_req, res) => { res.writeHead(404); res.end(JSON.stringify({ error: 'no such endpoint: POST /v1/projects' })); });
+  const t = shared(old.url, old.fingerprint);
+  try {
+    await assert.rejects(createTeamProject(t.db, { name: 'Support hub', code: 'SH' }), (e: any) =>
+      e instanceof OfficeRefusedError && e.status === 404 && /keeps no team projects yet/.test(e.message));
+  } finally { await old.close(); t.cleanup(); }
+});
