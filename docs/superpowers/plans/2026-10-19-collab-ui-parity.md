@@ -6,6 +6,14 @@
 
 **Brief:** `docs/superpowers/prompts/collab-ui-parity.md`.
 
+**Owner's direction (2026-10-19, after the first draft):** move people off the command line as far as possible. There are two ways in:
+- **the AI** does the operation for you (MCP tools);
+- **the web UI**, when you want to do it yourself.
+
+The CLI is left for one-time setup, the office machine, and emergency repairs. This version of the plan widens the scope to match:
+- every row of the command table now says what the AI can do, as well as the UI;
+- more commands get a screen.
+
 **Architecture:**
 - Projects are local core operations. A new `server/src/tools/projects.ts` calls the same core functions as `collab project`: `projectListRows`, `createProjectOp`, `promoteProject`, `renameProject`, `bindModule` and `unbindModule`.
 - People go to the post office. `server/src/tools/team.ts` gains invite and revoke routes. They call the same office endpoints as `collab team invite|revoke`, plus core's `formatJoinCode`.
@@ -35,19 +43,38 @@
 | `collab refused list / copy / delete` | yes (S3) | Refused changes page |
 | `collab doctor` | yes (exists) | Health page: setup checks with each printed fix, including which notebook is open |
 | `collab doctor --json` | no | Machine output for scripts; the Health page reads the same report |
-| `collab doctor --fix` | no, backlog | Rare repairs: fetch the add-on, start the courier, remove stale status files. Starting the courier is web UI part 3. Recommended default: a "Fix" button on Health after part 3 lands. |
+| `collab doctor --fix` | **yes (new)** | Health page: a "Fix" button on the checks it can repair safely: fetch the sync add-on, and remove leftover status files. It calls the same repairs as `--fix` (they move from `cli/src/doctor.ts` into core). "Start the courier" waits for web UI part 3. |
 | `collab sync status` | yes (exists) | SyncBar on every page |
 | `collab sync status --team` | partly | Team → Members shows "last seen". The "behind by N" figure is a backlog item. |
 | `collab sync start / stop / run` | no, out of scope | Web UI part 3 (brief). `run` is the courier process itself. |
 | `collab sync setup <join code>` | no, out of scope | Joining from a new laptop is Stage D (brief) |
-| `collab sync set-address <url>` | no, backlog | Needed only when the office's address changes (COLLAB-98). It is a repair, and the courier must be stopped and restarted around it, which is part 3. Recommended default: build it with part 3. Guide 07's "there's no command" is out of date; Task 7 fixes the wording. |
-| `collab sync modules / share / unshare` | no | Shares legacy `E` modules office-wide. That is the old model, which projects replace; Office member lost it in S1. The Modules page already shows Shared or Private. |
-| `collab sync autostart on/off`, `uninstall` | no | One-time machine setup, run once per laptop |
-| `collab copy --from … --to …` | no, **needs your ruling (R1)** | It moves notes between modules and projects. It is a one-off cleanup (after a clash, or when adopting projects), not daily, but the clash and promote messages point people to it. Recommended default: backlog, as a "Copy notes here" action on the Projects page in a follow-up. |
-| `collab notebook list / adopt / new / default / which` | no | Picks which notebook the programs open. The web server is bound to one notebook when it starts, so this can't be changed from inside it. `which` is already on the Health page. |
+| `collab sync set-address <url>` | **yes (new)** | Health page, under Sync: "The post office moved?" with an address field. It runs the same certificate check first, so an address where anything else answers is refused and nothing changes. A running courier picks up the new address on its next retry, so nothing needs stopping. The logic moves from `courier/src/cli.ts` into core. Guide 07's "there's no command" is out of date; Task 7 fixes the wording. |
+| `collab sync modules / share / unshare` | **yes (new)** | Modules page: a Share / Stop sharing toggle on each module, using the same `GET` and `POST /v1/modules` calls. It needs `office.module.share` (checked at the office) and is greyed with the reason otherwise. These are the legacy office-wide modules, which projects replace, but they are still in use, so they get a screen. |
+| `collab sync autostart on/off` | no, with part 3 | It belongs with the sync start/stop controls (web UI part 3, out of scope here) |
+| `collab sync uninstall` | no | Destructive and one-time: it removes sync from this machine. It stays a deliberate terminal action. |
+| `collab copy --from … --to …` | **yes (new)** | Projects page: "Copy notes into <CODE>". Choose a module or project, and optionally mine only or since a date. The page lists what would be copied (`planCopy`), asks, then copies (`applyCopy`). That is the same list → ask → copy as the CLI, with core's words. The AI already has `collab_copy`. |
+| `collab notebook list / which` | **yes (new, read-only)** | Health page: the notebooks on this computer, marking the one open now and the default |
+| `collab notebook adopt / new / default` | no, backlog | They change which notebook the programs open. The web server is bound to one notebook when it starts, so switching means restarting it. Recommended default: a "Switch notebook" action once the web server can reopen its database (its own task). |
 | `collab notebook reindex` | no | A rare repair; never run automatically (spec P11) |
 | `collab office init / serve / add-member / revoke / set-office-role / set-project-role / status / share / unshare / modules` | no | They run on the office machine, which has no web UI. `add-member` and `revoke` have laptop equivalents (`team invite` and `team revoke`), which are now in the UI. The `set-*` commands are the emergency fix-it for when nobody holds the needed role. |
 | `collab mcp`, `collab web`, `collab --version` | no | They start programs. The version is on the Health page (Version group). |
+
+## What the AI can do (MCP)
+
+The AI already has these tools:
+- `collab_project_create`, `collab_project_list`, `collab_project_bind`, `collab_project_unbind`;
+- `collab_copy`, `collab_doctor`;
+- all the note and task tools.
+
+| Operation | AI tool | Why |
+|---|---|---|
+| Promote a project | **new: `collab_project_promote`** | The same `promoteProject`, with the same words as the CLI. Office-checked (`office.project.create`). |
+| Rename a project | **new: `collab_project_rename`** | The same `renameProject` (D1). Team projects are checked at the office. |
+| See a team's members and roles | **new: `collab_team_list`** (read-only) | Lets the AI answer "who can edit SH?" |
+| Refused changes | **new: `collab_refused_list`**, `collab_refused_copy` | The AI can explain a refusal and keep the text in a solo project. **Delete stays human**, because it discards what you typed. |
+| Change roles, add or remove members, edit roles | **no, until S4** | The office can't tell your AI from you (the known limitation in guide 05). The Allow / Ask me / Deny controls that would let you limit this are S4. Until then, team admin is done by a person in the UI. |
+| Invite | **no, ever** | The join code is a password; it must not pass through the AI's context |
+| Revoke | **no** | Destructive and can't be undone. A person does it, with a confirmation. |
 
 ## Decisions (my calls; you can overrule them)
 
@@ -172,7 +199,55 @@ Each task has one commit, a reviewer pass, and fix commits if the review finds a
   - The office's refusals show in the banner.
 - **Commit:** `feat(ui): invite, add a member and revoke on the Team page`
 
-### Task 7: Acceptance, docs, full suite, branch review
+### Task 7a: UI, copy notes into a project
+- **Files:**
+  - Server: `server/src/tools/projects.ts`
+    - `POST /api/projects/copy/plan`: returns the plan as `{ target, items, lines }`, from `planCopy` and `copyPlanLines`.
+    - `POST /api/projects/copy/apply`: plans again and applies. It answers 409 if the list changed since the plan.
+  - UI: `ui/src/pages/Projects.tsx` (a copy panel)
+  - Test: `test/api.projects.test.mts`, `ui/src/pages/Projects.test.tsx`
+- **Tests:**
+  - The plan lists the same notes as `collab copy`.
+  - Apply copies them and shows `copyResultLines`.
+  - A changed source gets the 409 "the list changed, check it again".
+  - Copy into a team project you can't create notes in shows the refusal.
+- **Commit:** `feat: copy notes into a project from the web, with the same plan, ask, copy as collab copy`
+
+### Task 7b: Health page, safe fixes, set-address and notebooks
+- **Files:**
+  - Core: `core/src/setup/fix.ts` (new, moved out of `cli/src/doctor.ts`); `core/src/sync/address.ts` (new, moved out of `courier/src/cli.ts`)
+  - CLI and courier: call those core functions
+  - Server: `server/src/tools/setup.ts`
+    - `POST /api/doctor/fix {id}`
+    - `POST /api/sync/set-address {url}`
+    - `GET /api/notebooks`
+  - UI: `ui/src/pages/Health.tsx`
+- **Tests:**
+  - Fix runs only the repairs in the safe list (the add-on, stale status files); any other id → 400.
+  - set-address with the wrong certificate → refused and nothing changes; with the right one, the DB and the courier config are updated.
+  - `collab sync set-address` and `collab doctor --fix` output is unchanged.
+  - The notebooks list marks the open one.
+- **Commit:** `feat: Health page repairs, post office address and notebooks list (same code as the CLI)`
+
+### Task 7c: Modules page, share and stop sharing
+- **Files:**
+  - Server: `server/src/tools/sync.ts`, `POST /api/sync/share {slug, shared}`, which forwards to `POST /v1/modules`
+  - UI: `ui/src/pages/Modules.tsx`
+- **Tests:**
+  - Without `office.module.share`: greyed, with the reason, and the office's 403 sentence if sent anyway.
+  - The office down → "The post office can't be reached right now."
+- **Commit:** `feat(ui): share and stop sharing a module from the Modules page`
+
+### Task 7d: MCP, the new AI tools
+- **Files:** `mcp/src/server.ts`; tests next to the existing MCP tests
+- **Tools:** `collab_project_promote`, `collab_project_rename`, `collab_team_list`, `collab_refused_list`, `collab_refused_copy`. Each calls the same core function and prints the same lines as the CLI.
+- **Tests:**
+  - Each tool's text equals the CLI's.
+  - The AI actor's laptop checks apply (`project.edit` as `ai`).
+  - There is no team-change, invite, revoke or refused-delete tool.
+- **Commit:** `feat(mcp): AI tools for promote, rename, team list and refused changes`
+
+### Task 8: Acceptance, docs, full suite, branch review
 - **Files:**
   - Create: `test/ui-parity-acceptance.test.mts`
   - Modify: guides 05, 07 and 08
@@ -196,13 +271,21 @@ Each task has one commit, a reviewer pass, and fix commits if the review finds a
 
 ## Needs your ruling
 
-- **R1:** is `collab copy` everyday enough to need a UI now? The default is backlog.
+- **R1 (settled by your direction):** `collab copy` gets a UI (Task 7a).
 - **D1:** do you accept it, including `project.edit` becoming checked at the office?
+- **R2:** the AI gets no team-admin tools until S4 (see "What the AI can do"). Do you agree, or should it have them now, accepting that it would act with your full rights?
 - Everything else above goes ahead with the stated default unless you say otherwise.
+
+## What still needs the terminal after this plan
+
+- **One-time setup:** `collab sync setup` (Stage D gives it a screen), `notebook new/adopt`, `sync uninstall`.
+- **Sync start, stop and autostart:** web UI part 3, the next piece.
+- **The office machine:** `collab office …`, which has no web UI.
+- **Repairs:** `notebook reindex`.
 
 ## Backlog (not in this plan, with recommended defaults)
 
 - Pending invites, and revoking an unused join code, in the UI. Default: a "Waiting to join" section in Office → Members, using `GET /v1/status`.
 - "Behind by N" on the Members tab.
 - A team rename can collide with a local project name on another laptop: the upsert renames without a clash check. Default: record it as a project clash, as P10 does.
-- `doctor --fix` and `sync set-address` buttons, with web UI part 3.
+- "Start the courier" as a Health fix, and autostart, with web UI part 3.
