@@ -275,11 +275,13 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       });
       send(200, { ok: true, id: r.id });
     } catch (err: any) {
-      if (err instanceof EntryNotFoundError) return send(404, { error: err.message });
-      if (err instanceof NeedsMergeError) return send(409, { error: err.message }); // V9: settle it on /merge/:id
-      if (err instanceof ReadOnlyNoteError) return send(403, { error: err.message }); // a team you left (stage B2, P11)
-      if (err instanceof ProjectNotFoundError) return send(404, { error: err.message });
-      send(errStatus(err), { error: err.message });
+      // Core's sentence without its "[collab] " prefix: the web shows it as is (UI parity Task 9).
+      const error = String(err.message).replace(/^\[collab(-mcp)?\] /, '');
+      if (err instanceof EntryNotFoundError) return send(404, { error });
+      if (err instanceof NeedsMergeError) return send(409, { error }); // V9: settle it on /merge/:id
+      if (err instanceof ReadOnlyNoteError) return send(403, { error }); // a team you left (stage B2, P11)
+      if (err instanceof ProjectNotFoundError) return send(404, { error });
+      send(errStatus(err), { error });
     }
   },
 

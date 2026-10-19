@@ -30,3 +30,29 @@ test('named, bound, none; an unknown or left project throws what the save would'
     assert.throws(() => noteDestination(t.db, { project: 'TM' }), /a team you left/);
   } finally { t.cleanup(); }
 });
+
+test('the folder\'s .collab decides when nothing else does; a folder naming a left team is refused, as the save is', async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const t = freshDb();
+  const dir = mkdtempSync(join(tmpdir(), 'collab-dest-'));
+  const saved = process.env.CLAUDE_PROJECT_DIR;
+  process.env.CLAUDE_PROJECT_DIR = dir;
+  try {
+    migrate(t.db);
+    const nv = createProject(t.db, { name: 'Navi', code: 'NV' });
+    writeFileSync(join(dir, '.collab'), `notebook = t\nproject = ${nv.ulid}\n`);
+    const d = noteDestination(t.db, {});
+    assert.deepEqual([d.why, d.project?.code], ['folder', 'NV']);
+    assert.equal(d.line, "It goes into NV (Navi) because this folder's .collab names it. It stays on this laptop.");
+    t.db.prepare(`INSERT INTO projects (ulid, name, code, mode, team) VALUES ('01JPR0JECTTM00000000000000', 'Team', 'TM', 'team', 'fp')`).run();
+    markProjectLeft(t.db, 'TM');
+    writeFileSync(join(dir, '.collab'), `notebook = t\nproject = 01JPR0JECTTM00000000000000\n`);
+    assert.throws(() => noteDestination(t.db, {}), /a team you left/);
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = saved;
+    rmSync(dir, { recursive: true, force: true });
+    t.cleanup();
+  }
+});

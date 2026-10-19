@@ -61,7 +61,7 @@ export default function NewNote() {
         if (r.ulid) openDrawer({ ulid: r.ulid });
       } else {
         toast(`Saved as ${formatEntryRef(r.id, r.series)}.`);
-        openDrawer(r.series && r.series !== 'E' ? `${r.series}-${r.id}` : r.id);
+        openDrawer(r.series && r.series !== 'E' ? `${r.series}-${r.id}` : r.id!);
       }
     } catch (e) {
       setError((e as Error).message);
@@ -103,7 +103,7 @@ export default function NewNote() {
       <label className="block space-y-1 text-sm">
         <span>Project</span>
         <select value={project} onChange={(e) => setProject(e.target.value)} className={field}>
-          <option value={AUTO}>Automatic (from the module)</option>
+          <option value={AUTO}>Automatic</option>
           {projects.map((p) => <option key={p.ulid} value={p.code}>{p.code} · {p.name}</option>)}
           <option value={NONE}>No project (E series)</option>
         </select>

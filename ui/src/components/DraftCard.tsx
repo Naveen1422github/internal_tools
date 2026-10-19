@@ -23,7 +23,7 @@ export default function DraftCard({ draft }: { draft: Partial<Entry>; validation
   const [edited, setEdited] = useState<Partial<Entry>>(draft);
   const sync = useSyncOverview();
   const note = saveNote(edited.module, sync);
-  const [saved, setSaved] = useState<{ id: number; series?: string } | null>(null);
+  const [saved, setSaved] = useState<{ id: number | null; series?: string; ulid?: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [discarded, setDiscarded] = useState(false);
@@ -37,7 +37,7 @@ export default function DraftCard({ draft }: { draft: Partial<Entry>; validation
     try {
       const { project: _project, ...draft } = edited;
       const res = await upsertEntry(draft);
-      if (res.ok) setSaved({ id: res.id, series: res.series });
+      if (res.ok) setSaved({ id: res.id, series: res.series, ulid: res.ulid });
     } catch (e: any) {
       setSaveError(e?.message || 'Save failed.');
     } finally {
@@ -50,10 +50,18 @@ export default function DraftCard({ draft }: { draft: Partial<Entry>; validation
   if (saved !== null) {
     return (
       <div className="rounded-lg border border-green-200 dark:border-green-900/40 bg-green-50 dark:bg-green-900/20 px-3 py-2 text-sm">
-        Saved as{' '}
-        <button onClick={() => openDrawer(noteRefOf(saved))} className="font-mono font-bold underline text-green-700 dark:text-green-300">
-          {formatEntryRef(saved.id, saved.series)}
-        </button>
+        {saved.id === null ? (
+          // A team note saved while the post office was away waits for its number (stage C).
+          <>Saved; it waits for its number from the post office.{' '}
+            {saved.ulid && <button onClick={() => openDrawer({ ulid: saved.ulid! })} className="font-bold underline text-green-700 dark:text-green-300">Open it</button>}
+          </>
+        ) : (
+          <>Saved as{' '}
+            <button onClick={() => openDrawer(noteRefOf({ id: saved.id!, series: saved.series }))} className="font-mono font-bold underline text-green-700 dark:text-green-300">
+              {formatEntryRef(saved.id, saved.series)}
+            </button>
+          </>
+        )}
       </div>
     );
   }

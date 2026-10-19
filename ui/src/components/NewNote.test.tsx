@@ -46,7 +46,7 @@ describe('New note form', () => {
     fireEvent.change(dialog().getByLabelText('Module'), { target: { value: 'billing' } });
     await dialog().findByText('It goes into NV (Navi) because module billing is bound to NV.');
     const proj = dialog().getByLabelText('Project') as HTMLSelectElement;
-    await waitFor(() => expect([...proj.options].map((o) => o.textContent)).toEqual(['Automatic (from the module)', 'NV · Navi', 'No project (E series)']));
+    await waitFor(() => expect([...proj.options].map((o) => o.textContent)).toEqual(['Automatic', 'NV · Navi', 'No project (E series)']));
     fireEvent.change(proj, { target: { value: 'NV' } });
     await waitFor(() => expect(api.noteDestination).toHaveBeenLastCalledWith({ module: 'billing', project: 'NV' }));
   });
@@ -81,5 +81,13 @@ describe('New note form', () => {
     fireEvent.click(dialog().getByRole('button', { name: 'Save note' }));
     expect((await dialog().findByRole('alert')).textContent).toBe(no);
     screen.getByRole('dialog');
+  });
+
+  it('a team note saved while the office is away: says it waits for its number and opens it by ULID', async () => {
+    form(() => api.upsertEntry.mockResolvedValue({ ok: true, id: null, series: 'TM', pending: true, ulid: '01ARZ3NDEKTSV4RRFFQ69G5FAV' }));
+    fill();
+    fireEvent.click(dialog().getByRole('button', { name: 'Save note' }));
+    await screen.findByText('Saved. It waits for its number from the post office, and is sent once it has one.');
+    expect(useUi.getState().drawerEntry).toEqual({ ulid: '01ARZ3NDEKTSV4RRFFQ69G5FAV' });
   });
 });

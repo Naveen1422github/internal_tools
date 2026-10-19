@@ -129,7 +129,7 @@ export const entryByUlid = (ulid: string) =>
  * a 403 here is usually a role refusal, not a stale page (UI parity Task 9).
  */
 export const upsertEntry = (body: Omit<Partial<Entry>, 'id' | 'project'> & { id?: number | string; project?: string }) =>
-  sendJson<{ ok: boolean; id: number; series?: string; pending?: boolean; ulid?: string }>('POST', `/api/collab/entry/upsert`, body);
+  sendJson<{ ok: boolean; id: number | null; series?: string; pending?: boolean; ulid?: string }>('POST', `/api/collab/entry/upsert`, body);
 /** Where a new note would land, in core's words. */
 export interface NoteDestination { project: { code: string; name: string; mode: string } | null; why: 'named' | 'bound' | 'folder' | 'none'; line: string }
 export const noteDestination = (p: { module?: string; project?: string }) =>

@@ -169,7 +169,10 @@ function defaultProject(db: DB, args: AddEntryArgs, withFolder: boolean): Projec
     if (isLeftProject(bound)) throw leftProjectError(bound);
     return bound;
   }
-  return withFolder ? currentProject(db) : null;
+  const folder = withFolder ? currentProject(db) : null;
+  // A folder naming a team you left fails here, as a bound one does (the save would refuse it anyway).
+  if (folder && isLeftProject(folder)) throw leftProjectError(folder);
+  return folder;
 }
 
 /** Where a new note would land, and why (UI parity Task 9: the New note form says it before saving). */
