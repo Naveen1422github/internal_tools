@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  copyApply, copyPlan, type CopyArgs, type CopyPlanView,
   projectBind, projectCreate, projectPromote, projectRename, projectUnbind, projectsList, teamOverview,
   type ProjectList, type ProjectRow, type TeamOverview,
 } from '../api/client';
@@ -26,6 +27,7 @@ type Open =
   | { kind: 'create' }
   | { kind: 'rename'; row: ProjectRow }
   | { kind: 'promote'; row: ProjectRow }
+  | { kind: 'copy'; row: ProjectRow }
   | null;
 
 const officeReason = (o: OfficeState): string | null =>
@@ -125,6 +127,7 @@ export default function Projects() {
                   promoteWhy={teamWhy}
                   onRename={() => setOpen({ kind: 'rename', row: r })}
                   onPromote={() => setOpen({ kind: 'promote', row: r })}
+                  onCopy={() => setOpen({ kind: 'copy', row: r })}
                   onDone={after}
                 />
               ))}
@@ -135,14 +138,17 @@ export default function Projects() {
 
       {open?.kind === 'create' && <CreateDialog teamWhy={teamWhy} onCancel={() => setOpen(null)} onDone={after} />}
       {open?.kind === 'rename' && <RenameDialog row={open.row} onCancel={() => setOpen(null)} onDone={after} />}
+      {open?.kind === 'copy' && (
+        <CopyDialog row={open.row} projects={list.projects} modules={list.modules} onCancel={() => setOpen(null)} onDone={after} />
+      )}
       {open?.kind === 'promote' && <PromoteDialog row={open.row} url={list.office_url} onCancel={() => setOpen(null)} onDone={after} />}
     </div>
   );
 }
 
-function Row({ row, modules, renameWhy, promoteWhy, onRename, onPromote, onDone }: {
+function Row({ row, modules, renameWhy, promoteWhy, onRename, onPromote, onCopy, onDone }: {
   row: ProjectRow; modules: string[]; renameWhy: string | null; promoteWhy: string | null;
-  onRename: () => void; onPromote: () => void; onDone: (message: string) => Promise<void>;
+  onRename: () => void; onPromote: () => void; onCopy: () => void; onDone: (message: string) => Promise<void>;
 }) {
   const [module, setModule] = useState('');
   const [busy, setBusy] = useState(false);
@@ -196,6 +202,7 @@ function Row({ row, modules, renameWhy, promoteWhy, onRename, onPromote, onDone 
       <td className="px-3 py-2">
         <div className="flex flex-col items-end gap-1">
           <button type="button" onClick={onRename} disabled={!!renameWhy} title={renameWhy ?? undefined} className={buttonClass}>Rename</button>
+          <button type="button" onClick={onCopy} disabled={!!row.left_at} title={row.left_at ? LEFT : undefined} className={buttonClass}>Copy notes here</button>
           {row.mode === 'solo' && (
             <button type="button" onClick={onPromote} disabled={!!promoteWhy} title={promoteWhy ?? undefined} className={buttonClass}>Make team project</button>
           )}
@@ -313,6 +320,92 @@ function PromoteDialog({ row, url, onCancel, onDone }: { row: ProjectRow; url: s
       })}
     >
       <p className="text-sm">{promoteText(row, url)}</p>
+    </Dialog>
+  );
+}
+
+/**
+ * `collab copy --from <module | project> --to <CODE>` (UI parity Task 7a): pick
+ * the source, see exactly what would be copied (core's own list), then copy that
+ * list. If the notes change in between, nothing is copied and the list is shown again.
+ */
+function CopyDialog({ row, projects, modules, onCancel, onDone }: {
+  row: ProjectRow; projects: ProjectRow[]; modules: string[]; onCancel: () => void; onDone: (m: string) => Promise<void>;
+}) {
+  const sources = [
+    ...modules.map((m) => ({ value: `module:${m}`, label: `Module ${m} (its notes with no project)` })),
+    ...projects.filter((p) => p.ulid !== row.ulid).map((p) => ({ value: `project:${p.code}`, label: `Project ${p.code} · ${p.name}` })),
+  ];
+  const [from, setFrom] = useState('');
+  const [mine, setMine] = useState(false);
+  const [since, setSince] = useState('');
+  const [plan, setPlan] = useState<CopyPlanView | null>(null);
+  const a = useAction();
+  const args = (): CopyArgs => ({ from, to: row.code, ...(mine ? { author: 'me' } : {}), ...(since ? { since } : {}) });
+  // Any change to the choice means the list on screen is no longer the one to copy.
+  const change = (f: () => void) => { f(); setPlan(null); };
+
+  const check = () => a.run(async () => setPlan(await copyPlan(args())));
+  const copy = () => a.run(async () => {
+    try {
+      const r = await copyApply(args(), plan!.items.map((i) => i.ulid));
+      await onDone(r.lines[0]);
+    } catch (e) {
+      // The list changed: show the new one, so the person can check it again.
+      if ((e as { status?: number }).status === 409) setPlan(await copyPlan(args()));
+      throw e;
+    }
+  });
+  const n = plan?.items.length ?? 0;
+  const field2 = 'w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-sm';
+  return (
+    <Dialog
+      title={`Copy notes into ${row.code}`}
+      confirmLabel={plan ? (n === 0 ? 'Nothing to copy' : `Copy ${n === 1 ? '1 note' : `${n} notes`}`) : 'Show the notes'}
+      confirmDisabled={!from || (!!plan && n === 0)}
+      busy={a.busy}
+      error={a.error}
+      onCancel={onCancel}
+      onConfirm={plan ? copy : check}
+    >
+      <label className="block space-y-1 text-sm">
+        <span>Copy from</span>
+        <select value={from} onChange={(e) => change(() => setFrom(e.target.value))} className={field2}>
+          <option value="">Choose a module or project…</option>
+          {sources.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </label>
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={mine} onChange={(e) => change(() => setMine(e.target.checked))} />
+        <span>Only my notes</span>
+      </label>
+      <label className="block space-y-1 text-sm">
+        <span>Only notes created on or after (optional)</span>
+        <input type="date" value={since} onChange={(e) => change(() => setSince(e.target.value))} className={field2} />
+      </label>
+      {plan && (
+        <div className="space-y-2">
+          <p className="text-sm font-medium">{plan.lines[0]}</p>
+          {plan.items.length > 0 && (
+            <ul aria-label="Notes to copy" className="max-h-56 overflow-y-auto rounded border border-gray-200 dark:border-gray-800 divide-y divide-gray-100 dark:divide-gray-800 text-sm">
+              {plan.items.map((i) => (
+                <li key={i.ulid} className="px-2 py-1">
+                  <span className="font-mono text-xs text-gray-500">{i.ref}</span> {i.title}
+                  <span className="text-xs text-gray-500"> · {i.type} · {i.author ?? 'unknown author'}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {plan.skipped.length > 0 && (
+            <p className="text-xs text-gray-500">Skipped {plan.skipped.length}: {plan.skipped.map((x) => `${x.ref} (${x.reason})`).join(', ')}.</p>
+          )}
+          {plan.items.length > 0 && (
+            <p className="text-xs text-gray-500">
+              Each copy is a new note numbered by {plan.target.code}; the original is not changed, apart from a link to its copy.
+            </p>
+          )}
+        </div>
+      )}
     </Dialog>
   );
 }

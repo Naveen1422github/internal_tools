@@ -314,3 +314,17 @@ export const projectPromote = (code: string) =>
 export const projectRename = (code: string, name: string) => sendJson<{ project: Project }>('POST', '/api/projects/rename', { code, name });
 export const projectBind = (module: string, code: string) => sendJson<{ line: string }>('POST', '/api/projects/bind', { module, code });
 export const projectUnbind = (module: string) => sendJson<{ line: string }>('POST', '/api/projects/unbind', { module });
+/** `collab copy` on the web: list what would be copied, then copy exactly that list. */
+export interface CopyArgs { from: string; to: string; author?: string; since?: string }
+export interface CopyPlanItem { ulid: string; ref: string; type: string; title: string; author: string | null; created_at: string }
+export interface CopyPlanView {
+  source: { kind: 'module' | 'project'; name: string; label: string };
+  target: { ulid: string; code: string; name: string; mode: 'solo' | 'team' };
+  items: CopyPlanItem[];
+  skipped: Array<{ ulid: string; ref: string; title: string; reason: string }>;
+  /** core's copyPlanLines: what `collab copy` prints before asking. */
+  lines: string[];
+}
+export const copyPlan = (a: CopyArgs) => sendJson<CopyPlanView>('POST', '/api/projects/copy/plan', a);
+export const copyApply = (a: CopyArgs, expect: string[]) =>
+  sendJson<{ copied: Array<{ from: string; to: string; pending: boolean }>; lines: string[] }>('POST', '/api/projects/copy/apply', { ...a, expect });

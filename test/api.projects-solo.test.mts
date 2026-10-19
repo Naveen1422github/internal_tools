@@ -44,3 +44,42 @@ test('list, create, rename, bind and unbind with zero office calls; team create 
   }
   assert.deepEqual(calls, { http: 0, tls: 0 }, 'nothing left this process for an office');
 });
+
+// UI parity Task 7a: copy notes into a project, the same plan -> ask -> copy as `collab copy`.
+test('copy: the plan lists what collab copy lists; apply copies exactly that list; a changed list is refused', async () => {
+  const core = await import('@collab-mcp/core');
+  core.createProject(srv.db, { name: 'Target', code: 'TG' });
+  const a = core.addEntry(srv.db, { type: 'decision', title: 'first', summary: 's', module: 'notes-mod', project: 'none' });
+  core.addEntry(srv.db, { type: 'gotcha', title: 'second', summary: 's', module: 'notes-mod', project: 'none' });
+  const args = { from: 'module:notes-mod', to: 'TG' };
+  const plan = await post('/api/projects/copy/plan', args);
+  assert.equal(plan.status, 200, JSON.stringify(plan.body));
+  assert.deepEqual(plan.body.lines, core.copyPlanLines(core.planCopy(srv.db, args)));
+  assert.deepEqual(plan.body.items.map((i: any) => i.title), ['first', 'second']);
+  assert.equal(plan.body.target.code, 'TG');
+  const expect = plan.body.items.map((i: any) => i.ulid);
+
+  // Someone adds a note before the copy is confirmed: nothing is copied.
+  const late = core.addEntry(srv.db, { type: 'decision', title: 'late', summary: 's', module: 'notes-mod', project: 'none' });
+  const changed = await post('/api/projects/copy/apply', { ...args, expect });
+  assert.equal(changed.status, 409);
+  assert.equal(changed.body.error, 'The notes changed since the list was shown; nothing was copied. Check the list again.');
+  assert.equal(srv.db.prepare(`SELECT COUNT(*) c FROM entries WHERE series = 'TG'`).get().c, 0);
+  core.deleteEntry(srv.db, late.id!);
+
+  const done = await post('/api/projects/copy/apply', { ...args, expect });
+  assert.equal(done.status, 200, JSON.stringify(done.body));
+  assert.equal(done.body.copied.length, 2);
+  assert.match(done.body.lines[0], /^Copied 2 notes from module notes-mod \(E notes\) into TG \(Target, solo\):$/);
+  assert.equal(srv.db.prepare(`SELECT COUNT(*) c FROM entries WHERE series = 'TG'`).get().c, 2);
+  // The original is unchanged apart from its copied_to link.
+  assert.equal(core.getEntryByUlid(srv.db, a.ulid).title, 'first');
+
+  const again = await post('/api/projects/copy/plan', args);
+  assert.deepEqual([again.body.items.length, again.body.skipped.length], [0, 2], 'already copied');
+  const bad = await post('/api/projects/copy/plan', { from: 'module:notes-mod', to: 'TG', since: 'yesterday' });
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.error, /^--since "yesterday" is not a date/);
+  const noExpect = await post('/api/projects/copy/apply', args);
+  assert.deepEqual([noExpect.status, noExpect.body], [400, { error: 'Check the list first.' }]);
+});

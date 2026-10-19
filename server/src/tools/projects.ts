@@ -6,6 +6,7 @@ import http from 'node:http';
 import {
   getDb, projectListRows, createProjectOp, projectCreatedLines, promoteProject, renameProject, highestNumberOf,
   bindModule, unbindModule, bindChangeLine, findProject, notFound, getSyncValue, SYNC_KEYS,
+  planCopy, applyCopy, copyPlanLines, copyResultLines, type CopyArgs,
 } from '@collab-mcp/core';
 import { coreFailure } from './office-errors.js';
 
@@ -29,6 +30,18 @@ const guarded = (fn: (send: Send, body: any) => Promise<void> | void) =>
       throw e;
     }
   };
+
+/** `collab copy`'s arguments from a request body. */
+function copyArgs(b: any): CopyArgs {
+  const opt = (v: unknown, what: string) => (v === undefined || v === null || v === '' ? undefined : text(v, what));
+  return {
+    from: text(b.from, 'Choose where to copy from.'),
+    to: text(b.to, 'Choose the project to copy into.'),
+    author: opt(b.author, '"author" must be text.'),
+    since: opt(b.since, '"since" must be a date.'),
+  };
+}
+const CHANGED = 'The notes changed since the list was shown; nothing was copied. Check the list again.';
 
 const modulesOf = () => (db.prepare(`SELECT slug FROM modules ORDER BY slug`).all() as Array<{ slug: string }>).map((m) => m.slug);
 
@@ -67,6 +80,23 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
 
   'POST /api/projects/bind': guarded((send, b) => {
     send(200, { line: bindChangeLine(bindModule(db, text(b.module, 'Choose a module.'), text(b.code, 'Choose a project.'))) });
+  }),
+
+  // `collab copy` on the web (UI parity Task 7a): the same list -> ask -> copy, with core's lines.
+  'POST /api/projects/copy/plan': guarded((send, b) => {
+    const plan = planCopy(db, copyArgs(b));
+    send(200, { source: plan.source, target: plan.target, filters: plan.filters, items: plan.items, skipped: plan.skipped, lines: copyPlanLines(plan) });
+  }),
+
+  /** `expect` is the list the person saw: if the notes changed since, nothing is copied. */
+  'POST /api/projects/copy/apply': guarded(async (send, b) => {
+    const args = copyArgs(b);
+    if (!Array.isArray(b.expect) || !b.expect.every((u: unknown) => typeof u === 'string')) bad('Check the list first.');
+    const plan = planCopy(db, args);
+    const same = plan.items.length === b.expect.length && plan.items.every((it, i) => it.ulid === b.expect[i]);
+    if (!same) return send(409, { error: CHANGED });
+    const r = await applyCopy(db, plan);
+    send(200, { copied: r.copied, lines: copyResultLines(r) });
   }),
 
   'POST /api/projects/unbind': guarded((send, b) => {

@@ -27,7 +27,7 @@ const overview = (office: string[] | null, shKeys = OWNER) => ({
 
 const api = vi.hoisted(() => ({
   projectsList: vi.fn(), projectCreate: vi.fn(), projectPromote: vi.fn(), projectRename: vi.fn(),
-  projectBind: vi.fn(), projectUnbind: vi.fn(), teamOverview: vi.fn(),
+  projectBind: vi.fn(), projectUnbind: vi.fn(), teamOverview: vi.fn(), copyPlan: vi.fn(), copyApply: vi.fn(),
 }));
 vi.mock('../api/client', () => api);
 
@@ -202,5 +202,63 @@ describe('Projects page', () => {
   it('while the office answers, team controls say so', async () => {
     page(() => api.teamOverview.mockReturnValue(new Promise(() => {})));
     (await rowOf('NV')).getByText('Checking the post office…');
+  });
+
+  const PLAN = (titles: string[]) => ({
+    source: { kind: 'module', name: 'billing', label: 'module billing (E notes)' },
+    target: { ulid: 'u-nv', code: 'NV', name: 'Navi', mode: 'solo' },
+    items: titles.map((t, i) => ({ ulid: `n${i}`, ref: `E-0000${i + 1}`, type: 'decision', title: t, author: 'naveen', created_at: '2026-10-01' })),
+    skipped: [],
+    lines: [`Copy ${titles.length} notes from module billing (E notes) into NV (Navi, solo):`],
+  });
+
+  it('copy: pick a source, see the list, confirm, copy exactly that list', async () => {
+    page(() => {
+      api.copyPlan.mockResolvedValue(PLAN(['first', 'second']));
+      api.copyApply.mockResolvedValue({ copied: [{}, {}], lines: ['Copied 2 notes from module billing (E notes) into NV (Navi, solo):'] });
+    });
+    fireEvent.click((await rowOf('NV')).getByRole('button', { name: 'Copy notes here' }));
+    const from = dialog().getByLabelText('Copy from') as HTMLSelectElement;
+    expect([...from.options].map((o) => o.textContent)).toEqual([
+      'Choose a module or project…', 'Module billing (its notes with no project)', 'Module search (its notes with no project)',
+      'Project SH · Support hub', 'Project OL · Old team',
+    ]);
+    fireEvent.change(from, { target: { value: 'module:billing' } });
+    fireEvent.click(dialog().getByLabelText('Only my notes'));
+    fireEvent.click(dialog().getByRole('button', { name: 'Show the notes' }));
+    await waitFor(() => expect(api.copyPlan).toHaveBeenCalledWith({ from: 'module:billing', to: 'NV', author: 'me' }));
+    const items = within(await dialog().findByRole('list', { name: 'Notes to copy' }));
+    items.getByText('first'); items.getByText('second');
+    expect(api.copyApply).not.toHaveBeenCalled();
+    fireEvent.click(dialog().getByRole('button', { name: 'Copy 2 notes' }));
+    await waitFor(() => expect(api.copyApply).toHaveBeenCalledWith({ from: 'module:billing', to: 'NV', author: 'me' }, ['n0', 'n1']));
+    await screen.findByText('Copied 2 notes from module billing (E notes) into NV (Navi, solo):');
+  });
+
+  it('copy: a changed list is refused and the new list is shown; a refusal stays in the dialog', async () => {
+    const changed = 'The notes changed since the list was shown; nothing was copied. Check the list again.';
+    page(() => {
+      api.copyPlan.mockResolvedValueOnce(PLAN(['first'])).mockResolvedValueOnce(PLAN(['first', 'late']));
+      api.copyApply.mockRejectedValueOnce(refusal(409, changed));
+    });
+    fireEvent.click((await rowOf('NV')).getByRole('button', { name: 'Copy notes here' }));
+    fireEvent.change(dialog().getByLabelText('Copy from'), { target: { value: 'module:billing' } });
+    fireEvent.click(dialog().getByRole('button', { name: 'Show the notes' }));
+    fireEvent.click(await dialog().findByRole('button', { name: 'Copy 1 note' }));
+    expect((await dialog().findByRole('alert')).textContent).toBe(changed);
+    await dialog().findByRole('button', { name: 'Copy 2 notes' });
+    within(dialog().getByRole('list', { name: 'Notes to copy' })).getByText('late');
+  });
+
+  it('copy: changing the source drops the list on screen; a left project can\'t be copied into', async () => {
+    page(() => api.copyPlan.mockResolvedValue(PLAN(['first'])));
+    expect(disabled((await rowOf('OL')).getByRole('button', { name: 'Copy notes here' }))).toBe(true);
+    fireEvent.click((await rowOf('NV')).getByRole('button', { name: 'Copy notes here' }));
+    fireEvent.change(dialog().getByLabelText('Copy from'), { target: { value: 'module:billing' } });
+    fireEvent.click(dialog().getByRole('button', { name: 'Show the notes' }));
+    await dialog().findByRole('button', { name: 'Copy 1 note' });
+    fireEvent.change(dialog().getByLabelText('Copy from'), { target: { value: 'module:search' } });
+    dialog().getByRole('button', { name: 'Show the notes' });
+    expect(dialog().queryByRole('list', { name: 'Notes to copy' })).toBeNull();
   });
 });
