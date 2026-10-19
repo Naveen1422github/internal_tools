@@ -367,3 +367,21 @@ export const copyApply = (a: CopyArgs, expect: string[], target: string) =>
 
 /** `collab sync share|unshare <module>`: answers the office's list of shared modules. */
 export const moduleShare = (slug: string, shared: boolean) => sendJson<{ shared: string[] }>('POST', '/api/sync/share', { slug, shared });
+
+// --- Settings (UI parity Task 11) ---
+export interface SettingsView {
+  notebook: { name: string | null; path: string; described: string } | null;
+  device_id: string | null;
+  post_office: { url: string; fingerprint: string } | null;
+  /** This device's name at the post office; null with name_error when it can't be asked. */
+  name: string | null;
+  name_error: string | null;
+  /** Start sync at login; null when this machine's courier isn't set up. */
+  autostart: boolean | null;
+  courier_notebook: string | null;
+  courier_available: boolean;
+  open_notebook: string | null;
+}
+export const settingsView = () => sendJson<SettingsView>('GET', '/api/settings');
+export const settingsAddress = (url: string) => sendJson<{ url: string; line: string }>('POST', '/api/settings/address', { url });
+export const settingsAutostart = (on: boolean) => sendJson<{ on: boolean; lines: string[] }>('POST', '/api/settings/autostart', { on });

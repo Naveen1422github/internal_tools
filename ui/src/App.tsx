@@ -10,6 +10,7 @@ import Merge from './pages/Merge';
 import Team from './pages/Team';
 import Refused from './pages/Refused';
 import Projects from './pages/Projects';
+import Settings from './pages/Settings';
 
 export default function App() {
   return (
@@ -19,6 +20,7 @@ export default function App() {
         <Route path="/knowledge" element={<Knowledge />} />
         <Route path="/modules" element={<Modules />} />
         <Route path="/projects" element={<Projects />} />
+        <Route path="/settings" element={<Settings />} />
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/health" element={<Health />} />
         <Route path="/needs-merge" element={<NeedsMerge />} />

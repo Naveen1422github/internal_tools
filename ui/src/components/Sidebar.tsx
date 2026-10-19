@@ -9,6 +9,7 @@ const links = [
   { to: '/projects', label: 'Projects' }, // UI parity D8: always, solo projects need no office
   { to: '/tasks', label: 'Tasks' },
   { to: '/health', label: 'Health' },
+  { to: '/settings', label: 'Settings' },
 ];
 
 const navClass = ({ isActive }: { isActive: boolean }) =>

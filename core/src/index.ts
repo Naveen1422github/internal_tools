@@ -41,6 +41,7 @@ export * from './sync/overview.js';
 export * from './sync/send-filter.js';
 export * from './sync/cert.js';
 export * from './sync/joincode.js';
+export * from './sync/address.js';
 export * from './sync/http.js';
 export * from './sync/changes.js';
 export * from './sync/ping.js';
