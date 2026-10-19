@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { needsMerge } from '../api/client';
+import { needsMerge, teamOverview } from '../api/client';
 
 const links = [
   { to: '/', label: 'Dashboard', end: true },
@@ -25,6 +25,16 @@ export default function Sidebar() {
     const t = setInterval(load, 30_000);
     return () => { alive = false; clearInterval(t); };
   }, []);
+  // S3-11: "Team" only for a notebook connected to a post office that is in a
+  // team project or holds an office role. Asked once; any failure keeps it hidden.
+  const [team, setTeam] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    teamOverview()
+      .then((o) => { if (alive) setTeam(o.connected && (o.projects.length > 0 || o.office !== null)); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
   return (
     <nav className="w-56 shrink-0 border-r border-gray-200 dark:border-gray-800 p-3 flex flex-col gap-1">
       <div className="px-2 py-3 font-semibold tracking-tight">Knowledge Workspace</div>
@@ -38,6 +48,7 @@ export default function Sidebar() {
           {l.label}
         </NavLink>
       ))}
+      {team && <NavLink to="/team" className={navClass}>Team</NavLink>}
       {count > 0 && (
         <NavLink to="/needs-merge" className={navClass}>
           Needs merge<span className="ml-2 rounded-full bg-amber-400 text-black px-2 text-xs">{count}</span>
