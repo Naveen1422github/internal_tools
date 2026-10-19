@@ -1,4 +1,4 @@
-import { closeDb, copyRefused, describeRefused, discardRefused, formatEntryRef, getDb, listRefused } from "@collab-mcp/core";
+import { closeDb, copyRefused, discardRefused, formatEntryRef, getDb, refusedListLines } from "@collab-mcp/core";
 import type { CliResult, Io } from "./io.js";
 import { failPlain } from "./io.js";
 
@@ -16,14 +16,8 @@ export async function runRefused(args: string[], io: Io): Promise<CliResult> {
     switch (sub) {
       case "list": {
         if (rest.length) { io.err(USAGE); return { code: 2 }; }
-        const db = getDb();
-        const rows = listRefused(db);
-        if (!rows.length) { io.out("Nothing was refused."); return { code: 0 }; }
-        io.out(`${"ID".padEnd(28)}${"WHEN".padEnd(21)}${"PROJECT".padEnd(9)}${"KIND".padEnd(6)}${"NOTE".padEnd(26)}REASON`);
-        for (const r of rows) {
-          const { note, project_code } = describeRefused(db, r);
-          io.out(`${r.ulid.padEnd(28)}${r.at.padEnd(21)}${project_code.padEnd(9)}${r.kind.padEnd(6)}${note.padEnd(26)}${r.reason}`);
-        }
+        // Same lines as the MCP tool collab_refused_list (UI parity Task 7d).
+        for (const l of refusedListLines(getDb())) io.out(l);
         return { code: 0 };
       }
       case "copy": {

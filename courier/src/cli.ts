@@ -6,7 +6,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import {
-  resolveDbPath, loadCrsqlite, getSyncValue, setSyncValue, SYNC_KEYS, connectPinned, PinMismatchError,
+  resolveDbPath, loadCrsqlite, getSyncValue,
   postOfficeTargetFromDb, unsentSharedCount, requestJson, type PostOfficeTarget,
   describeMemberState, TEAM_STATUS_NOTE,
   startupProblem, startHeartbeat, runtimeDirFor, readBuildInfo, nameForPath,
@@ -14,8 +14,9 @@ import {
 import { Courier, type CourierStatus } from "./engine.js";
 import { COURIER_KEYS } from "./keys.js";
 import { courierDir as defaultCourierDir, courierFiles } from "./paths.js";
-import { autostartPlan, installAutostart, removeAutostart, type AutostartContext, type AutostartDeps } from "./autostart.js";
-import { setup, uninstall, readCourierConfig, writeCourierConfig, type CourierConfig } from "./setup.js";
+import { autostartPlan, type AutostartContext, type AutostartDeps } from "./autostart.js";
+import { setup, uninstall, readCourierConfig, type CourierConfig } from "./setup.js";
+import { setPostOfficeAddress, setAutostart } from "./settings.js";
 
 export interface Io { out(line: string): void; err(line: string): void }
 
@@ -152,30 +153,17 @@ export async function runCli(argv: string[], io: Io, deps: CliDeps = {}): Promis
       // where anything else answers is refused and nothing changes. A running
       // courier picks the new address up on its next retry (it re-reads it).
       case "set-address": {
-        const url = (pos[2] ?? "").trim().replace(/\/+$/, "");
-        if (!/^https:\/\/[^\s/]+$/.test(url)) {
-          io.err(`set-address needs the post office's address as https://host:port, e.g. collab sync set-address https://192.168.1.40:7443`);
-          return { code: 2 };
-        }
-        const cfg = needConfig();
-        const db = openReadable(cfg.dbPath);
-        try {
-          const fingerprint = getSyncValue(db, SYNC_KEYS.fingerprint);
-          if (!fingerprint) throw new Error("this notes DB has no post office certificate on record; run collab sync setup <join code>");
-          try {
-            (await connectPinned({ url, fingerprint }, 5000)).destroy();
-          } catch (e) {
-            if (e instanceof PinMismatchError) {
-              io.err(`refused: ${url} answers with a different certificate, so it is not your post office. Nothing changed.`);
-            } else {
-              io.err(`refused: could not reach a post office at ${url} (${(e as Error).message}). Nothing changed.`);
-            }
-            return { code: 1 };
+        const r = await setPostOfficeAddress(dir, pos[2] ?? "");
+        if (!r.ok) {
+          if (r.kind === "usage") {
+            io.err(`set-address needs the post office's address as https://host:port, e.g. collab sync set-address https://192.168.1.40:7443`);
+            return { code: 2 };
           }
-          setSyncValue(db, SYNC_KEYS.url, url);
-        } finally { closeReadable(db); }
-        writeCourierConfig(dir, { ...cfg, postOffice: url });
-        io.out(`post office address set to ${url} (certificate checked: it is your post office).`);
+          if (r.kind === "setup") throw new Error(r.reason);
+          io.err(`refused: ${r.reason}`);
+          return { code: 1 };
+        }
+        io.out(`post office address set to ${r.url} (certificate checked: it is your post office).`);
         io.out(`a running courier switches on its next retry; saving notes works right away.`);
         return { code: 0 };
       }
@@ -297,7 +285,7 @@ export async function runCli(argv: string[], io: Io, deps: CliDeps = {}): Promis
       }
 
       case "autostart": {
-        const cfg = needConfig();
+        needConfig();
         const on = pos[2] === "on" ? true : pos[2] === "off" ? false : null;
         if (on === null) throw new Error("autostart on|off");
         const plan = autostartPlan(ctx);
@@ -308,15 +296,8 @@ export async function runCli(argv: string[], io: Io, deps: CliDeps = {}): Promis
           for (const line of plan.describe) io.out(`  ${line}`);
           return { code: 0 };
         }
-        if (on) {
-          installAutostart(plan, deps.autostartDeps);
-          io.out("start at login: ON");
-          for (const line of plan.describe) io.out(`  ${line}`);
-        } else {
-          const notes = removeAutostart(plan, deps.autostartDeps);
-          io.out(`start at login: OFF${notes.length ? ` (notes: ${notes.join("; ")})` : ""}`);
-        }
-        writeCourierConfig(dir, { ...cfg, autostart: on });
+        // The same function as the web's Settings page (UI parity Task 11).
+        for (const line of setAutostart(dir, on, ctx, deps.autostartDeps) ?? []) io.out(line);
         return { code: 0 };
       }
 

@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react';
-import { doctor, reassignModule, setupDoctor, upsertEntry, type SetupGroup, type SetupMark, type SetupReport } from '../api/client';
+import {
+  doctor, doctorFix, notebooksList, reassignModule, setupDoctor, upsertEntry,
+  type NotebooksView, type SetupGroup, type SetupMark, type SetupReport,
+} from '../api/client';
+import { toast } from '../components/Toast';
+import Dialog from '../components/Dialog';
+import { modules as listModules } from '../api/client';
 import { formatEntryRef } from '../format';
 
 const SETUP_GROUPS: Array<[SetupGroup, string]> = [
@@ -13,8 +19,26 @@ const MARK: Record<SetupMark, { sign: string; tone: string }> = {
   skipped: { sign: '-', tone: 'text-gray-400' },
 };
 
-/** The whole-setup report: the same lines and words as `collab doctor` in a terminal (spec P10). */
-function SetupSection({ report, error }: { report: SetupReport | null; error: string | null }) {
+type Report = SetupReport & { fixable?: string[] };
+
+/**
+ * The whole-setup report: the same lines and words as `collab doctor` in a terminal (spec P10).
+ * A check `collab doctor --fix` can repair safely gets a Fix button (UI parity Task 7b).
+ */
+function SetupSection({ report, error, onReport }: { report: Report | null; error: string | null; onReport: (r: Report) => void }) {
+  const [fixing, setFixing] = useState<string | null>(null);
+  const fix = async (id: string) => {
+    setFixing(id);
+    try {
+      const r = await doctorFix(id);
+      toast(r.text, r.ok ? 'success' : 'error');
+      onReport(r.report);
+    } catch (e) {
+      toast((e as Error).message, 'error');
+      // The check may be fine by now (409): show the report as it is.
+      setupDoctor().then(onReport).catch(() => {});
+    } finally { setFixing(null); }
+  };
   if (error) return <p className="text-sm text-red-600">Setup check failed: {error}</p>;
   if (!report) return <p className="text-sm text-gray-500 animate-pulse">Checking setup...</p>;
   return (
@@ -32,6 +56,12 @@ function SetupSection({ report, error }: { report: SetupReport | null; error: st
                   <span className={`inline-block w-4 font-bold ${MARK[c.mark].tone}`}>{MARK[c.mark].sign}</span>
                   <span>{c.text}</span>
                   {c.fix && <div className="ml-4 text-xs text-gray-500">fix: <code>{c.fix}</code></div>}
+                  {report.fixable?.includes(c.id) && (
+                    <button type="button" onClick={() => fix(c.id)} disabled={fixing !== null}
+                      className="ml-4 mt-1 rounded-md border border-gray-300 dark:border-gray-700 px-2 py-0.5 text-xs hover:bg-gray-100 dark:hover:bg-gray-900 disabled:opacity-50">
+                      {fixing === c.id ? 'Fixing…' : 'Fix'}
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -45,10 +75,40 @@ function SetupSection({ report, error }: { report: SetupReport | null; error: st
   );
 }
 
+/** The notebooks on this computer (`collab notebook list`), marking the open one (`which`). */
+function NotebooksSection() {
+  const [view, setView] = useState<NotebooksView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { notebooksList().then(setView).catch((e) => setError((e as Error).message)); }, []);
+  if (error) return <p className="text-sm text-red-600">{error}</p>;
+  if (!view) return null;
+  return (
+    <section className="border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-gray-950 p-4 space-y-3">
+      <h2 className="font-bold text-sm uppercase tracking-widest">Notebooks</h2>
+      <p className="text-sm">Open now: {view.open.described} <span className="break-all text-gray-500">({view.open.path})</span></p>
+      {view.error && <p className="text-sm text-red-600">{view.error}</p>}
+      {view.notebooks.length > 0 && (
+        <ul className="space-y-1 text-sm">
+          {view.notebooks.map((n) => (
+            <li key={n.name} className="flex flex-wrap items-baseline gap-x-2">
+              <span className="font-medium">{n.name}</span>
+              {n.open && <span className="rounded-full bg-gray-200 dark:bg-gray-800 px-2 text-xs">Open</span>}
+              {n.default && <span className="rounded-full bg-gray-200 dark:bg-gray-800 px-2 text-xs">Default</span>}
+              {n.missing && <span className="text-xs text-red-600">File missing</span>}
+              <span className="break-all text-xs text-gray-500">{n.path}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-xs text-gray-500">The web server works on one notebook. To open another, restart it with that notebook.</p>
+    </section>
+  );
+}
+
 export default function Health() {
   const [checks, setChecks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [setup, setSetup] = useState<SetupReport | null>(null);
+  const [setup, setSetup] = useState<Report | null>(null);
   const [setupError, setSetupError] = useState<string | null>(null);
 
   const fetchHealth = () => {
@@ -66,27 +126,11 @@ export default function Health() {
     fetchHealth();
   }, []);
 
-  const handleBulkReassign = async (ids: number[]) => {
-    const mod = prompt('Enter module slug to assign (e.g. workspace-redesign):');
-    if (!mod) return;
-    try {
-      const res = await reassignModule(ids, mod);
-      if (res.ok) fetchHealth();
-    } catch (err: any) {
-      alert(err.message);
-    }
-  };
-
-  const handleFixSummary = async (id: number) => {
-    const summary = prompt('Enter summary (max 200 chars):');
-    if (!summary) return;
-    try {
-      const res = await upsertEntry({ id, summary });
-      if (res.ok) fetchHealth();
-    } catch (err: any) {
-      alert(err.message);
-    }
-  };
+  // UI parity Task 12: dialogs, not the browser's prompt/alert.
+  const [reassigning, setReassigning] = useState<number[] | null>(null);
+  const [fixingSummary, setFixingSummary] = useState<number | null>(null);
+  const handleBulkReassign = (ids: number[]) => setReassigning(ids);
+  const handleFixSummary = (id: number) => setFixingSummary(id);
 
   if (loading && checks.length === 0 && !setup && !setupError) return <div className="p-8 text-gray-500 animate-pulse">Running system diagnostics...</div>;
 
@@ -106,7 +150,14 @@ export default function Health() {
         </button>
       </div>
 
-      <SetupSection report={setup} error={setupError} />
+      {reassigning && (
+        <ReassignDialog ids={reassigning} onClose={() => setReassigning(null)} onDone={(n, mod) => { toast(`${n} note(s) moved to module ${mod}.`); fetchHealth(); }} />
+      )}
+      {fixingSummary !== null && (
+        <SummaryDialog id={fixingSummary} onClose={() => setFixingSummary(null)} onDone={() => { toast('Summary saved.'); fetchHealth(); }} />
+      )}
+      <SetupSection report={setup} error={setupError} onReport={setSetup} />
+      <NotebooksSection />
 
       <div className="space-y-6 pb-12">
         {checks.map((check, i) => (
@@ -190,5 +241,60 @@ export default function Health() {
         )}
       </div>
     </div>
+  );
+}
+
+const fieldClass = 'w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-sm';
+
+/** Reassign notes to a module (was a browser prompt for its slug). */
+function ReassignDialog({ ids, onClose, onDone }: { ids: number[]; onClose: () => void; onDone: (n: number, module: string) => void }) {
+  const [list, setList] = useState<string[]>([]);
+  const [module, setModule] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { listModules().then((r) => setList(r.results.map((m: { slug: string }) => m.slug))).catch((e) => setError((e as Error).message)); }, []);
+  const save = async () => {
+    setBusy(true); setError(null);
+    try {
+      const r = await reassignModule(ids, module);
+      if (!r.ok) throw new Error('Nothing was moved. Try again.');
+      onClose(); onDone(ids.length, module);
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <Dialog title={`Move ${ids.length} note(s) to a module`} confirmLabel="Move" confirmDisabled={!module} busy={busy} error={error} onConfirm={save} onCancel={onClose}>
+      <label className="block space-y-1 text-sm">
+        <span>Module</span>
+        <select value={module} onChange={(e) => setModule(e.target.value)} className={fieldClass}>
+          <option value="">Choose a module…</option>
+          {list.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+      </label>
+    </Dialog>
+  );
+}
+
+/** Write a missing summary (was a browser prompt). */
+function SummaryDialog({ id, onClose, onDone }: { id: number; onClose: () => void; onDone: () => void }) {
+  const [summary, setSummary] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const tooLong = summary.trim().length > 200;
+  const save = async () => {
+    setBusy(true); setError(null);
+    try {
+      const r = await upsertEntry({ id, summary: summary.trim() });
+      if (!r.ok) throw new Error('The summary was not saved. Try again.');
+      onClose(); onDone();
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <Dialog title={`Summary for ${formatEntryRef(id)}`} confirmLabel="Save summary" confirmDisabled={!summary.trim() || tooLong} busy={busy} error={error} onConfirm={save} onCancel={onClose}>
+      <label className="block space-y-1 text-sm">
+        <span>Summary</span>
+        <textarea value={summary} onChange={(e) => setSummary(e.target.value)} rows={3} className={fieldClass} />
+      </label>
+      <p className={`text-right text-xs ${tooLong ? 'font-bold text-red-600' : 'text-gray-500'}`}>{summary.trim().length}/200</p>
+    </Dialog>
   );
 }

@@ -25,6 +25,11 @@ export interface Entry {
   ulid?: string;
   /** 0005+: the note at superseded_by_ulid (J17). null = not superseded; absent = older file. */
   superseded_target?: LinkTarget | null;
+  /** UI parity Task 10: the note's project (search results carry its ULID, a note read the project). */
+  project_ulid?: string | null;
+  /** null name: the project isn't on this laptop yet. */
+  project?: { code: string; name: string | null; mode: string | null; left: boolean } | null;
+  deleted_at?: string | null;
 }
 
 /** The note at the other end of a link, found by its ULID (J17; core's LinkTarget). */
@@ -109,6 +114,8 @@ function qs(params: Record<string, string | undefined>): string {
 export const search = (p: {
   q?: string; type?: string; module?: string; agent?: string;
   kind?: string; category?: string; since?: string;
+  /** A project's code, or "none" for notes in no project. */
+  project?: string;
 } = {}) => getJson<{ results: Entry[] }>(`/api/collab/search${qs(p)}`);
 
 // A note number: an integer is an E note; "SH-12" names a project note (stage B1).
@@ -118,8 +125,17 @@ export const getEntry = (id: number | string) =>
 export const entryByUlid = (ulid: string) =>
   getJson<Entry>(`/api/collab/entry${qs({ ulid })}`);
 
-export const upsertEntry = (body: Omit<Partial<Entry>, 'id'> & { id?: number | string }) =>
-  postJson<{ ok: boolean; id: number; series?: string }>(`/api/collab/entry/upsert`, body);
+/**
+ * Create (no id) or edit a note. `project` (create only): a project code, or "none";
+ * omitted, core decides (the module's binding). A refusal keeps its own sentence:
+ * a 403 here is usually a role refusal, not a stale page (UI parity Task 9).
+ */
+export const upsertEntry = (body: Omit<Partial<Entry>, 'id' | 'project'> & { id?: number | string; project?: string }) =>
+  sendJson<{ ok: boolean; id: number | null; series?: string; pending?: boolean; ulid?: string }>('POST', `/api/collab/entry/upsert`, body);
+/** Where a new note would land, in core's words. */
+export interface NoteDestination { project: { code: string; name: string; mode: string } | null; why: 'named' | 'bound' | 'folder' | 'none'; line: string }
+export const noteDestination = (p: { module?: string; project?: string }) =>
+  sendJson<NoteDestination>('GET', `/api/collab/note-destination${qs({ module: p.module, project: p.project })}`);
 
 export const deleteEntry = (id: number | string) =>
   postJson<{ ok: boolean }>(`/api/collab/entry/delete`, { id });
@@ -149,7 +165,17 @@ export interface SetupReport {
   exitCode: 0 | 1 | 2;
   notebook: { name: string | null; path: string; source: string; described: string } | null;
 }
-export const setupDoctor = () => getJson<SetupReport>(`/api/doctor/setup`);
+export const setupDoctor = () => getJson<SetupReport & { fixable?: string[] }>(`/api/doctor/setup`);
+/** One of `collab doctor --fix`'s safe repairs; `text` is --fix's own line. */
+export const doctorFix = (id: string) =>
+  sendJson<{ ok: boolean; text: string; report: SetupReport & { fixable?: string[] } }>('POST', '/api/doctor/fix', { id });
+/** `collab notebook list` and `which`, read-only. */
+export interface NotebooksView {
+  open: { name: string | null; path: string; described: string };
+  notebooks: Array<{ name: string; path: string; default: boolean; open: boolean; missing: boolean }>;
+  error?: string;
+}
+export const notebooksList = () => sendJson<NotebooksView>('GET', '/api/notebooks');
 
 // --- Tasks ---
 export const tasks = () => getJson<{ results: any[] }>(`/api/collab/tasks`);
@@ -258,9 +284,14 @@ export const teamOffice = () => sendJson<TeamRoster>('GET', '/api/team/office');
 /** `role` is the role's name. */
 export const teamSetMember = (b: InScope & { device: string; role: string }) =>
   sendJson<{ ok: true }>('POST', '/api/team/member/set', b);
-/** Project scope only: revoking a device from the office stays on the CLI (S3-7). */
+/** Project scope only: revoking a device from the office is teamRevoke (UI parity D4). */
 export const teamRemoveMember = (b: { project: string; device: string }) =>
   sendJson<{ ok: true }>('POST', '/api/team/member/remove', b);
+/** UI parity D2: `collab team invite` on the web. The join code is shown once: never store it. */
+export interface TeamInvite { device_id: string; name: string; join_code: string; expires_at?: string }
+export const teamInvite = (name: string) => sendJson<TeamInvite>('POST', '/api/team/invite', { name });
+/** UI parity D4: `collab team revoke` on the web. */
+export const teamRevoke = (device: string) => sendJson<{ ok: true }>('POST', '/api/team/revoke', { device });
 export const teamCreateRole = (b: InScope & { name: string; keys: string[] }) =>
   sendJson<{ role: { ulid: string; name: string; keys: string[] } }>('POST', '/api/team/role/create', b);
 /** `role` is the role's ULID. */
@@ -284,3 +315,72 @@ export const refusedList = () => sendJson<RefusedList>('GET', '/api/refused');
 /** `to` is a solo project's code; answers the new note's ref, e.g. "MY-4". */
 export const refusedCopy = (id: string, to: string) => sendJson<{ ref: string }>('POST', '/api/refused/copy', { id, to });
 export const refusedDelete = (id: string) => sendJson<{ ok: true }>('POST', '/api/refused/delete', { id });
+
+// --- Projects (UI parity): the same core operations as `collab project ...` ---
+export interface Project {
+  ulid: string; name: string; code: string; mode: 'solo' | 'team'; team: string | null; created_at: string;
+  /** A team project this laptop left: read-only. */
+  left_at: string | null;
+}
+export interface ProjectRow extends Project {
+  notes: number;
+  /** Notes waiting for a number from the post office. */
+  pending: number;
+  /** Modules bound to this project on this laptop. */
+  modules: string[];
+  /** Solo only: the highest number ever used, so a promote continues after it. */
+  highest?: number;
+}
+export interface ProjectList {
+  projects: ProjectRow[];
+  /** Modules with a modules row: the ones a project can be bound to. */
+  modules: string[];
+  /** Modules with notes in no project: the ones `collab copy --from <module>` copies. */
+  copy_modules: string[];
+  office_url: string | null;
+  /** Who "only my notes" means on this laptop, or null when unknown. */
+  me: string | null;
+}
+export const projectsList = () => sendJson<ProjectList>('GET', '/api/projects');
+export const projectCreate = (b: { name: string; code: string; team: boolean }) =>
+  sendJson<{ project: Project; lines: string[] }>('POST', '/api/projects/create', b);
+export const projectPromote = (code: string) =>
+  sendJson<{ project: Project; next?: string; already?: true; lines: string[] }>('POST', '/api/projects/promote', { code });
+export const projectRename = (code: string, name: string) => sendJson<{ project: Project; line: string }>('POST', '/api/projects/rename', { code, name });
+export const projectBind = (module: string, code: string) => sendJson<{ line: string }>('POST', '/api/projects/bind', { module, code });
+export const projectUnbind = (module: string) => sendJson<{ line: string }>('POST', '/api/projects/unbind', { module });
+/** `collab copy` on the web: list what would be copied, then copy exactly that list. */
+export interface CopyArgs { from: string; to: string; author?: string; since?: string }
+export interface CopyPlanItem { ulid: string; ref: string; type: string; title: string; author: string | null; created_at: string }
+export interface CopyPlanView {
+  source: { kind: 'module' | 'project'; name: string; label: string };
+  target: { ulid: string; code: string; name: string; mode: 'solo' | 'team' };
+  items: CopyPlanItem[];
+  skipped: Array<{ ulid: string; ref: string; title: string; reason: string }>;
+  /** core's copyPlanLines: what `collab copy` prints before asking. */
+  lines: string[];
+}
+export const copyPlan = (a: CopyArgs) => sendJson<CopyPlanView>('POST', '/api/projects/copy/plan', a);
+/** `expect` and `target`: the list and project the person saw; if either changed, nothing is copied (409). */
+export const copyApply = (a: CopyArgs, expect: string[], target: string) =>
+  sendJson<{ copied: Array<{ from: string; to: string; to_ulid: string; pending: boolean }>; lines: string[] }>('POST', '/api/projects/copy/apply', { ...a, expect, target });
+
+/** `collab sync share|unshare <module>`: answers the office's list of shared modules. */
+export const moduleShare = (slug: string, shared: boolean) => sendJson<{ shared: string[] }>('POST', '/api/sync/share', { slug, shared });
+
+// --- Settings (UI parity Task 11) ---
+export interface SettingsView {
+  notebook: { name: string | null; path: string; described: string } | null;
+  device_id: string | null;
+  post_office: { url: string; fingerprint: string } | null;
+  /** Start sync at login; null when this machine's courier isn't set up. */
+  autostart: boolean | null;
+  courier_notebook: string | null;
+  courier_available: boolean;
+  open_notebook: string | null;
+}
+export const settingsView = () => sendJson<SettingsView>('GET', '/api/settings');
+/** This device's name at the post office; null with `error` when it can't be asked. */
+export const settingsName = () => sendJson<{ name: string | null; error: string | null }>('GET', '/api/settings/name');
+export const settingsAddress = (url: string) => sendJson<{ url: string; line: string }>('POST', '/api/settings/address', { url });
+export const settingsAutostart = (on: boolean) => sendJson<{ on: boolean; lines: string[] }>('POST', '/api/settings/autostart', { on });

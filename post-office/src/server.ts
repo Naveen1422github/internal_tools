@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
   StoreError, allocate, authenticate, redeemJoin, isRevoked, sharedModules, setModuleShared, teamStatus, officeSchema,
-  registerProject, addMember, revokeMember,
+  registerProject, renameOfficeProject, addMember, revokeMember,
   type Member, type Store,
 } from "./store.js";
 import {
@@ -270,7 +270,9 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         const { deviceId, secret } = addMember(o.store, String(b?.name ?? ""), { actor: me.device_id });
         ring("access", {});
         log(`${me.name}: added member ${deviceId}`);
-        return send(res, 200, { device_id: deviceId, secret });
+        // UI parity D2: when the code expires, so a page needn't hard-code it (additive; older laptops ignore it).
+        const stored = (o.store.prepare(`SELECT join_expires_at FROM po_members WHERE device_id = ?`).get(deviceId) as { join_expires_at: string }).join_expires_at;
+        return send(res, 200, { device_id: deviceId, secret, expires_at: `${stored.replace(" ", "T")}Z` }); // ISO 8601, UTC
       }
       case "GET /v1/office/members":
         // S3-7: any live member (authenticate already refused revoked devices).
@@ -284,6 +286,17 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
     }
     // Parameterised routes (one small matcher; the switch keeps the fixed ones).
     let m: RegExpExecArray | null;
+    if ((m = /^PUT \/v1\/projects\/([^/]+)$/.exec(route))) {
+      // UI parity D1: a team project's name is the office's; project.edit is checked here.
+      const ulid = param(m[1]);
+      const b = await readJson(req, maxBody);
+      requireMembership(o.store, me.device_id, ulid);
+      requireProjectKey(o.store, me.device_id, ulid, "project.edit");
+      const project = renameOfficeProject(o.store, ulid, b?.name, me.device_id);
+      ring("projects", {}); // no name in the ring: non-members must not learn it (R7a)
+      log(`${me.name}: team project ${project.code} renamed`);
+      return send(res, 200, { project });
+    }
     if ((m = /^GET \/v1\/projects\/([^/]+)\/members$/.exec(route))) {
       const ulid = param(m[1]);
       requireMembership(o.store, me.device_id, ulid);

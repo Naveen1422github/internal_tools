@@ -169,7 +169,35 @@ function defaultProject(db: DB, args: AddEntryArgs, withFolder: boolean): Projec
     if (isLeftProject(bound)) throw leftProjectError(bound);
     return bound;
   }
-  return withFolder ? currentProject(db) : null;
+  const folder = withFolder ? currentProject(db) : null;
+  // A folder naming a team you left fails here, as a bound one does (the save would refuse it anyway).
+  if (folder && isLeftProject(folder)) throw leftProjectError(folder);
+  return folder;
+}
+
+/** Where a new note would land, and why (UI parity Task 9: the New note form says it before saving). */
+export interface NoteDestination {
+  project: { code: string; name: string; mode: string } | null;
+  /** named: the caller chose it; bound: its primary module is bound to it; folder: the .collab of the folder; none: E series. */
+  why: "named" | "bound" | "folder" | "none";
+  line: string;
+}
+
+/**
+ * The project addEntryAsync would write a note with these arguments into, by
+ * the same rule (resolveProjectArg, folder included). Throws what the save
+ * would throw for an unknown or left project; writes nothing.
+ */
+export function noteDestination(db: DB, args: { module?: string; project?: string }, opts: { folder?: boolean } = {}): NoteDestination {
+  // `folder: false`: a caller with no folder of its own (the web server) skips the .collab step.
+  const p = resolveProjectArg(db, { type: "decision", title: "", summary: "", module: args.module, project: args.project }, opts.folder !== false);
+  const why: NoteDestination["why"] = !p ? "none"
+    : args.project !== undefined ? "named"
+    : boundProjectFor(db, args.module)?.ulid === p.ulid ? "bound" : "folder";
+  if (!p) return { project: null, why, line: "It goes into no project: it is numbered in the E series (E-…)." };
+  const team = p.mode === "team" ? " It is shared with the project's members; the post office numbers it." : " It stays on this laptop.";
+  const because = why === "bound" ? ` because module ${args.module} is bound to ${p.code}` : why === "folder" ? " because this folder's .collab names it" : "";
+  return { project: { code: p.code, name: p.name, mode: p.mode }, why, line: `It goes into ${p.code} (${p.name})${because}.${team}` };
 }
 
 export function addEntry(

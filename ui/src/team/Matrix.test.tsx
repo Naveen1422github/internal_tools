@@ -116,7 +116,7 @@ describe('Who can do what', () => {
     expect(within(table).queryByRole('rowheader', { name: 'Tasks' })).toBeNull();
     const rowOf = (key: string) => within(table).getByText(key, { selector: 'code' }).closest('tr')!;
     expect(rowOf('note.copy.out').textContent).toContain(LAPTOP_NOTE);
-    expect(rowOf('project.edit').textContent).toContain(LAPTOP_NOTE);
+    expect(rowOf('project.edit').textContent).not.toContain(LAPTOP_NOTE); // checked at the office since UI parity D1
     expect(rowOf('note.view').textContent).not.toContain(LAPTOP_NOTE);
     // Read-only: nothing to press or tick.
     expect(within(table).queryAllByRole('button')).toEqual([]);

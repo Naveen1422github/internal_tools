@@ -1,6 +1,9 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { teamRemoveMember, teamSetMember, type TeamMember } from '../api/client';
-import { needSentence, orderRoles, whereOf, type TeamTabProps } from './view';
+import { teamRemoveMember, teamRevoke, teamSetMember, type TeamMember } from '../api/client';
+import Dialog from '../components/Dialog';
+import AddMember from './AddMember';
+import Invite from './Invite';
+import { firstMissing, needSentence, orderRoles, whereOf, type TeamTabProps } from './view';
 import { localTimeOfUtc } from '../format';
 
 const nameOf = (m: TeamMember) => m.name ?? m.device_id;
@@ -10,7 +13,8 @@ const lastSeen = (at: string | null) => (at ? localTimeOfUtc(at) : 'Never');
 /**
  * Members of a team project, or of the office. The role select applies at once;
  * the office decides. Controls the viewer's keys rule out are shown disabled with
- * the reason, never hidden. Removing a device from the office stays on the CLI (S3-7).
+ * the reason, never hidden. UI parity: "Add a member" (D3, replaces S3-9) in a
+ * project; "Invite a person" (D2) and "Revoke" (D4, replaces S3-7) in the office.
  */
 export default function Members(props: TeamTabProps) {
   const { scope, project, me, viewerKeys, roster, act } = props;
@@ -19,6 +23,16 @@ export default function Members(props: TeamTabProps) {
   const canManage = viewerKeys.includes(manageKey);
   const canRemove = viewerKeys.includes('member.revoke');
   const [confirming, setConfirming] = useState<TeamMember | null>(null);
+  const [revoking, setRevoking] = useState<TeamMember | null>(null);
+  const canRevoke = viewerKeys.includes('office.member.revoke');
+  /** Why this row's device can't be revoked from here, or undefined (the office still decides). */
+  const revokeWhy = (m: TeamMember): string | undefined => {
+    if (m.device_id === me) return 'This is this laptop. Revoke it from another laptop.';
+    if (!canRevoke) return needSentence('office.member.revoke', 'this office');
+    const held = roster.roles.find((r) => r.ulid === m.role_ulid)?.keys ?? [];
+    const missing = firstMissing('office', held, viewerKeys);
+    return missing ? needSentence(missing, 'this office') : undefined;
+  };
   const others = roster.members.filter((m) => m.device_id !== me);
   // Each reason is said once, visibly, above the table; the controls point at it (and keep the title).
   const manageWhy = canManage ? undefined : needSentence(manageKey, where);
@@ -41,8 +55,17 @@ export default function Members(props: TeamTabProps) {
     if (ok) table.current?.focus(); else refocus();
   };
 
+  const revoke = async (m: TeamMember) => {
+    setRevoking(null);
+    // After a revoke the row is about to go: land on the table instead of a button that vanishes.
+    if (await act(() => teamRevoke(m.device_id))) table.current?.focus();
+  };
+
   return (
     <div className="space-y-4">
+      {project
+        ? <AddMember project={project} viewerKeys={viewerKeys} roster={roster} act={act} />
+        : <Invite viewerKeys={viewerKeys} roster={roster} onInvited={() => { act(async () => {}); }} />}
       {(manageWhy || removeWhy) && (
         <div className="space-y-1 text-sm text-gray-600 dark:text-gray-400">
           {manageWhy && <p id={manageId}>{manageWhy}</p>}
@@ -51,7 +74,7 @@ export default function Members(props: TeamTabProps) {
       )}
       {project && others.length === 0 && (
         <p className="text-sm text-gray-500">
-          This project has no other members yet. Add one with <code>{`collab team set <member> ${project.code} <role>`}</code>.
+          This project has no other members yet. Add one with “Add a member”.
         </p>
       )}
       {confirming && project && (
@@ -69,7 +92,7 @@ export default function Members(props: TeamTabProps) {
               <th className="px-3 py-2 font-semibold">Name</th>
               <th className="px-3 py-2 font-semibold">Last seen</th>
               <th className="px-3 py-2 font-semibold">{project ? 'Role' : 'Office role'}</th>
-              {project && <th className="px-3 py-2 font-semibold"><span className="sr-only">Actions</span></th>}
+              <th className="px-3 py-2 font-semibold"><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
@@ -95,6 +118,23 @@ export default function Members(props: TeamTabProps) {
                     {orderRoles(roster.roles).map((r) => <option key={r.ulid} value={r.name}>{r.name}</option>)}
                   </select>
                 </td>
+                {!project && (() => {
+                  const why = revokeWhy(m);
+                  return (
+                  <td className="px-3 py-2 text-right">
+                    <button
+                      type="button"
+                      aria-label={`Revoke ${nameOf(m)}`}
+                      disabled={!!why}
+                      title={why}
+                      onClick={() => setRevoking(m)}
+                      className="rounded-md border border-gray-300 dark:border-gray-700 px-3 py-1 text-sm hover:bg-gray-100 dark:hover:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Revoke
+                    </button>
+                  </td>
+                  );
+                })()}
                 {project && (
                   <td className="px-3 py-2 text-right">
                     <button
@@ -116,8 +156,22 @@ export default function Members(props: TeamTabProps) {
       </div>
       {!project && (
         <p className="text-sm text-gray-500">
-          To remove a device from the office, use <code>collab team revoke</code> on any laptop with that permission.
+          Revoking cuts a laptop off from the office at once. Someone who has been invited but hasn't joined yet isn't listed.
         </p>
+      )}
+      {revoking && (
+        <Dialog
+          title={`Revoke ${nameOf(revoking)}`}
+          confirmLabel="Revoke"
+          confirmTone="danger"
+          onConfirm={() => revoke(revoking)}
+          onCancel={() => setRevoking(null)}
+        >
+          <p className="text-sm">
+            Revoke {nameOf(revoking)} from the office? Every request from that laptop is refused from now on, and it receives
+            nothing new from any project. Notes already on it stay there. This can't be undone; to let them back, invite them again.
+          </p>
+        </Dialog>
       )}
     </div>
   );

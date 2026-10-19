@@ -40,6 +40,26 @@ test('GET /api/doctor/setup returns the setup report', async () => {
     const report = await res.json();
     assert.ok([0, 1, 2].includes(report.exitCode));
     assert.ok(report.checks.some((c: any) => c.group === 'notebook' && c.mark === 'ok'), JSON.stringify(report.checks));
+    assert.ok(Array.isArray(report.fixable), 'UI parity: which checks the Health page can fix');
+
+    // UI parity Task 7b: only core's safe repairs run, and only when the check asks for one.
+    const post = async (route: string, body: unknown) => {
+      const r = await fetch(`${s.baseUrl}${route}`, { method: 'POST', body: JSON.stringify(body) });
+      return { status: r.status, body: await r.json() };
+    };
+    assert.deepEqual(await post('/api/doctor/fix', { id: 'notebook.migrate' }), { status: 400, body: { error: "That check can't be fixed from here." } });
+    for (const id of ['toString', '__proto__', 1, ['install.addon'], null]) {
+      assert.deepEqual(await post('/api/doctor/fix', { id }), { status: 400, body: { error: "That check can't be fixed from here." } }, String(id));
+    }
+    if (!report.fixable.includes('programs.stale')) {
+      assert.deepEqual(await post('/api/doctor/fix', { id: 'programs.stale' }), { status: 409, body: { error: 'Nothing to fix: the check is fine now.' } });
+    }
+
+    // `collab notebook list` + `which`, read-only.
+    const nb = await (await fetch(`${s.baseUrl}/api/notebooks`)).json();
+    assert.equal(nb.open.path, s.db.name);
+    const mine = nb.notebooks.find((n: any) => n.name === 'web-test');
+    assert.deepEqual({ open: mine.open, missing: mine.missing }, { open: true, missing: false });
   } finally {
     await s.close();
     rmSync(data, { recursive: true, force: true });

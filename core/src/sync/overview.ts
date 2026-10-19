@@ -7,6 +7,7 @@ import { ensureCrsqlite } from "./extension.js";
 import { courierDir as defaultCourierDir, courierFiles } from "./courier-paths.js";
 import { SYNC_KEYS } from "./http-allocator.js";
 import { SHARED_KEY, SENT_KEY, sendContext, sendVerdictOf, type NotePlace } from "./send-filter.js";
+import { setSyncValue } from "./state.js";
 import { hasProjectLeft, hasSeries, hasUlidPrimaryKey } from "../schema.js";
 
 // What the web UI's status bar shows (spec part 2, V1): read from THIS laptop
@@ -31,6 +32,16 @@ export type SyncOverview =
 const defaultIsAlive = (pid: number): boolean => {
   try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }
 };
+
+/**
+ * Remember the office's list of shared modules (its answer to GET or POST
+ * /v1/modules). The courier calls it on every `modules` ring; the web server
+ * calls it after a share, so this laptop shows the change at once.
+ */
+export function rememberSharedModules(db: DB, shared: string[]): void {
+  const next = JSON.stringify([...shared].sort());
+  if (next !== getSyncValue(db, SHARED_KEY)) setSyncValue(db, SHARED_KEY, next);
+}
 
 function sharedSet(db: DB): Set<string> {
   try { return new Set(JSON.parse(getSyncValue(db, SHARED_KEY) ?? "[]") as string[]); } catch { return new Set(); }

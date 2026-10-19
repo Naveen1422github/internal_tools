@@ -4,7 +4,7 @@ import { failPlain, type CliResult, type Io } from "./io.js";
 // `collab copy` (spec P8, rule 7): list, ask, then copy. The lines come from
 // core (copyPlanLines / copyResultLines), the same ones collab_copy prints.
 
-const USAGE = "usage: collab copy --from <module | project> --to <project> [--author me] [--since <YYYY-MM-DD>] [--yes]";
+const USAGE = "usage: collab copy --from <module | project | note:<SH-12>> --to <project> [--author me] [--since <YYYY-MM-DD>] [--yes]";
 const VALUED = new Set(["--from", "--to", "--author", "--since"]);
 
 const fail = (io: Io, msg: string): CliResult => { io.err(`collab: ${msg.replace(/^\[collab(-mcp)?\] /, "")}`); return { code: 1 }; };

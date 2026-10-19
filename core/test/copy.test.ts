@@ -275,3 +275,32 @@ test('editing an original (refs written back without targets) keeps its copied_t
     assert.deepEqual(planCopy(t.db, { from: 'm', to: 'NV' }).skipped.map((s) => s.reason), ['already copied to NV-1']);
   } finally { t.cleanup(); }
 });
+
+// UI parity Task 10: "copy this note to another project" is collab copy with one note as the source.
+test('note:<ref> copies exactly that note, by number or ULID; an unknown note is named; same project refused', async () => {
+  const t = freshDb();
+  try {
+    migrate(t.db);
+    createProject(t.db, { name: 'Alpha', code: 'AL' });
+    createProject(t.db, { name: 'Beta', code: 'BE' });
+    const a1 = addEntry(t.db, note('a1', { project: 'AL' }));
+    addEntry(t.db, note('a2', { project: 'AL' }));
+    const e = addEntry(t.db, note('loose'));
+    const byRef = planCopy(t.db, { from: 'note:AL-1', to: 'BE' });
+    assert.deepEqual([byRef.source.kind, byRef.source.label, byRef.items.map((i) => i.title)], ['note', 'note AL-1', ['a1']]);
+    assert.equal(byRef.source.project_ulid, byRef.items.length ? (t.db.prepare(`SELECT project_ulid p FROM entries WHERE ulid = ?`).get(a1.ulid) as any).p : null);
+    const loose = planCopy(t.db, { from: `note:${e.ulid}`, to: 'BE' });
+    assert.deepEqual([loose.items.map((i) => i.title), loose.source.project_ulid], [['loose'], undefined], 'an E note with no module');
+    const r = await applyCopy(t.db, byRef);
+    assert.deepEqual(r.copied.map((c) => [c.from, c.to]), [['AL-1', 'BE-1']]);
+    assert.equal(copyResultLines(r)[0], 'Copied 1 note from note AL-1 into BE (Beta, solo):');
+    assert.equal(planCopy(t.db, { from: 'note:AL-1', to: 'BE' }).skipped[0].reason, 'already copied to BE-1');
+    assert.throws(() => planCopy(t.db, { from: 'note:AL-9', to: 'BE' }), /no note "AL-9" in this notebook/);
+    assert.throws(() => planCopy(t.db, { from: 'note:AL-1', to: 'AL' }), /same project \(AL\)/);
+    // Two live rows with one number (a needs-merge pair): say so, never pick one quietly.
+    const twin = '01JTW1N00000000000000000AA';
+    t.db.prepare(`INSERT INTO entries (ulid, id, series, project_ulid, type, kind, category, title, summary, status, tokens_estimate, deprecated, created_at)
+      SELECT ?, id, series, project_ulid, type, kind, category, 'twin', summary, status, tokens_estimate, deprecated, created_at FROM entries WHERE ulid = ?`).run(twin, a1.ulid);
+    assert.throws(() => planCopy(t.db, { from: 'note:AL-1', to: 'BE' }), /AL-1 names 2 notes; say which with note:<ULID>/);
+  } finally { t.cleanup(); }
+});

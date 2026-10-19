@@ -24,7 +24,8 @@ export interface PermissionArea {
   permissions: PermissionDef[];
 }
 
-const LAPTOP = new Set(['note.copy.out', 'project.edit', 'project.make_solo', 'project.delete']);
+// project.edit is checked at the office since UI parity D1 (a team rename goes there).
+const LAPTOP = new Set(['note.copy.out', 'project.make_solo', 'project.delete']);
 
 function def(key: string, label: string, description: string, active = true): PermissionDef {
   return { key, label, description, checkedOn: LAPTOP.has(key) ? 'laptop' : 'office', active };

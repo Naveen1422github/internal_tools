@@ -18,6 +18,11 @@ All commands are run from `frontend2\internal-tools` unless noted. `C` below mea
 | Web UI | `C web`, then open `http://127.0.0.1:7473` |
 | Manage members and roles on the web | `http://127.0.0.1:7473/team` ("Team" in the sidebar) |
 | Refused changes on the web | `http://127.0.0.1:7473/refused` ("Refused changes" in the sidebar, shown only when there are some) |
+| Projects on the web: create, make team, rename, bind modules, copy notes in | `http://127.0.0.1:7473/projects` ("Projects" in the sidebar) |
+| Invite a person, add a member, revoke a device | the Team page: Office → Members, or a project → Members |
+| Write a note yourself | "New note" at the top of every page |
+| This laptop, the post office's address, start sync at login | `http://127.0.0.1:7473/settings` ("Settings" in the sidebar) |
+| Fix a setup problem the safe way, see the notebooks | the Health page ("Fix" next to a check it can repair) |
 
 **The Team page needs an updated post office.** It asks the office for every answer. An office still on the old code shows "The post office needs updating before roles can be managed here." Update and restart the office. Laptops need no migration; rebuild a laptop to see the screens. "Team" only appears when the notebook is connected to a post office and is in a team project or holds an office role.
 
@@ -45,7 +50,7 @@ All commands are run from `frontend2\internal-tools` unless noted. `C` below mea
 | Trap | What happened | Note |
 |---|---|---|
 | Old build left running after a merge | it applied a migration the wrong way and the office refused every save; repaired | COLLAB-109 |
-| Changing networks (home ↔ office) | the Wi-Fi IP changed, saves were refused and the courier went offline; there's no command to change the address | COLLAB-98 |
+| Changing networks (home ↔ office) | the Wi-Fi IP changed, saves were refused and the courier went offline | COLLAB-98. Now: Settings → "The post office moved?" (or `C sync set-address <https://host:port>`); the address is accepted only if your post office's certificate answers there. |
 | Windows file locks | closing the database without finalizing the sync add-on leaves the file locked | COLLAB-95 |
 | Sync add-on missing on a new machine | migrations ran, then sync failed, leaving a half-made file | COLLAB-68 |
 | Certificate generation flake | tests sometimes fail with `ERR_OSSL_ASN1_ILLEGAL_PADDING`; rerun passes (fix branch exists, not merged) | COLLAB-119 |

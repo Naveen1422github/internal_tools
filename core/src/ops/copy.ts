@@ -15,14 +15,17 @@ import { resolveAuthor } from "../author.js";
 import { findProject, isLeftProject, isTeamProject, notFound, listProjects, type Project } from "../projects.js";
 import { resolveAllocator, allocateWithRetry, SAVE_ATTEMPT } from "../sync/allocator.js";
 import { ensureCrsqlite } from "../sync/extension.js";
-import { assertCan } from "../access/can.js";
-import { newUlid } from "../ulid.js";
+import { assertCan, can } from "../access/can.js";
+import { newUlid, isUlid, parseNoteRef } from "../ulid.js";
 import type { RefType } from "../constants.js";
 
 export { COPIED_TO_PREFIX };
 
 export interface CopyArgs {
-  /** A module slug (its E notes) or a project code/ULID; `module:` / `project:` remove any doubt. */
+  /**
+   * A module slug (its E notes) or a project code/ULID; `module:` / `project:` remove any doubt.
+   * `note:<SH-12 | E-00012 | ULID>` is one note (UI parity Task 10: "copy this note to another project").
+   */
   from: string;
   /** The target project's code or ULID. */
   to: string;
@@ -37,7 +40,7 @@ export interface CopySkip { ulid: string; ref: string; title: string; reason: st
 
 export interface CopyPlan {
   args: CopyArgs;
-  source: { kind: "module" | "project"; name: string; label: string; project_ulid?: string };
+  source: { kind: "module" | "project" | "note"; name: string; label: string; project_ulid?: string; note_ulid?: string };
   target: { ulid: string; code: string; name: string; mode: "solo" | "team" };
   filters: { author: string | null; since: string | null };
   items: CopyItem[];
@@ -66,7 +69,7 @@ function moduleExists(db: DB, slug: string): boolean {
 
 function resolveSource(db: DB, raw: string): CopyPlan["source"] {
   const v = String(raw ?? "").trim();
-  if (!v) throw new Error("[collab] copy needs --from <module | project>");
+  if (!v) throw new Error("[collab] copy needs --from <module | project | note:<SH-12>>");
   const asProject = (s: string): CopyPlan["source"] => {
     const p = findProject(db, s);
     if (!p) throw notFound(db, s);
@@ -76,8 +79,23 @@ function resolveSource(db: DB, raw: string): CopyPlan["source"] {
     if (!moduleExists(db, s)) throw new Error(`[collab] no module "${s}" in this notebook`);
     return { kind: "module", name: s, label: `module ${s} (E notes)` };
   };
-  const m = /^(project|module):(.+)$/i.exec(v);
-  if (m) return m[1].toLowerCase() === "project" ? asProject(m[2].trim()) : asModule(m[2].trim());
+  const asNote = (s: string): CopyPlan["source"] => {
+    const ref = isUlid(s) ? null : parseNoteRef(s);
+    const rows = (isUlid(s)
+      ? db.prepare(`SELECT ulid, id, series, project_ulid FROM entries WHERE ulid = ? AND deleted_at IS NULL`).all(s)
+      : ref ? db.prepare(`SELECT ulid, id, series, project_ulid FROM entries WHERE series = ? AND id = ? AND deleted_at IS NULL ORDER BY ulid`).all(ref.series, ref.id) : []
+    ) as Array<{ ulid: string; id: number | null; series: string; project_ulid: string | null }>;
+    if (rows.length === 0) throw new Error(`[collab] no note "${s}" in this notebook`);
+    if (rows.length > 1) throw new Error(`[collab] ${s} names ${rows.length} notes; say which with note:<ULID>: ${rows.map((r) => r.ulid).join(", ")}`);
+    const row = rows[0];
+    const name = formatEntryRef(row.id, row.series);
+    return { kind: "note", name, label: `note ${name}`, note_ulid: row.ulid, ...(row.project_ulid ? { project_ulid: row.project_ulid } : {}) };
+  };
+  const m = /^(project|module|note):(.+)$/i.exec(v);
+  if (m) {
+    const kind = m[1].toLowerCase();
+    return kind === "project" ? asProject(m[2].trim()) : kind === "note" ? asNote(m[2].trim()) : asModule(m[2].trim());
+  }
   const p = findProject(db, v);
   const isModule = moduleExists(db, v);
   if (p && isModule) {
@@ -139,7 +157,10 @@ export function planCopy(db: DB, args: CopyArgs): CopyPlan {
 
   const where = ["e.deleted_at IS NULL"];
   const params: unknown[] = [];
-  if (source.kind === "project") {
+  if (source.kind === "note") {
+    where.push("e.ulid = ?");
+    params.push(source.note_ulid);
+  } else if (source.kind === "project") {
     where.push("e.project_ulid = ?");
     params.push(source.project_ulid);
   } else {
@@ -206,7 +227,7 @@ export async function applyCopy(db: DB, plan: CopyPlan): Promise<CopyResult> {
   // target needs note.create. The copied-to breadcrumbs on the originals are
   // not gated here (an open Task 3 question).
   if (now.source.project_ulid) assertCan(db, now.source.project_ulid, "note.copy.out");
-  assertCan(db, target.ulid, "note.create");
+  assertCan(db, target.ulid, "note.create"); // the same checks as copyRefusal, which asks without throwing
 
   // Numbers for a team target, asked BEFORE the transaction (never inside it).
   // Solo: no allocator, no network, ever (rule 4).
@@ -340,4 +361,17 @@ export function copyResultLines(r: CopyResult): string[] {
   if (waiting) out.push(`${notes(waiting)} wait for their number from the post office: ${r.pending_reason}`);
   if (r.plan.skipped.length) out.push(`Skipped ${r.plan.skipped.length} already copied.`);
   return out;
+}
+
+/**
+ * Why this plan would be refused (applyCopy's own R8 checks), or null: so a
+ * page can say so before showing the list (UI parity Task 7a).
+ */
+export function copyRefusal(db: DB, plan: CopyPlan): string | null {
+  for (const [ulid, key] of [[plan.source.project_ulid ?? null, "note.copy.out"], [plan.target.ulid, "note.create"]] as const) {
+    if (key === "note.copy.out" && !ulid) continue;
+    const c = can(db, ulid, key);
+    if (!c.ok) return c.reason;
+  }
+  return null;
 }

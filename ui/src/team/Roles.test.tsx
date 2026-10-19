@@ -123,7 +123,7 @@ describe('Roles tab', () => {
       return (box.getAttribute('aria-describedby') ?? '').split(' ').map((id) => document.getElementById(id)?.textContent ?? '').join(' ');
     };
     expect(describe('Copy notes out')).toContain(note);
-    expect(describe('Edit project')).toContain(note);
+    expect(describe('Edit project')).not.toContain(note); // checked at the office since UI parity D1
     expect(describe('View notes')).not.toContain(note);
     expect(describe('View notes')).toContain('Read notes in the project');
     expect(f.getByText('note.view').tagName).toBe('CODE');

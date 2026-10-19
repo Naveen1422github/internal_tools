@@ -56,7 +56,7 @@ function spyAccessReads(db: any): { reads: () => number } {
   return { reads: () => reads };
 }
 
-test('solo and E: allowed with zero access_cache reads', () => {
+test('solo and E: allowed with zero access_cache reads', async () => {
   const t = freshDb();
   try {
     migrate(t.db);
@@ -73,7 +73,7 @@ test('solo and E: allowed with zero access_cache reads', () => {
     updateEntry(t.db, { ulid: e.ulid, title: 'e2' });
     updateEntry(t.db, { ulid: s.ulid, title: 's2' });
     deleteEntry(t.db, s.id!, 'SO');
-    renameProject(t.db, 'SO', 'mine renamed');
+    await renameProject(t.db, 'SO', 'mine renamed');
     assert.equal(spy.reads(), 0, 'no access_cache read for a solo project or an E note');
     // The same spy does see a team check (the spy works).
     assert.equal(can(t.db, TM, 'note.create').ok, false);
@@ -118,7 +118,7 @@ test('Reader: create/edit/supersede/archive/delete/resolve/copy-out/rename each 
     assert.throws(() => resolveWithText(t.db, { id: 2, series: 'TM', expectedHeads: heads, title: 't', summary: 's', description: null }), denied('merge.resolve'));
     await assert.rejects(applyCopy(t.db, copyOut), denied('note.copy.out'));
     await assert.rejects(applyCopy(t.db, copyIn), denied('note.create'));
-    assert.throws(() => renameProject(t.db, 'TM', 'renamed'), denied('project.edit'));
+    await assert.rejects(renameProject(t.db, 'TM', 'renamed'), denied('project.edit'));
 
     assert.equal(dbVersion(t.db), v0, 'no synced cell was written');
     assert.equal((t.db.prepare(`SELECT COUNT(*) c FROM entries`).get() as { c: number }).c, count0);
@@ -132,9 +132,10 @@ test('Reader: create/edit/supersede/archive/delete/resolve/copy-out/rename each 
     resolveNeedsMerge(t.db, 2, heads, 'TM');
     assert.ok(dbVersion(t.db) > v0);
     // project.edit is Owner-only.
-    assert.throws(() => renameProject(t.db, 'TM', 'renamed'), denied('project.edit'));
+    await assert.rejects(renameProject(t.db, 'TM', 'renamed'), denied('project.edit'));
     setRole(t.db, 'Owner');
-    assert.equal(renameProject(t.db, 'TM', 'renamed').name, 'renamed');
+    // Past the laptop check, a team rename goes to the office (UI parity D1): none is set up here.
+    await assert.rejects(renameProject(t.db, 'TM', 'renamed'), /share this notebook first/);
   } finally { t.cleanup(); }
 });
 

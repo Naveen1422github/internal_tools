@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { search, modules, type Entry } from '../api/client';
+import { search, modules, projectsList, type Entry, type ProjectRow } from '../api/client';
 import { useUi } from '../store/ui';
 import { formatEntryRef, noteRefOf } from '../format';
 
@@ -11,12 +11,15 @@ export default function Knowledge() {
     q: '',
     category: '',
     module: '',
-    type: ''
+    type: '',
+    project: '',
   });
-  const { openDrawer } = useUi();
+  const [projects, setProjects] = useState<ProjectRow[]>([]);
+  const { openDrawer, setNewNoteOpen } = useUi();
 
   useEffect(() => {
     modules().then(res => setModuleList(res.results)).catch(() => {});
+    projectsList().then((r) => setProjects(r.projects)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -31,8 +34,8 @@ export default function Knowledge() {
   }, [filters]);
 
   return (
-    <div className="flex h-full gap-6 animate-in fade-in duration-500">
-      <aside className="w-64 shrink-0 space-y-6">
+    <div className="flex h-full flex-col gap-6 md:flex-row animate-in fade-in duration-500">
+      <aside className="w-full shrink-0 space-y-6 md:w-64">
         <div>
           <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Category</h3>
           <div className="space-y-1">
@@ -65,6 +68,20 @@ export default function Knowledge() {
         </div>
 
         <div>
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Project</h3>
+          <select
+            aria-label="Project"
+            className="w-full bg-transparent border border-gray-200 dark:border-gray-800 rounded p-1.5 text-sm outline-none focus:ring-2 focus:ring-blue-500/20"
+            value={filters.project}
+            onChange={e => setFilters({ ...filters, project: e.target.value })}
+          >
+            <option value="">All projects</option>
+            {projects.map((p) => <option key={p.ulid} value={p.code}>{p.code} · {p.name}</option>)}
+            <option value="none">No project (E series)</option>
+          </select>
+        </div>
+
+        <div>
           <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Type</h3>
           <input 
             type="text"
@@ -77,7 +94,7 @@ export default function Knowledge() {
       </aside>
 
       <main className="flex-1 min-w-0 flex flex-col gap-4">
-        <div className="relative">
+        <div className="flex gap-2">
           <input 
             type="text"
             placeholder="Search entries..."
@@ -85,6 +102,7 @@ export default function Knowledge() {
             value={filters.q}
             onChange={e => setFilters({ ...filters, q: e.target.value })}
           />
+          <button type="button" onClick={() => setNewNoteOpen(true)} className="shrink-0 rounded-lg border border-gray-200 dark:border-gray-800 px-3 text-sm font-medium hover:bg-gray-100 dark:hover:bg-gray-900">New note</button>
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto pr-2">
@@ -105,6 +123,11 @@ export default function Knowledge() {
                   <h3 className="font-semibold text-gray-900 dark:text-gray-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">{r.title}</h3>
                   <p className="text-sm text-gray-500 mt-1 line-clamp-2">{r.summary}</p>
                   <div className="mt-3 flex gap-2 overflow-x-hidden">
+                    {r.series && r.series !== 'E' && (
+                      <span title={projects.find((p) => p.code === r.series)?.name} className="text-[10px] bg-violet-50 text-violet-700 dark:bg-violet-900/20 dark:text-violet-300 px-1.5 py-0.5 rounded font-bold tracking-wider">
+                        {r.series}{projects.find((p) => p.code === r.series) ? ` · ${projects.find((p) => p.code === r.series)!.name}` : ''}
+                      </span>
+                    )}
                     {r.module && <span className="text-[10px] bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">{r.module}</span>}
                     {r.category && <span className="text-[10px] bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">{r.category}</span>}
                     {r.superseded_by && <span className="text-[10px] bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Superseded</span>}

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { refusedCopy, refusedDelete, refusedList, type RefusedList, type RefusedRow } from '../api/client';
 import { localTimeOfUtc } from '../format';
 
@@ -100,7 +101,7 @@ export default function Refused() {
       {rows.length === 0 ? <p className="text-sm">Nothing was refused.</p> : (
         <>
           {solo.length === 0 && (
-            <p className="text-sm text-gray-500">Create a solo project first: <code>{'collab project create <name>'}</code>.</p>
+            <p className="text-sm text-gray-500">Create a solo project first, on the <Link to="/projects" className="underline">Projects</Link> page (“New project”).</p>
           )}
           {confirming && <ConfirmDelete row={confirming} onDelete={() => remove(confirming)} onCancel={cancelDelete} />}
           <div className="border border-gray-200 dark:border-gray-800 rounded-lg overflow-x-auto">

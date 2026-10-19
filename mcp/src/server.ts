@@ -71,6 +71,17 @@ import {
   bindModule,
   unbindModule,
   bindChangeLine,
+  promoteProject,
+  promotedLines,
+  renamedLine,
+  renameProject,
+  notFound,
+  teamListLines,
+  postOfficeTargetFromDb,
+  requestJson,
+  refusedListLines,
+  listRefused,
+  copyRefused,
   type Project,
   type NoteRef,
   type NoteKey,
@@ -1398,7 +1409,7 @@ server.registerTool(
       "exactly what changed (each old -> new number). Copying a team you left into a solo project makes the notes editable.",
     ].join("\n"),
     inputSchema: {
-      from: z.string().min(1).describe("A module slug (its E notes) or a project code/ULID. 'module:<slug>' / 'project:<code>' when a name is both."),
+      from: z.string().min(1).describe("A module slug (its E notes) or a project code/ULID. 'module:<slug>' / 'project:<code>' when a name is both; 'note:<SH-12 | ULID>' for one note."),
       to: z.string().min(1).describe("The target project's code or ULID."),
       author: z.string().optional().describe("'me' = only this machine's author's notes; or an author name."),
       since: z.string().optional().describe("YYYY-MM-DD: only notes created on or after this date."),
@@ -1523,6 +1534,133 @@ server.registerTool(
     try {
       const c = unbindModule(db, args.module);
       return { content: [{ type: "text", text: bindChangeLine(c) }], structuredContent: structured({ binding: c }) };
+    } catch (e) {
+      return toolError(e);
+    }
+  }
+);
+
+// UI parity Task 7d: what the AI may do on its own. Team changes (roles,
+// members, invite, revoke) and discarding a refused change stay with a person
+// in the web UI: the office can't tell the AI from its human yet (S4).
+server.registerTool(
+  "collab_project_promote",
+  {
+    title: "Make a solo project a team project",
+    description: [
+      "Same as `collab project promote <code>`: registers the solo project at this notebook's post office, which",
+      "continues its numbers after the highest one used, so every note keeps its number; the courier sends its notes",
+      "to the team on its next sync. The promoter becomes its Owner; only members added later see it.",
+      "It can't be made solo again. The office checks \"Create projects\" (office.project.create).",
+    ].join("\n"),
+    inputSchema: { project: z.string().min(1).describe("Project code (SH) or ULID.") },
+    // It can't be undone and sends every note of the project to the team: clients should ask first.
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  },
+  async (args) => {
+    try {
+      const before = findProject(db, args.project);
+      if (!before) throw notFound(db, args.project);
+      const p = await promoteProject(db, args.project);
+      return { content: [{ type: "text", text: promotedLines(db, p, before.mode === "team").join("\n") }], structuredContent: structured({ project: p }) };
+    } catch (e) {
+      return toolError(e);
+    }
+  }
+);
+
+server.registerTool(
+  "collab_project_rename",
+  {
+    title: "Rename a project",
+    description: [
+      "Same as `collab project rename <code> <new name>`: the code never changes. A team project is renamed at its",
+      "post office (it checks \"Edit project\", project.edit) for every member; a solo one only on this laptop.",
+    ].join("\n"),
+    inputSchema: {
+      project: z.string().min(1).describe("Project code (SH) or ULID."),
+      name: z.string().min(1).describe("The new name."),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  },
+  async (args) => {
+    try {
+      const p = await renameProject(db, args.project, args.name);
+      return { content: [{ type: "text", text: renamedLine(p) }], structuredContent: structured({ project: p }) };
+    } catch (e) {
+      return toolError(e);
+    }
+  }
+);
+
+server.registerTool(
+  "collab_team_list",
+  {
+    title: "List a team project's members and roles",
+    description: [
+      "Same as `collab team list <CODE>`: who is in a team project, their role and when they were last seen, and",
+      "what each role may do, as the post office answers now. Read-only: changing roles or members is done by a",
+      "person on the web UI's Team page.",
+    ].join("\n"),
+    inputSchema: { project: z.string().min(1).describe("Team project code (SH) or ULID.") },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  },
+  async (args) => {
+    try {
+      const p = findProject(db, args.project);
+      if (!p) throw notFound(db, args.project);
+      if (p.mode !== "team") throw new Error(`[collab] ${p.code} is a solo project: it has no team or roles`);
+      const target = postOfficeTargetFromDb(db);
+      if (!target) throw new Error("[collab] this notebook is not sharing with a post office (collab sync setup <join code>)");
+      const r = await requestJson(target, "GET", `/v1/projects/${encodeURIComponent(p.ulid)}/members`);
+      if (r.status >= 400) throw new Error(String(r.body?.error ?? `the post office answered ${r.status}`));
+      return { content: [{ type: "text", text: teamListLines(p, r.body).join("\n") }], structuredContent: structured(r.body) };
+    } catch (e) {
+      return toolError(e);
+    }
+  }
+);
+
+server.registerTool(
+  "collab_refused_list",
+  {
+    title: "List the changes the post office refused",
+    description: [
+      "Same as `collab refused list`: changes the post office turned down (for example a note created without",
+      "\"Create notes\"), kept on this laptop only, each with the office's reason. Keep one with collab_refused_copy;",
+      "discarding one is done by a person (web UI: Refused changes).",
+    ].join("\n"),
+    inputSchema: {},
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async () => {
+    try {
+      return { content: [{ type: "text", text: refusedListLines(db).join("\n") }], structuredContent: structured({ refused: listRefused(db) }) };
+    } catch (e) {
+      return toolError(e);
+    }
+  }
+);
+
+server.registerTool(
+  "collab_refused_copy",
+  {
+    title: "Keep a refused change in a solo project",
+    description: [
+      "Same as `collab refused copy <id> --to <SOLO CODE>`: the refused text becomes a new note in a solo project",
+      "of this laptop, and the refusal is cleared. Answers the new note's number.",
+    ].join("\n"),
+    inputSchema: {
+      id: z.string().min(1).describe("The refusal's id, from collab_refused_list."),
+      to: z.string().min(1).describe("A solo project's code."),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  async (args) => {
+    try {
+      const r = await copyRefused(db, args.id, args.to);
+      const ref = formatEntryRef(r.id, r.series);
+      return { content: [{ type: "text", text: ref }], structuredContent: structured({ ref }) };
     } catch (e) {
       return toolError(e);
     }

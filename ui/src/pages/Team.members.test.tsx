@@ -43,6 +43,8 @@ const api = vi.hoisted(() => ({
   teamOffice: vi.fn(),
   teamSetMember: vi.fn(),
   teamRemoveMember: vi.fn(),
+  teamInvite: vi.fn(),
+  teamRevoke: vi.fn(),
   RELOAD_MESSAGE: 'reload',
 }));
 vi.mock('../api/client', () => api);
@@ -56,6 +58,7 @@ function at(path: string, setup?: () => void) {
   api.teamOffice.mockResolvedValue(officeRoster());
   api.teamSetMember.mockResolvedValue({ ok: true });
   api.teamRemoveMember.mockResolvedValue({ ok: true });
+  api.teamRevoke.mockResolvedValue({ ok: true });
   setup?.();
   render(<MemoryRouter initialEntries={[path]}><Routes><Route path="/team" element={<Team />} /></Routes></MemoryRouter>);
 }
@@ -215,15 +218,15 @@ describe('Team page, Members tab', () => {
     expect([...select.options].map((o) => o.textContent)).toEqual(['Owner', 'Contributor', 'Reader', 'Auditor', 'Zed']);
   });
 
-  it('office scope: office members, office role select, no remove, and the revoke note', async () => {
+  it('office scope: office members, office role select, no remove, and Revoke instead of the CLI note (D4)', async () => {
     at('/team?scope=office');
     await waitFor(() => expect(api.teamOffice).toHaveBeenCalled());
     const rinku = await rowOf('Rinku');
     const select = rinku.getByLabelText('Office role for Rinku') as HTMLSelectElement;
     expect(select.disabled).toBe(false);
     expect(rinku.queryByRole('button', { name: /Remove/ })).toBeNull();
-    screen.getByText(/To remove a device from the office, use/);
-    screen.getByText('collab team revoke');
+    expect((rinku.getByRole('button', { name: 'Revoke Rinku' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText('collab team revoke')).toBeNull();
     fireEvent.change(select, { target: { value: 'Office admin' } });
     await waitFor(() => expect(api.teamSetMember).toHaveBeenCalledWith({ scope: 'office', device: 'dev-r', role: 'Office admin' }));
   });
@@ -237,10 +240,141 @@ describe('Team page, Members tab', () => {
     expect(select.getAttribute('aria-describedby')).toBe(line.id);
   });
 
-  it('a project with only the viewer shows the empty state with the CLI command', async () => {
+  it('a project with only the viewer shows the empty state pointing at "Add a member" (D3), not the CLI', async () => {
     at('/team?scope=SH', () => api.teamProject.mockResolvedValue({ ...projectRoster(), members: [projectRoster().members[0]] }));
-    await screen.findByText(/This project has no other members yet/);
-    screen.getByText('collab team set <member> SH <role>');
+    await screen.findByText('This project has no other members yet. Add one with “Add a member”.');
+    expect(screen.queryByText(/collab team set/)).toBeNull();
+  });
+
+  // --- UI parity Task 6: invite (D2), add a member (D3), revoke (D4) ---
+  const dialog = () => within(screen.getByRole('dialog'));
+  const disabled = (el: HTMLElement) => (el as HTMLButtonElement).disabled;
+
+  it('invite: shows the join code once with Copy and how to use it; the code is gone after Done', async () => {
+    const code = 'collab1-eyJ1IjoiaHR0cHM6Ly9vZmZpY2UifQ';
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    at('/team?scope=office', () => api.teamInvite.mockResolvedValue({ device_id: 'dev-new', name: 'Asha', join_code: code, expires_at: '2026-10-26T10:00:00Z' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Invite a person' }));
+    fireEvent.change(dialog().getByLabelText('Their name'), { target: { value: ' Asha ' } });
+    fireEvent.click(dialog().getByRole('button', { name: 'Create join code' }));
+    await waitFor(() => expect(api.teamInvite).toHaveBeenCalledWith('Asha'));
+    expect((await dialog().findByLabelText('Join code') as HTMLTextAreaElement).value).toBe(code);
+    dialog().getByText(/Give this code to Asha\. On their laptop they run/);
+    dialog().getByText('collab sync setup <code>');
+    dialog().getByText(/It works once and expires on /);
+    dialog().getByText('Treat it like a password: it is shown only once.');
+    fireEvent.click(dialog().getByRole('button', { name: 'Copy code' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(code));
+    await dialog().findByText('Copied.');
+    fireEvent.click(dialog().getByRole('button', { name: 'Done' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.body.textContent).not.toContain(code);
+  });
+
+  it('invite: the office\'s refusal stays in the dialog word for word', async () => {
+    const no = 'You need "Add office members" (office.member.add) in this office to do this';
+    at('/team?scope=office', () => api.teamInvite.mockRejectedValue(refusal(403, no)));
+    fireEvent.click(await screen.findByRole('button', { name: 'Invite a person' }));
+    fireEvent.change(dialog().getByLabelText('Their name'), { target: { value: 'Asha' } });
+    fireEvent.click(dialog().getByRole('button', { name: 'Create join code' }));
+    expect((await dialog().findByRole('alert')).textContent).toBe(no);
+  });
+
+  it('invite is greyed without office.member.add, or without a key the Office member role holds', async () => {
+    at('/team?scope=office', () => api.teamOverview.mockResolvedValue({ ...overview(), office: { role: 'X', keys: ['office.role.manage'] } }));
+    const btn = await screen.findByRole('button', { name: 'Invite a person' });
+    expect(disabled(btn)).toBe(true);
+    screen.getByText('You need "Add office members" (office.member.add) in this office to do this');
+    cleanup();
+    at('/team?scope=office', () => api.teamOverview.mockResolvedValue({ ...overview(), office: { role: 'X', keys: ['office.member.add'] } }));
+    expect(disabled(await screen.findByRole('button', { name: 'Invite a person' }))).toBe(true);
+    screen.getByText('You need "Create projects" (office.project.create) in this office to do this');
+  });
+
+  it('add a member: lists only office members not in the project, offers only roles you can give, defaults to Reader', async () => {
+    at('/team?scope=SH', () => {
+      api.teamOverview.mockResolvedValue({ ...overview(), projects: [{ ...overview().projects[0], keys: ['note.view', 'member.invite'] }] });
+      api.teamOffice.mockResolvedValue({
+        ...officeRoster(),
+        members: [...officeRoster().members, { device_id: 'dev-a', name: 'Asha', role: 'Office member', role_ulid: 'o-member', last_seen_at: null }],
+      });
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a member' }));
+    const member = await dialog().findByLabelText('Member') as HTMLSelectElement;
+    expect([...member.options].map((o) => o.textContent)).toEqual(['Choose a member…', 'Asha']);
+    const roleSel = dialog().getByLabelText('Role') as HTMLSelectElement;
+    expect([...roleSel.options].map((o) => o.textContent)).toEqual(['Contributor', 'Reader']);
+    expect(roleSel.value).toBe('Reader');
+    dialog().getByText("Roles with permissions you don't hold aren't offered.");
+    fireEvent.change(member, { target: { value: 'dev-a' } });
+    fireEvent.click(dialog().getByRole('button', { name: 'Add' }));
+    await waitFor(() => expect(api.teamSetMember).toHaveBeenCalledWith({ scope: 'project', project: 'P_SH', device: 'dev-a', role: 'Reader' }));
+  });
+
+  it('add a member is greyed without member.invite', async () => {
+    at('/team?scope=RD');
+    expect(disabled(await screen.findByRole('button', { name: 'Add a member' }))).toBe(true);
+    screen.getByText('You need "Invite members" (member.invite) in RD to do this');
+  });
+
+  it('revoke asks first, then calls teamRevoke; your own row and higher-ranked rows are greyed', async () => {
+    at('/team?scope=office');
+    const me = await rowOf('Naveen');
+    expect(disabled(me.getByRole('button', { name: 'Revoke Naveen' }))).toBe(true);
+    expect(me.getByRole('button', { name: 'Revoke Naveen' }).title).toBe('This is this laptop. Revoke it from another laptop.');
+    const loads = api.teamOffice.mock.calls.length;
+    fireEvent.click((await rowOf('Rinku')).getByRole('button', { name: 'Revoke Rinku' }));
+    dialog().getByText(/Revoke Rinku from the office\? Every request from that laptop is refused from now on/);
+    expect(api.teamRevoke).not.toHaveBeenCalled();
+    fireEvent.click(dialog().getByRole('button', { name: 'Revoke' }));
+    await waitFor(() => expect(api.teamRevoke).toHaveBeenCalledWith('dev-r'));
+    await waitFor(() => expect(api.teamOffice.mock.calls.length).toBe(loads + 1), { timeout: 2000 });
+    cleanup();
+    // A viewer with office.member.revoke but not office.project.create can't revoke an Office member (rank).
+    at('/team?scope=office', () => api.teamOverview.mockResolvedValue({ ...overview(), office: { role: 'X', keys: ['office.member.revoke'] } }));
+    const rinku = await rowOf('Rinku');
+    expect(disabled(rinku.getByRole('button', { name: 'Revoke Rinku' }))).toBe(true);
+    expect(rinku.getByRole('button', { name: 'Revoke Rinku' }).title).toBe('You need "Create projects" (office.project.create) in this office to do this');
+    cleanup();
+    at('/team?scope=office', () => api.teamOverview.mockResolvedValue({ ...overview(), office: { role: 'X', keys: ['office.role.manage'] } }));
+    expect((await rowOf('Rinku')).getByRole('button', { name: 'Revoke Rinku' }).title)
+      .toBe('You need "Revoke office members" (office.member.revoke) in this office to do this');
+  });
+
+  it('revoke: the office\'s refusal reaches the banner word for word', async () => {
+    const no = 'this office needs at least one Office admin; make someone else Office admin first';
+    at('/team?scope=office', () => api.teamRevoke.mockRejectedValue(refusal(409, no)));
+    fireEvent.click((await rowOf('Rinku')).getByRole('button', { name: 'Revoke Rinku' }));
+    fireEvent.click(dialog().getByRole('button', { name: 'Revoke' }));
+    expect((await screen.findByRole('alert')).textContent).toContain(no);
+  });
+
+  it('add a member: the office\'s refusal stays in the dialog with the choices kept', async () => {
+    const no = 'You need "Invite members" (member.invite) in SH to do this';
+    at('/team?scope=SH', () => {
+      api.teamSetMember.mockRejectedValue(refusal(403, no));
+      api.teamOffice.mockResolvedValue({
+        ...officeRoster(),
+        members: [...officeRoster().members, { device_id: 'dev-a', name: 'Asha', role: 'Office member', role_ulid: 'o-member', last_seen_at: null }],
+      });
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a member' }));
+    fireEvent.change(await dialog().findByLabelText('Member'), { target: { value: 'dev-a' } });
+    fireEvent.click(dialog().getByRole('button', { name: 'Add' }));
+    expect((await dialog().findByRole('alert')).textContent).toBe(no);
+    expect((dialog().getByLabelText('Member') as HTMLSelectElement).value).toBe('dev-a');
+  });
+
+  it('invite: a blocked clipboard says to copy by hand', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) }, configurable: true });
+    at('/team?scope=office', () => api.teamInvite.mockResolvedValue({ device_id: 'dev-new', name: 'Asha', join_code: 'collab1-x' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Invite a person' }));
+    fireEvent.change(dialog().getByLabelText('Their name'), { target: { value: 'Asha' } });
+    fireEvent.click(dialog().getByRole('button', { name: 'Create join code' }));
+    fireEvent.click(await dialog().findByRole('button', { name: 'Copy code' }));
+    await dialog().findByText('Copying was blocked by the browser: select the code and copy it by hand.');
+    dialog().getByText(/It works once\./, { exact: false });
   });
 
   it('not connected: a plain message, and no office calls', async () => {

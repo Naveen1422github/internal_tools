@@ -327,6 +327,26 @@ export function registerProject(db: Store, p: { ulid: unknown; name: unknown; co
   }).immediate();
 }
 
+/**
+ * UI parity D1: rename a team project. Its name lives here, and couriers copy it
+ * to every member's laptop, so a laptop-only rename is undone on the next sync.
+ * Same name rules and wording as registerProject: unique ignoring case, and a
+ * project the actor isn't in is never named (R7a). The caller checks project.edit.
+ */
+export function renameOfficeProject(db: Store, projectUlid: string, newName: unknown, actor: string): OfficeProject {
+  const name = String(newName ?? "").trim();
+  if (!name) throw new StoreError("a project needs a name");
+  return db.transaction(() => {
+    const byName = db.prepare(`SELECT ulid, code FROM po_projects WHERE lower(name) = lower(?) AND ulid <> ?`).get(name, projectUlid) as { ulid: string; code: string } | undefined;
+    if (byName) {
+      const isMember = !!db.prepare(`SELECT 1 FROM po_project_members WHERE project_ulid = ? AND device_id = ?`).get(byName.ulid, actor);
+      throw new StoreError(isMember ? `this team already has a project named "${name}" (${byName.code})` : "that project name is taken", 409);
+    }
+    if (db.prepare(`UPDATE po_projects SET name = ? WHERE ulid = ?`).run(name, projectUlid).changes === 0) throw new StoreError("no such team project", 404);
+    return db.prepare(`SELECT ulid, name, code, created_at FROM po_projects WHERE ulid = ?`).get(projectUlid) as OfficeProject;
+  }).immediate();
+}
+
 export function listOfficeProjects(db: Store): OfficeProject[] {
   return db.prepare(`SELECT ulid, name, code, created_at FROM po_projects ORDER BY code`).all() as OfficeProject[];
 }

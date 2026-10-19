@@ -78,7 +78,9 @@ test('create on an unshared notebook: share it first', async () => {
   const t = freshDb();
   try {
     migrate(t.db);
-    await assert.rejects(createTeamProject(t.db, { name: 'Support hub', code: 'SH' }), /share this notebook first \(`collab sync setup <join code>`\)/);
+    const { NotConnectedError } = await import('../src/sync/errors.js');
+    await assert.rejects(createTeamProject(t.db, { name: 'Support hub', code: 'SH' }), (e: Error) =>
+      e instanceof NotConnectedError && /share this notebook first \(`collab sync setup <join code>`\)/.test(e.message));
     assert.equal(findProject(t.db, 'SH'), null);
   } finally { t.cleanup(); }
 });
@@ -129,4 +131,97 @@ test('createProject still refuses team mode, pointing at the team commands', () 
     migrate(t.db);
     assert.throws(() => createProject(t.db, { name: 'x', code: 'XX', mode: 'team' } as any), /--team|createTeamProject/);
   } finally { t.cleanup(); }
+});
+
+// UI parity D7: the web server needs the office's status and sentence, not a string to parse.
+test('typed errors: office down -> OfficeUnreachableError; office 403 -> OfficeRefusedError with its sentence', async () => {
+  const { OfficeUnreachableError, OfficeRefusedError } = await import('../src/sync/errors.js');
+  const down = await fakeOffice();
+  const t = shared(down.url, down.fingerprint);
+  try {
+    await down.close();
+    await assert.rejects(createTeamProject(t.db, { name: 'Support hub', code: 'SH' }), (e: Error) =>
+      e instanceof OfficeUnreachableError && /creating a team project needs the post office; nothing was created/.test(e.message));
+  } finally { t.cleanup(); }
+  const sentence = 'You need "Create projects" (office.project.create) in this office to do this';
+  const no = await stubServer((_req, res) => { res.writeHead(403); res.end(JSON.stringify({ error: sentence })); });
+  const t2 = shared(no.url, no.fingerprint);
+  try {
+    createProject(t2.db, { name: 'Navi', code: 'NV' });
+    for (const p of [createTeamProject(t2.db, { name: 'Support hub', code: 'SH' }), promoteProject(t2.db, 'NV')]) {
+      await assert.rejects(p, (e: any) =>
+        e instanceof OfficeRefusedError && e.status === 403 && e.officeError === sentence
+        && e.message.includes(`answered 403: ${sentence}`));
+    }
+  } finally { await no.close(); t2.cleanup(); }
+});
+
+test('typed errors: an office without team projects (404) is an OfficeRefusedError with status 404', async () => {
+  const { OfficeRefusedError } = await import('../src/sync/errors.js');
+  const old = await stubServer((_req, res) => { res.writeHead(404); res.end(JSON.stringify({ error: 'no such endpoint: POST /v1/projects' })); });
+  const t = shared(old.url, old.fingerprint);
+  try {
+    await assert.rejects(createTeamProject(t.db, { name: 'Support hub', code: 'SH' }), (e: any) =>
+      e instanceof OfficeRefusedError && e.status === 404 && e.oldOffice === true && e.officeError === 'no such endpoint: POST /v1/projects'
+      && /keeps no team projects yet/.test(e.message));
+  } finally { await old.close(); t.cleanup(); }
+});
+
+test('typed errors: a revoked key is an OfficeUnreachableError whose cause is AccessRevokedError (the server maps cause first)', async () => {
+  const { OfficeUnreachableError, AccessRevokedError } = await import('../src/sync/errors.js');
+  const gone = await stubServer((_req, res) => { res.writeHead(401); res.end('{}'); });
+  const t = shared(gone.url, gone.fingerprint);
+  try {
+    await assert.rejects(createTeamProject(t.db, { name: 'Support hub', code: 'SH' }), (e: any) =>
+      e instanceof OfficeUnreachableError && e.cause instanceof AccessRevokedError);
+    assert.equal(findProject(t.db, 'SH'), null);
+  } finally { await gone.close(); t.cleanup(); }
+});
+
+// UI parity D1: a team project's name lives at the office.
+test('rename a team project: the office is asked first; its refusal changes nothing; solo never asks', async () => {
+  const { OfficeRefusedError } = await import('../src/sync/errors.js');
+  const { renameProject } = await import('../src/projects.js');
+  const puts: any[] = [];
+  let answer: { status: number; error?: string } = { status: 200 };
+  const o = await stubServer((req, res, body) => {
+    if (req.method === 'POST' && req.url === '/v1/projects') { res.end(JSON.stringify({ project: JSON.parse(body) })); return; }
+    if (req.method === 'PUT' && req.url?.startsWith('/v1/projects/')) {
+      puts.push({ url: req.url, body: JSON.parse(body) });
+      res.writeHead(answer.status); res.end(JSON.stringify(answer.error ? { error: answer.error } : { project: {} })); return;
+    }
+    res.writeHead(404); res.end('{}');
+  });
+  const t = shared(o.url, o.fingerprint);
+  try {
+    const p = await createTeamProject(t.db, { name: 'Support hub', code: 'SH' });
+    assert.equal((await renameProject(t.db, 'SH', '  Support desk ')).name, 'Support desk');
+    assert.deepEqual(puts, [{ url: `/v1/projects/${p.ulid}`, body: { name: 'Support desk' } }]);
+
+    answer = { status: 403, error: 'You need "Edit project" (project.edit) in SH to do this' };
+    await assert.rejects(renameProject(t.db, 'SH', 'Nope'), (e: any) => e instanceof OfficeRefusedError && e.status === 403 && e.officeError === answer.error);
+    assert.equal(findProject(t.db, 'SH')!.name, 'Support desk');
+
+    answer = { status: 404, error: 'no such endpoint: PUT /v1/projects/x' };
+    await assert.rejects(renameProject(t.db, 'SH', 'Nope'), /can't rename team projects yet: update it first; nothing was changed/);
+
+    answer = { status: 404, error: 'no such team project' };
+    await assert.rejects(renameProject(t.db, 'SH', 'Nope'), (e: any) =>
+      e instanceof OfficeRefusedError && e.status === 404 && e.oldOffice === false && e.officeError === 'no such team project' && /answered 404: no such team project; nothing was changed/.test(e.message));
+
+    answer = { status: 200 };
+    assert.equal((await renameProject(t.db, 'SH', 'SUPPORT DESK')).name, 'SUPPORT DESK', 'a change of case of its own name');
+
+    t.db.prepare(`UPDATE projects SET left_at = datetime('now') WHERE code = 'SH'`).run();
+    const sent = puts.length;
+    await assert.rejects(renameProject(t.db, 'SH', 'Gone'), /is a team you left: it is read-only and can't be renamed/);
+    t.db.prepare(`UPDATE projects SET left_at = NULL, team = 'another-office' WHERE code = 'SH'`).run();
+    await assert.rejects(renameProject(t.db, 'SH', 'Elsewhere'), /team project of another post office/);
+    assert.equal(puts.length, sent, 'neither asked the office');
+
+    createProject(t.db, { name: 'Navi', code: 'NV' });
+    const before = puts.length;
+    assert.equal((await renameProject(t.db, 'NV', 'Navigator')).name, 'Navigator');
+    assert.equal(puts.length, before, 'a solo rename never asks the office');
+  } finally { await o.close(); t.cleanup(); }
 });

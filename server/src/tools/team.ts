@@ -1,9 +1,10 @@
 // file: server/src/tools/team.ts
 import http from 'node:http';
 import {
-  getDb, postOfficeTargetFromDb, requestJson, listProjects, isUlid,
+  getDb, postOfficeTargetFromDb, requestJson, listProjects, isUlid, formatJoinCode, rememberSharedModules,
   AccessRevokedError, SchemaMismatchError, PinMismatchError,
 } from '@collab-mcp/core';
+import { NOT_CONNECTED, REVOKED, UNREACHABLE } from './office-errors.js';
 
 // RnR S3 (team admin): the web UI asks the post office as this laptop's device;
 // the office decides. Its status and wording pass through unchanged (Review
@@ -14,10 +15,7 @@ const db = getDb();
 type Send = (status: number, body: any) => void;
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
-const NOT_CONNECTED = "This notebook isn't connected to a post office.";
 const NEEDS_UPDATE = 'The post office needs updating before roles can be managed here.';
-const REVOKED = "This laptop's access to the post office was revoked.";
-const UNREACHABLE = "The post office can't be reached right now.";
 
 const enc = encodeURIComponent;
 const isText = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
@@ -32,7 +30,7 @@ const bad = (msg: string): never => { throw new BadRequest(msg); };
 let outage = false;
 
 /** The office's answer, or the error to send instead. Read the target per request: setup may run while the server is up. */
-async function ask(method: Method, path: string, body?: unknown): Promise<{ ok: true; body: any } | { ok: false; status: number; error: string }> {
+export async function ask(method: Method, path: string, body?: unknown): Promise<{ ok: true; body: any } | { ok: false; status: number; error: string }> {
   const target = postOfficeTargetFromDb(db);
   if (!target) return { ok: false, status: 409, error: NOT_CONNECTED };
   try {
@@ -116,11 +114,42 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     await forward(send, 'PUT', path, { role: b.role });
   }),
 
-  // Project scope only: revoking a device stays on the CLI (S3-7).
+  // Project scope only: revoking a device from the office is POST /api/team/revoke (UI parity D4).
   'POST /api/team/member/remove': guarded(async (_req, send, b) => {
     const project = projectOf(b);
     if (!isDevice(b.device)) bad('Choose a member.');
     await forward(send, 'DELETE', `/v1/projects/${enc(project)}/members/${enc(b.device)}`);
+  }),
+
+  // UI parity D2: `collab team invite` on the web. The office checks office.member.add and
+  // no escalation; the join code is made by core's formatJoinCode, exactly as the CLI does.
+  // The secret is in this answer only: never logged, never stored here.
+  'POST /api/team/invite': guarded(async (_req, send, b) => {
+    const name = isText(b.name) ? b.name.trim() : bad('Give the person a name.');
+    const target = postOfficeTargetFromDb(db);
+    if (!target) return send(409, { error: NOT_CONNECTED });
+    const r = await ask('POST', '/v1/office/members', { name });
+    if (!r.ok) return send(r.status, { error: r.error });
+    const join_code = formatJoinCode({ url: target.url, fingerprint: target.fingerprint, device: r.body.device_id, secret: r.body.secret });
+    send(200, { device_id: r.body.device_id, name, join_code, ...(r.body.expires_at ? { expires_at: r.body.expires_at } : {}) });
+  }),
+
+  // UI parity D4: `collab team revoke` on the web (replaces S3-7). The office checks
+  // office.member.revoke and the rank rule.
+  'POST /api/team/revoke': guarded(async (_req, send, b) => {
+    if (!isDevice(b.device)) bad('Choose a member.');
+    await forward(send, 'DELETE', `/v1/office/members/${enc(b.device)}`);
+  }),
+
+  // UI parity Task 7c: `collab sync share|unshare <module>` on the web. The office checks office.module.share.
+  'POST /api/sync/share': guarded(async (_req, send, b) => {
+    if (!isText(b.slug)) bad('Choose a module.');
+    if (typeof b.shared !== 'boolean') bad('"shared" must be true or false.');
+    const r = await ask('POST', '/v1/modules', { slug: b.slug, shared: b.shared });
+    if (!r.ok) return send(r.status, { error: r.error });
+    // This laptop shows the change at once; the courier's next `modules` ring writes the same list.
+    if (Array.isArray(r.body?.shared)) rememberSharedModules(db, r.body.shared);
+    send(200, r.body);
   }),
 
   'POST /api/team/role/create': guarded(async (_req, send, b) => {

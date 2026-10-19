@@ -17,6 +17,7 @@ const SERVER = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'serv
 async function withServer(fn: (h: {
   root: string; dbPath: string; sh: string;
   call: (name: string, args: Record<string, unknown>) => Promise<{ text: string; isError: boolean; structured: any }>;
+  list: () => Promise<string[]>;
   setProject: (ulid: string | null) => void;
 }) => Promise<void>) {
   const root = mkdtempSync(join(tmpdir(), 'collab-mcp-projects-'));
@@ -64,7 +65,8 @@ async function withServer(fn: (h: {
   try {
     await rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-    await fn({ root, dbPath, sh, call, setProject });
+    const list = async () => ((await rpc('tools/list', {})).result.tools as Array<{ name: string }>).map((t) => t.name);
+    await fn({ root, dbPath, sh, call, list, setProject });
   } finally {
     if (child.exitCode === null) { const exited = once(child, 'exit'); child.kill(); await exited; }
     rmSync(root, { recursive: true, force: true });
@@ -365,5 +367,44 @@ test('R8: the MCP (actor "ai") still gets the role check: a Reader cannot add to
     const db2 = new Database(dbPath);
     try { assert.equal((db2.prepare(`SELECT COUNT(*) c FROM entries`).get() as { c: number }).c, before, 'nothing saved'); }
     finally { db2.close(); }
+  });
+});
+
+// UI parity Task 7d: the AI's new tools say what the CLI says; team changes stay with a person.
+test('collab_project_rename / _promote / _team_list / _refused_list / _refused_copy: the CLI\'s words; the role check as "ai"', async () => {
+  await withServer(async ({ dbPath, call }) => {
+    const r = await call('collab_project_rename', { project: 'SH', name: 'Support desk' });
+    assert.equal(r.isError, false, r.text);
+    assert.equal(r.text, 'Project SH is now named Support desk.');
+    const p = await call('collab_project_promote', { project: 'SH' });
+    assert.equal(p.isError, true);
+    assert.match(p.text, /^share this notebook first \(`collab sync setup <join code>`\)/);
+    const solo = await call('collab_team_list', { project: 'SH' });
+    assert.deepEqual([solo.isError, solo.text], [true, 'SH is a solo project: it has no team or roles']);
+    const none = await call('collab_refused_list', {});
+    assert.deepEqual([none.isError, none.text], [false, 'Nothing was refused.']);
+    const nope = await call('collab_refused_copy', { id: 'nope', to: 'SH' });
+    assert.equal(nope.isError, true);
+
+    const TM = '01JPR0JECTTM00000000000000';
+    const db = new Database(dbPath);
+    db.prepare(`INSERT INTO projects (ulid, name, code, mode, team) VALUES (?, 'team TM', 'TM', 'team', 'fp')`).run(TM);
+    writeAccessCache(db, { office: null, projects: [{ ulid: TM, code: 'TM', role: 'Reader', keys: ['note.view'], ai: {} }], replays: [] });
+    db.close();
+    const denied = await call('collab_project_rename', { project: 'TM', name: 'Mine' });
+    assert.equal(denied.isError, true);
+    assert.equal(denied.text, 'You need "Edit project" (project.edit) in TM to do this');
+  });
+});
+
+test('no AI tool changes a team, invites, revokes or discards a refused change (tools/list)', async () => {
+  await withServer(async ({ list }) => {
+    const names = await list();
+    for (const n of ['collab_project_promote', 'collab_project_rename', 'collab_team_list', 'collab_refused_list', 'collab_refused_copy']) {
+      assert.ok(names.includes(n), n);
+    }
+    const team = names.filter((n) => /team|office|invite|revoke|member|role/.test(n) && n !== 'collab_team_list');
+    assert.deepEqual(team, [], 'only the read-only team list');
+    assert.ok(!names.some((n) => /refused_(delete|discard)/.test(n)));
   });
 });

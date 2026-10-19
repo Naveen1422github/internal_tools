@@ -47,3 +47,33 @@ export class SchemaMismatchError extends Error {
     this.name = "SchemaMismatchError";
   }
 }
+
+/**
+ * UI parity D7: a project operation that needs the office could not reach it.
+ * The message is the CLI's sentence; `cause` is what failed (a revoked key or a
+ * schema mismatch is told apart by the web server from it).
+ */
+export class OfficeUnreachableError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message, { cause });
+    this.name = "OfficeUnreachableError";
+  }
+}
+
+/** UI parity D7: the office answered with a refusal; `officeError` is its own sentence, word for word. */
+export class OfficeRefusedError extends Error {
+  readonly retriable = false;
+  /** `oldOffice`: the office is too old to have the route (it must be updated first). */
+  constructor(message: string, readonly status: number, readonly officeError: string | null, readonly oldOffice = false) {
+    super(message);
+    this.name = "OfficeRefusedError";
+  }
+}
+
+/** A team operation on a notebook that isn't shared with a post office. The message says how to share it. */
+export class NotConnectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NotConnectedError";
+  }
+}

@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import type { Database as DB } from 'better-sqlite3';
 import {
-  addEntry, addEntryAsync, createProject, updateEntry, getEntryByUlid, ownerOfRef, newUlid, getSyncValue,
+  addEntry, addEntryAsync, createProject, renameProject, updateEntry, getEntryByUlid, ownerOfRef, newUlid, getSyncValue,
   setAllocator, setAllocationRetry, type Allocator,
 } from '@collab-mcp/core';
 import { setModuleShared, registerProject, setProjectMember, allocate } from '@collab-mcp/post-office';
@@ -289,5 +289,23 @@ test('Review Focus 5: a team code that clashes with a local solo project is neve
     assert.equal(getSyncValue(w.wb, K.projectClash), '[]');
     assert.equal(w.cb.status.state, 'connected');
     assert.equal(getEntryByUlid(w.wb, aNote.ulid)?.title, 'A team SH one');
+  } finally { await w.cleanup(); }
+});
+
+test('UI parity D1: renaming a team project holds after a sync, and reaches the teammate', async () => {
+  const w = await world();
+  try {
+    const sh = team(w.office);
+    await w.ca.syncNow();
+    await w.cb.syncNow();
+    const nameOn = (db: DB) => (db.prepare(`SELECT name FROM projects WHERE ulid = ?`).get(sh.ulid) as { name: string }).name;
+    await renameProject(w.wa, 'SH', 'Support desk');
+    await w.ca.syncNow();
+    assert.equal(nameOn(w.wa), 'Support desk', 'the courier no longer puts the old name back');
+    await w.cb.syncNow();
+    assert.equal(nameOn(w.wb), 'Support desk');
+    // b is an Editor: no project.edit, refused on the laptop before any office call.
+    await assert.rejects(renameProject(w.wb, 'SH', 'Mine'), /project\.edit/);
+    assert.equal((w.office.store.prepare(`SELECT name FROM po_projects WHERE ulid = ?`).get(sh.ulid) as { name: string }).name, 'Support desk');
   } finally { await w.cleanup(); }
 });
