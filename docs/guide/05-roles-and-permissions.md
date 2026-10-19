@@ -64,6 +64,46 @@ All fixed, with tests.
 - **Project make-solo and delete are inactive for now.** (This overrides spec R7b.)
 - A refused change is undone on your laptop; see file 4 and `collab refused` in file 7.
 
+## Stage S3 — built 2026-10-19 (RnR S3)
+
+The team admin screens in the web UI. The post office decides every change; the screens only ask and show its answer, word for word.
+
+### The screens
+
+- **Team page (`/team`).** A picker at the top: each team project you're in (`CODE · Name`), plus "Office" if you hold an office role. The choice stays in the address, so a reload keeps it. Three tabs:
+  - **Members:** name, last seen, role and Remove. Changing the role applies at once. Remove asks first: "Remove <name> from <CODE>? They keep a read-only copy of the project's notes and receive nothing new." Your own row is marked "You". In Office scope you change office roles only; there is no Remove.
+  - **Roles:** one card per role (built-ins first, then custom roles by name) with its member count and permissions. Edit, Duplicate, Delete (custom roles only) and New role. The editor shows only permissions that are switched on, grouped by area.
+  - **Who can do what:** roles across the top, permissions down the side, with each role's members named under it. Read-only.
+- **Refused changes page (`/refused`).** The changes the post office turned down, kept on this laptop only. Copy one into a solo project, or delete it. The sidebar shows "Refused changes" with a count only when there are some.
+
+Controls you may not use are shown disabled with the reason, not hidden. That is only a convenience: the office still checks everything.
+
+### The rules (one line each)
+
+| # | Rule |
+|---|---|
+| S3-1 | **Rank:** you can change or remove a member, or edit or delete a role, only if you hold every permission their role holds. The refusal names the first one you lack. |
+| S3-2 | **Locked built-ins:** Owner and Office admin can't be renamed, changed or deleted. Office member can't be renamed or deleted, but its permissions can change. Editor, Contributor and Reader are fully editable. |
+| S3-3 | **Deleting a role:** only custom roles, and only when nobody holds it. Removed devices count: then the message says "...including N removed device(s). It can't be deleted while a removed device still holds it." |
+| S3-4 | **Switched-off permissions are kept:** saving a role keeps its stored `task.*` keys. Unknown or switched-off keys in a request are refused, not dropped. |
+| S3-5 | **A role edit moves history:** whoever gains "View notes" through it receives the project's history; whoever loses it gets a read-only project and nothing new. |
+| S3-6 | **Role names:** 1–40 characters, unique ignoring case, and never a built-in name ("owner" is refused). |
+| S3-7 | **Office scope is on the page;** removing a device from the office stays on the CLI (`collab team revoke`). |
+| S3-8 | **Deliberate change from the spec (your ruling):** the matrix is roles × permissions, not members × permissions. |
+| S3-9 | **No "add a member" in the UI.** Use `collab team set <member> <CODE> <role>`. |
+| S3-10 | **Refused changes have their own page**, because a refusal can come from any project. |
+| S3-11 | **"Team" shows in the sidebar** only when this notebook is connected to a post office and is in a team project or holds an office role. Solo-only notebooks see nothing new. |
+| S3-12 | **Fresh answers:** the Team page asks the post office on every load. Offline, it says the post office can't be reached; nothing stale is shown. |
+| S3-13 | **Laptop-checked permissions** (`note.copy.out`, `project.edit`) carry the note "Checked on this laptop. It limits your AI, but it is not a security boundary." |
+| S3-14 | **No escalation (your ruling):** you can give, create or extend a role only with permissions you hold yourself. |
+| S3-15 | **Your own role (your ruling):** you can lower it but not raise it. The last Owner (or last Office admin) can't lower themselves. |
+
+### How it was checked
+
+- The rank and no-escalation rules (S3-1, S3-14, S3-15) are tested by sending the request straight to the post office as the lower-ranked laptop, with no web server in the path.
+- The role rules (S3-2 to S3-6) are tested at the post office; the screens (S3-8 to S3-13) are tested in the UI suite.
+- The acceptance test (`test/rnr-s3-acceptance.test.mts`) runs the whole story with two laptops and one office.
+
 ## The AI part (stage S4, not built yet)
 
 - Each permission has three AI settings: **Allow** (the AI just does it), **Ask me** (the AI saves a draft that waits for your approve/reject in the web UI) or **Deny**.
@@ -75,8 +115,8 @@ All fixed, with tests.
 | Stage | What |
 |---|---|
 | **S2** | Done 2026-10-18 (see above). |
-| **S3** | The team admin screens in the web UI (members, roles, "who can do what", AI settings), with collab's own design rather than a copy of SupportHub or emp1st. |
-| **S4** | AI Allow / Ask me / Deny and the drafts-to-approve list. |
+| **S3** | Done 2026-10-19 (see above). The AI settings tab moved to S4. |
+| **S4** | AI Allow / Ask me / Deny, the AI settings tab and the drafts-to-approve list. |
 
 ## Speed promise
 
