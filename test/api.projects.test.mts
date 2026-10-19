@@ -62,6 +62,20 @@ test('promote: the next number continues after the highest used; the office keep
   assert.equal(r.body.project.mode, 'team');
   assert.equal(r.body.next, 'PR-4');
   assert.ok(srv.office.store.prepare(`SELECT 1 FROM po_projects WHERE code = 'PR'`).get());
+  const again = await srv.api('/api/projects/promote', { code: 'PR' });
+  assert.deepEqual([again.status, again.body.already, 'next' in again.body], [200, true, false], 'already team: no made-up number');
+  const nf = await srv.api('/api/projects/promote', { code: 'NOPE' });
+  assert.equal(nf.status, 404);
+});
+
+test('bad input: a non-boolean team flag and non-text fields are 400s, never a quiet solo project', async () => {
+  const t = await srv.api('/api/projects/create', { name: 'Quiet', code: 'QT', team: 'true' });
+  assert.deepEqual([t.status, t.body], [400, { error: '"team" must be true or false.' }]);
+  assert.equal(core.findProject(srv.db, 'QT'), null);
+  const n = await srv.api('/api/projects/create', { name: 7, code: 'QT' });
+  assert.deepEqual([n.status, n.body], [400, { error: 'Give the project a name.' }]);
+  const r = await srv.api('/api/projects/rename', { code: 'SC' });
+  assert.deepEqual([r.status, r.body], [400, { error: 'Give the project a name.' }]);
 });
 
 test('rename: solo locally; team at the office (D1); unknown code -> 404', async () => {

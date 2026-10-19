@@ -12,7 +12,7 @@ import { postOfficeTargetFromDb } from "./sync/http-allocator.js";
 import { requestJson, type PostOfficeTarget } from "./sync/http.js";
 import { formatEntryRef } from "./entry-ref.js";
 import { assertCan } from "./access/can.js";
-import { OfficeRefusedError, OfficeUnreachableError } from "./sync/errors.js";
+import { NotConnectedError, OfficeRefusedError, OfficeUnreachableError } from "./sync/errors.js";
 
 export interface Project {
   ulid: string;
@@ -142,7 +142,7 @@ function checkNew(db: DB, args: { name: string; code: string }): { name: string;
 function officeOf(db: DB): PostOfficeTarget {
   const target = isSyncEnabled(db) ? postOfficeTargetFromDb(db) : null;
   if (!target) {
-    throw new Error("[collab] share this notebook first (`collab sync setup <join code>`): a team project's numbers come from its post office");
+    throw new NotConnectedError("[collab] share this notebook first (`collab sync setup <join code>`): a team project's numbers come from its post office");
   }
   return target;
 }
@@ -173,7 +173,7 @@ async function askOffice(
   if (r.status === 409) throw new ProjectClashError(`[collab] the post office refused: ${r.body?.error ?? "a clash"}. ${FIXES}`);
   const said = typeof r.body?.error === "string" ? r.body.error : null;
   if (r.status === 404 && (method === "POST" || !said || /^no such endpoint/.test(said))) {
-    throw new OfficeRefusedError(old404, 404, said);
+    throw new OfficeRefusedError(old404, 404, said, true);
   }
   throw new OfficeRefusedError(`[collab] the post office at ${target.url} answered ${r.status}${said ? `: ${said}` : ""}; ${nothing}`, r.status, said);
 }

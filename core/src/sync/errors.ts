@@ -63,8 +63,17 @@ export class OfficeUnreachableError extends Error {
 /** UI parity D7: the office answered with a refusal; `officeError` is its own sentence, word for word. */
 export class OfficeRefusedError extends Error {
   readonly retriable = false;
-  constructor(message: string, readonly status: number, readonly officeError: string | null) {
+  /** `oldOffice`: the office is too old to have the route (it must be updated first). */
+  constructor(message: string, readonly status: number, readonly officeError: string | null, readonly oldOffice = false) {
     super(message);
     this.name = "OfficeRefusedError";
+  }
+}
+
+/** A team operation on a notebook that isn't shared with a post office. The message says how to share it. */
+export class NotConnectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NotConnectedError";
   }
 }

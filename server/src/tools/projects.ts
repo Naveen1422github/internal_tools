@@ -42,6 +42,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
   }),
 
   'POST /api/projects/create': guarded(async (send, b) => {
+    if (b.team !== undefined && typeof b.team !== 'boolean') bad('"team" must be true or false.');
     const p = await createProjectOp(db, {
       name: text(b.name, 'Give the project a name.'), code: text(b.code, 'Give the project a code.'), team: b.team === true,
     });
@@ -53,6 +54,8 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     const before = findProject(db, code);
     if (!before) throw notFound(db, code);
     const p = await promoteProject(db, code);
+    // Already a team project of this office: nothing changed, and its numbers are the office's.
+    if (before.mode === 'team') return send(200, { project: p, already: true });
     // What promoteProject sent as the office's seed: the office continues after it.
     send(200, { project: p, next: `${p.code}-${highestNumberOf(db, p.code) + 1}` });
   }),

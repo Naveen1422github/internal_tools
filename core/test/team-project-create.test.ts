@@ -78,7 +78,9 @@ test('create on an unshared notebook: share it first', async () => {
   const t = freshDb();
   try {
     migrate(t.db);
-    await assert.rejects(createTeamProject(t.db, { name: 'Support hub', code: 'SH' }), /share this notebook first \(`collab sync setup <join code>`\)/);
+    const { NotConnectedError } = await import('../src/sync/errors.js');
+    await assert.rejects(createTeamProject(t.db, { name: 'Support hub', code: 'SH' }), (e: Error) =>
+      e instanceof NotConnectedError && /share this notebook first \(`collab sync setup <join code>`\)/.test(e.message));
     assert.equal(findProject(t.db, 'SH'), null);
   } finally { t.cleanup(); }
 });
@@ -160,7 +162,7 @@ test('typed errors: an office without team projects (404) is an OfficeRefusedErr
   const t = shared(old.url, old.fingerprint);
   try {
     await assert.rejects(createTeamProject(t.db, { name: 'Support hub', code: 'SH' }), (e: any) =>
-      e instanceof OfficeRefusedError && e.status === 404 && e.officeError === 'no such endpoint: POST /v1/projects'
+      e instanceof OfficeRefusedError && e.status === 404 && e.oldOffice === true && e.officeError === 'no such endpoint: POST /v1/projects'
       && /keeps no team projects yet/.test(e.message));
   } finally { await old.close(); t.cleanup(); }
 });
@@ -205,7 +207,7 @@ test('rename a team project: the office is asked first; its refusal changes noth
 
     answer = { status: 404, error: 'no such team project' };
     await assert.rejects(renameProject(t.db, 'SH', 'Nope'), (e: any) =>
-      e instanceof OfficeRefusedError && e.status === 404 && e.officeError === 'no such team project' && /answered 404: no such team project; nothing was changed/.test(e.message));
+      e instanceof OfficeRefusedError && e.status === 404 && e.oldOffice === false && e.officeError === 'no such team project' && /answered 404: no such team project; nothing was changed/.test(e.message));
 
     answer = { status: 200 };
     assert.equal((await renameProject(t.db, 'SH', 'SUPPORT DESK')).name, 'SUPPORT DESK', 'a change of case of its own name');

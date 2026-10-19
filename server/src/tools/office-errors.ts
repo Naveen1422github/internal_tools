@@ -4,7 +4,7 @@
 // own refusals pass through word for word; only a failure to reach it at all
 // gets a sentence of ours.
 import {
-  AccessDeniedError, AccessRevokedError, OfficeRefusedError, OfficeUnreachableError, PinMismatchError,
+  AccessDeniedError, AccessRevokedError, NotConnectedError, OfficeRefusedError, OfficeUnreachableError, PinMismatchError,
   ProjectClashError, ProjectNotFoundError, ReadOnlyNoteError, SchemaMismatchError,
 } from '@collab-mcp/core';
 
@@ -30,15 +30,18 @@ export function coreFailure(e: unknown, needsUpdate: string): { status: number; 
     return { status: 503, error: UNREACHABLE };
   }
   if (e instanceof OfficeRefusedError) {
-    if (e.status === 404 && (!e.officeError || /^no such endpoint/.test(e.officeError))) return { status: 501, error: needsUpdate };
+    if (e.oldOffice) return { status: 501, error: needsUpdate };
     if (e.status >= 500) return { status: 502, error: e.officeError ?? plain(e.message) };
     return { status: e.status, error: e.officeError ?? plain(e.message) };
   }
   if (e instanceof ProjectClashError) return { status: 409, error: plain(e.message) };
   if (e instanceof ProjectNotFoundError) return { status: 404, error: plain(e.message) };
   if (e instanceof AccessDeniedError || e instanceof ReadOnlyNoteError) return { status: 403, error: plain(e.message) };
+  if (e instanceof NotConnectedError) return { status: 409, error: NOT_CONNECTED };
   const msg = e instanceof Error ? e.message : '';
-  if (/^\[collab\] share this notebook first/.test(msg)) return { status: 409, error: NOT_CONNECTED };
+  // A notebook behind on migrations: the server's state, not the request (it migrates on start).
+  if (/^\[collab\] .* needs migration \d{4}/.test(msg)) return { status: 503, error: plain(msg) };
+  if (/^\[collab\] \S+ is a team project of another post office/.test(msg)) return { status: 409, error: plain(msg) };
   // Core's own refusals of bad input ("a project needs a name", "no module ...").
   if (/^\[collab(-mcp)?\] /.test(msg)) return { status: 400, error: plain(msg) };
   return null;
