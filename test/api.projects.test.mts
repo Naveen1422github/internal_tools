@@ -114,6 +114,17 @@ test('an office refusal keeps the office\'s sentence: no office.project.create',
   }
 });
 
+test('copy into a team project where a is only a Reader: refused at the plan step, with the standard sentence', async () => {
+  const p = po.registerProject(srv.office.store, { ulid: core.newUlid(), name: 'Readers only', code: 'RO', seed: 0 }, srv.b.device);
+  po.setProjectMember(srv.office.store, null, p.ulid, srv.a.device, 'Reader');
+  core.upsertTeamProjectFromOffice(srv.db, p, core.getSyncValue(srv.db, core.SYNC_KEYS.fingerprint));
+  const access = await core.requestJson(core.postOfficeTargetFromDb(srv.db), 'GET', '/v1/access');
+  core.writeAccessCache(srv.db, access.body);
+  core.addEntry(srv.db, { type: 'decision', title: 'mine', summary: 's', project: 'SC' });
+  const r = await srv.api('/api/projects/copy/plan', { from: 'project:SC', to: 'RO' });
+  assert.deepEqual([r.status, r.body], [403, { error: 'You need "Create notes" (note.create) in RO to do this' }]);
+});
+
 // Last: the office stays down.
 test('office down: team create -> 503 plain message; solo create, rename and bind still work', async () => {
   await srv.office.down();

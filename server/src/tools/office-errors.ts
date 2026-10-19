@@ -42,6 +42,9 @@ export function coreFailure(e: unknown, needsUpdate: string): { status: number; 
   // A notebook behind on migrations: the server's state, not the request (it migrates on start).
   if (/^\[collab\] .* needs migration \d{4}/.test(msg)) return { status: 503, error: plain(msg) };
   if (/^\[collab\] \S+ is a team project of another post office/.test(msg)) return { status: 409, error: plain(msg) };
+  // The state changed under the request: a conflict to look at again, not bad input.
+  if (/^\[collab\] (the notes changed since the list was shown|nothing to copy)/.test(msg)) return { status: 409, error: plain(msg) };
+  if (/is a team you left/.test(msg)) return { status: 409, error: plain(msg) };
   // Core's own refusals of bad input ("a project needs a name", "no module ...").
   if (/^\[collab(-mcp)?\] /.test(msg)) return { status: 400, error: plain(msg) };
   return null;

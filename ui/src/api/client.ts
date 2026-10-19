@@ -305,7 +305,16 @@ export interface ProjectRow extends Project {
   /** Solo only: the highest number ever used, so a promote continues after it. */
   highest?: number;
 }
-export interface ProjectList { projects: ProjectRow[]; modules: string[]; office_url: string | null }
+export interface ProjectList {
+  projects: ProjectRow[];
+  /** Modules with a modules row: the ones a project can be bound to. */
+  modules: string[];
+  /** Modules with notes in no project: the ones `collab copy --from <module>` copies. */
+  copy_modules: string[];
+  office_url: string | null;
+  /** Who "only my notes" means on this laptop, or null when unknown. */
+  me: string | null;
+}
 export const projectsList = () => sendJson<ProjectList>('GET', '/api/projects');
 export const projectCreate = (b: { name: string; code: string; team: boolean }) =>
   sendJson<{ project: Project; lines: string[] }>('POST', '/api/projects/create', b);
@@ -326,5 +335,6 @@ export interface CopyPlanView {
   lines: string[];
 }
 export const copyPlan = (a: CopyArgs) => sendJson<CopyPlanView>('POST', '/api/projects/copy/plan', a);
-export const copyApply = (a: CopyArgs, expect: string[]) =>
-  sendJson<{ copied: Array<{ from: string; to: string; pending: boolean }>; lines: string[] }>('POST', '/api/projects/copy/apply', { ...a, expect });
+/** `expect` and `target`: the list and project the person saw; if either changed, nothing is copied (409). */
+export const copyApply = (a: CopyArgs, expect: string[], target: string) =>
+  sendJson<{ copied: Array<{ from: string; to: string; pending: boolean }>; lines: string[] }>('POST', '/api/projects/copy/apply', { ...a, expect, target });

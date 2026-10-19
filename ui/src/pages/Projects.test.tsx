@@ -16,7 +16,9 @@ const LIST = () => ({
     row({ ulid: 'u-ol', name: 'Old team', code: 'OL', mode: 'team', team: 'fp', left_at: '2026-10-01' }),
   ],
   modules: ['billing', 'search'],
+  copy_modules: ['billing', 'search'],
   office_url: 'https://office:7443',
+  me: 'naveen',
 });
 const OWNER = ['note.view', 'project.edit', 'role.manage'];
 const overview = (office: string[] | null, shKeys = OWNER) => ({
@@ -215,7 +217,7 @@ describe('Projects page', () => {
   it('copy: pick a source, see the list, confirm, copy exactly that list', async () => {
     page(() => {
       api.copyPlan.mockResolvedValue(PLAN(['first', 'second']));
-      api.copyApply.mockResolvedValue({ copied: [{}, {}], lines: ['Copied 2 notes from module billing (E notes) into NV (Navi, solo):'] });
+      api.copyApply.mockResolvedValue({ copied: [{}, {}], lines: ['Copied 2 notes from module billing (E notes) into NV (Navi, solo):', '  E-00001 -> NV-5'] });
     });
     fireEvent.click((await rowOf('NV')).getByRole('button', { name: 'Copy notes here' }));
     const from = dialog().getByLabelText('Copy from') as HTMLSelectElement;
@@ -224,15 +226,16 @@ describe('Projects page', () => {
       'Project SH · Support hub', 'Project OL · Old team',
     ]);
     fireEvent.change(from, { target: { value: 'module:billing' } });
-    fireEvent.click(dialog().getByLabelText('Only my notes'));
+    fireEvent.click(dialog().getByLabelText('Only my notes (by naveen)'));
     fireEvent.click(dialog().getByRole('button', { name: 'Show the notes' }));
     await waitFor(() => expect(api.copyPlan).toHaveBeenCalledWith({ from: 'module:billing', to: 'NV', author: 'me' }));
     const items = within(await dialog().findByRole('list', { name: 'Notes to copy' }));
     items.getByText('first'); items.getByText('second');
     expect(api.copyApply).not.toHaveBeenCalled();
     fireEvent.click(dialog().getByRole('button', { name: 'Copy 2 notes' }));
-    await waitFor(() => expect(api.copyApply).toHaveBeenCalledWith({ from: 'module:billing', to: 'NV', author: 'me' }, ['n0', 'n1']));
-    await screen.findByText('Copied 2 notes from module billing (E notes) into NV (Navi, solo):');
+    await waitFor(() => expect(api.copyApply).toHaveBeenCalledWith({ from: 'module:billing', to: 'NV', author: 'me' }, ['n0', 'n1'], 'u-nv'));
+    const done = await screen.findByText(/^Copied 2 notes from module billing \(E notes\) into NV \(Navi, solo\):/);
+    expect(done.textContent).toContain('E-00001 -> NV-5');
   });
 
   it('copy: a changed list is refused and the new list is shown; a refusal stays in the dialog', async () => {

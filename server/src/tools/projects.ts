@@ -6,7 +6,7 @@ import http from 'node:http';
 import {
   getDb, projectListRows, createProjectOp, projectCreatedLines, promoteProject, renameProject, highestNumberOf,
   bindModule, unbindModule, bindChangeLine, findProject, notFound, getSyncValue, SYNC_KEYS,
-  planCopy, applyCopy, copyPlanLines, copyResultLines, type CopyArgs,
+  planCopy, applyCopy, copyPlanLines, copyResultLines, can, resolveAuthor, type CopyArgs,
 } from '@collab-mcp/core';
 import { coreFailure } from './office-errors.js';
 
@@ -44,6 +44,16 @@ function copyArgs(b: any): CopyArgs {
 const CHANGED = 'The notes changed since the list was shown; nothing was copied. Check the list again.';
 
 const modulesOf = () => (db.prepare(`SELECT slug FROM modules ORDER BY slug`).all() as Array<{ slug: string }>).map((m) => m.slug);
+/**
+ * Modules `collab copy --from <module>` can copy from: those with notes in no
+ * project (E notes), whether or not the module has a modules row (core's moduleExists).
+ */
+const copyModulesOf = () => (db.prepare(
+  `SELECT module FROM (
+     SELECT e.module AS module FROM entries e WHERE e.project_ulid IS NULL AND e.deleted_at IS NULL AND e.module IS NOT NULL
+     UNION SELECT m.module FROM entry_modules m JOIN entries e ON e.ulid = m.entry_ulid WHERE e.project_ulid IS NULL AND e.deleted_at IS NULL
+   ) ORDER BY module`,
+).all() as Array<{ module: string }>).map((r) => r.module);
 
 export const routes: Record<string, (req: http.IncomingMessage, res: http.ServerResponse, send: Send, body: any) => Promise<any>> = {
   // `collab project list`, as rows. The web server has no folder, so there is no "current" project.
@@ -51,7 +61,12 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     const projects = projectListRows(db, null).map(({ current: _current, ...p }) => (
       p.mode === 'solo' ? { ...p, highest: highestNumberOf(db, p.code) } : p
     ));
-    send(200, { projects, modules: modulesOf(), office_url: getSyncValue(db, SYNC_KEYS.url) ?? null });
+    send(200, {
+      projects, modules: modulesOf(), copy_modules: copyModulesOf(),
+      office_url: getSyncValue(db, SYNC_KEYS.url) ?? null,
+      // Who "only my notes" means (collab copy --author me), as this server resolves it.
+      me: resolveAuthor(),
+    });
   }),
 
   'POST /api/projects/create': guarded(async (send, b) => {
@@ -85,6 +100,11 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
   // `collab copy` on the web (UI parity Task 7a): the same list -> ask -> copy, with core's lines.
   'POST /api/projects/copy/plan': guarded((send, b) => {
     const plan = planCopy(db, copyArgs(b));
+    // The same checks applyCopy makes, asked now, so a refusal comes before the list, not after it.
+    for (const [ulid, key] of [[plan.source.project_ulid ?? null, 'note.copy.out'], [plan.target.ulid, 'note.create']] as const) {
+      const c = can(db, ulid, key);
+      if (!c.ok) return send(403, { error: c.reason });
+    }
     send(200, { source: plan.source, target: plan.target, filters: plan.filters, items: plan.items, skipped: plan.skipped, lines: copyPlanLines(plan) });
   }),
 
@@ -93,7 +113,8 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     const args = copyArgs(b);
     if (!Array.isArray(b.expect) || !b.expect.every((u: unknown) => typeof u === 'string')) bad('Check the list first.');
     const plan = planCopy(db, args);
-    const same = plan.items.length === b.expect.length && plan.items.every((it, i) => it.ulid === b.expect[i]);
+    const same = (b.target === undefined || plan.target.ulid === b.target)
+      && plan.items.length === b.expect.length && plan.items.every((it, i) => it.ulid === b.expect[i]);
     if (!same) return send(409, { error: CHANGED });
     const r = await applyCopy(db, plan);
     send(200, { copied: r.copied, lines: copyResultLines(r) });

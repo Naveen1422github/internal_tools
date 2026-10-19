@@ -38,7 +38,7 @@ function One({ t }: { t: ToastItem }) {
   }, [t, dismiss]);
   return (
     <div role={t.tone === 'error' ? 'alert' : 'status'} className={`flex items-start gap-3 rounded-lg border px-4 py-3 text-sm shadow ${TONE[t.tone]}`}>
-      <p className="flex-1 break-words">{t.text}</p>
+      <p className="flex-1 break-words whitespace-pre-line">{t.text}</p>
       <button type="button" onClick={() => dismiss(t.id)} className="text-xs font-medium text-gray-600 dark:text-gray-300 hover:underline">Dismiss</button>
     </div>
   );

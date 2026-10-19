@@ -139,7 +139,7 @@ export default function Projects() {
       {open?.kind === 'create' && <CreateDialog teamWhy={teamWhy} onCancel={() => setOpen(null)} onDone={after} />}
       {open?.kind === 'rename' && <RenameDialog row={open.row} onCancel={() => setOpen(null)} onDone={after} />}
       {open?.kind === 'copy' && (
-        <CopyDialog row={open.row} projects={list.projects} modules={list.modules} onCancel={() => setOpen(null)} onDone={after} />
+        <CopyDialog row={open.row} projects={list.projects} modules={list.copy_modules} me={list.me} onCancel={() => setOpen(null)} onDone={after} />
       )}
       {open?.kind === 'promote' && <PromoteDialog row={open.row} url={list.office_url} onCancel={() => setOpen(null)} onDone={after} />}
     </div>
@@ -329,8 +329,8 @@ function PromoteDialog({ row, url, onCancel, onDone }: { row: ProjectRow; url: s
  * the source, see exactly what would be copied (core's own list), then copy that
  * list. If the notes change in between, nothing is copied and the list is shown again.
  */
-function CopyDialog({ row, projects, modules, onCancel, onDone }: {
-  row: ProjectRow; projects: ProjectRow[]; modules: string[]; onCancel: () => void; onDone: (m: string) => Promise<void>;
+function CopyDialog({ row, projects, modules, me, onCancel, onDone }: {
+  row: ProjectRow; projects: ProjectRow[]; modules: string[]; me: string | null; onCancel: () => void; onDone: (m: string) => Promise<void>;
 }) {
   const sources = [
     ...modules.map((m) => ({ value: `module:${m}`, label: `Module ${m} (its notes with no project)` })),
@@ -342,14 +342,20 @@ function CopyDialog({ row, projects, modules, onCancel, onDone }: {
   const [plan, setPlan] = useState<CopyPlanView | null>(null);
   const a = useAction();
   const args = (): CopyArgs => ({ from, to: row.code, ...(mine ? { author: 'me' } : {}), ...(since ? { since } : {}) });
-  // Any change to the choice means the list on screen is no longer the one to copy.
-  const change = (f: () => void) => { f(); setPlan(null); };
+  // Any change to the choice means the list on screen is no longer the one to copy;
+  // an answer to an older choice is dropped when it arrives.
+  const asked = useRef(0);
+  const change = (f: () => void) => { f(); asked.current++; setPlan(null); };
 
-  const check = () => a.run(async () => setPlan(await copyPlan(args())));
+  const check = () => a.run(async () => {
+    const n = ++asked.current;
+    const p = await copyPlan(args());
+    if (n === asked.current) setPlan(p);
+  });
   const copy = () => a.run(async () => {
     try {
-      const r = await copyApply(args(), plan!.items.map((i) => i.ulid));
-      await onDone(r.lines[0]);
+      const r = await copyApply(args(), plan!.items.map((i) => i.ulid), plan!.target.ulid);
+      await onDone(r.lines.join('\n'));
     } catch (e) {
       // The list changed: show the new one, so the person can check it again.
       if ((e as { status?: number }).status === 409) setPlan(await copyPlan(args()));
@@ -377,7 +383,7 @@ function CopyDialog({ row, projects, modules, onCancel, onDone }: {
       </label>
       <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" checked={mine} onChange={(e) => change(() => setMine(e.target.checked))} />
-        <span>Only my notes</span>
+        <span>Only my notes{me ? ` (by ${me})` : ''}</span>
       </label>
       <label className="block space-y-1 text-sm">
         <span>Only notes created on or after (optional)</span>

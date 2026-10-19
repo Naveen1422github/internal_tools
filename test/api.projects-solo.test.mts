@@ -80,6 +80,14 @@ test('copy: the plan lists what collab copy lists; apply copies exactly that lis
   const bad = await post('/api/projects/copy/plan', { from: 'module:notes-mod', to: 'TG', since: 'yesterday' });
   assert.equal(bad.status, 400);
   assert.match(bad.body.error, /^--since "yesterday" is not a date/);
+  // A module that exists only through its notes (no modules row) is offered as a copy source.
+  core.addEntry(srv.db, { type: 'decision', title: 'loose', summary: 's', module: 'loose-mod', project: 'none' });
+  const list = await (await fetch(`${srv.baseUrl}/api/projects`)).json();
+  assert.ok(list.copy_modules.includes('loose-mod'));
+  assert.ok(!list.modules.includes('loose-mod'), 'binding needs a modules row, so it is not offered there');
+  assert.equal((await post('/api/projects/copy/plan', { from: 'module:loose-mod', to: 'TG' })).body.items.length, 1);
+  const wrongTarget = await post('/api/projects/copy/apply', { ...args, expect: [], target: 'not-TG' });
+  assert.equal(wrongTarget.status, 409);
   const noExpect = await post('/api/projects/copy/apply', args);
   assert.deepEqual([noExpect.status, noExpect.body], [400, { error: 'Check the list first.' }]);
 });
