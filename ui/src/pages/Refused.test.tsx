@@ -234,4 +234,33 @@ describe('Sidebar, Team', () => {
     expect((await screen.findByRole('link', { name: 'Team' })).getAttribute('href')).toBe('/team');
     expect(api.teamOverview).toHaveBeenCalledTimes(2);
   });
+
+  it('keeps "Team" once shown when a later poll fails (the page explains); a later "not in a team" answer hides it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.needsMerge.mockResolvedValue({ results: [] });
+    api.refusedList.mockResolvedValue({ results: [], solo_projects: [] });
+    api.teamOverview
+      .mockResolvedValueOnce({ connected: true, me: { device_id: 'd' }, office: null, projects: [{ ulid: 'P', code: 'SH', name: null, role: 'Reader', keys: [] }] })
+      .mockRejectedValueOnce(refusal(503, "The post office can't be reached right now."))
+      .mockResolvedValue({ connected: true, me: { device_id: 'd' }, office: null, projects: [] });
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    await screen.findByRole('link', { name: 'Team' });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(api.teamOverview).toHaveBeenCalledTimes(2);
+    await Promise.resolve();
+    expect(screen.getByRole('link', { name: 'Team' })).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(api.teamOverview).toHaveBeenCalledTimes(3);
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Team' })).toBeNull());
+  });
+
+  it('stays hidden when it was never shown and the office cannot be reached', async () => {
+    api.needsMerge.mockResolvedValue({ results: [] });
+    api.refusedList.mockResolvedValue({ results: [], solo_projects: [] });
+    api.teamOverview.mockRejectedValue(refusal(503, "The post office can't be reached right now."));
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    await waitFor(() => expect(api.teamOverview).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(screen.queryByRole('link', { name: 'Team' })).toBeNull();
+  });
 });

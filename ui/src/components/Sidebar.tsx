@@ -37,13 +37,15 @@ export default function Sidebar() {
   }, []);
   // S3-11: "Team" only for a notebook connected to a post office that is in a
   // team project or holds an office role. Asked every 30 s like the counts, so it
-  // appears once the office can be reached; any failure hides it.
+  // appears once the office can be reached. S3-12: a failed poll changes nothing,
+  // so "Team" once shown stays (the page itself says the office can't be reached)
+  // and one never shown stays hidden; only an answer can hide it again.
   const [team, setTeam] = useState(false);
   useEffect(() => {
     let alive = true;
     const load = () => teamOverview()
       .then((o) => { if (alive) setTeam(o.connected && (o.projects.length > 0 || o.office !== null)); })
-      .catch(() => { if (alive) setTeam(false); });
+      .catch(() => {});
     load();
     const t = setInterval(load, 30_000);
     return () => { alive = false; clearInterval(t); };

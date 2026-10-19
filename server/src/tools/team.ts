@@ -28,12 +28,16 @@ const isId = (v: unknown): v is string => typeof v === 'string' && isUlid(v);
 class BadRequest extends Error {}
 const bad = (msg: string): never => { throw new BadRequest(msg); };
 
+/** True while the office can't be reached: the outage is logged once, not on every poll; any answer ends it. */
+let outage = false;
+
 /** The office's answer, or the error to send instead. Read the target per request: setup may run while the server is up. */
 async function ask(method: Method, path: string, body?: unknown): Promise<{ ok: true; body: any } | { ok: false; status: number; error: string }> {
   const target = postOfficeTargetFromDb(db);
   if (!target) return { ok: false, status: 409, error: NOT_CONNECTED };
   try {
     const r = await requestJson(target, method, path, body);
+    outage = false;
     if (r.status === 404 && /^no such endpoint/.test(String(r.body?.error ?? ''))) return { ok: false, status: 501, error: NEEDS_UPDATE };
     if (r.status >= 400) return { ok: false, status: r.status, error: String(r.body?.error ?? `The post office answered ${r.status}.`) };
     return { ok: true, body: r.body };
@@ -42,7 +46,8 @@ async function ask(method: Method, path: string, body?: unknown): Promise<{ ok: 
     if (e instanceof SchemaMismatchError) return { ok: false, status: 409, error: e.message };
     // Something answers at the office's address with another certificate: say so, never "can't be reached".
     if (e instanceof PinMismatchError) return { ok: false, status: 502, error: e.message.replace(/^\[collab-mcp\] /, '') };
-    console.error('[team] post office unreachable:', e?.message ?? e);
+    if (!outage) console.error('[team] post office unreachable:', e?.message ?? e);
+    outage = true;
     return { ok: false, status: 503, error: UNREACHABLE };
   }
 }
