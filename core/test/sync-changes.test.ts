@@ -58,3 +58,37 @@ test('reindexFts rebuilds the search rows of received entries', async () => {
     assertFtsIntact(b.db);
   } finally { setAllocator(null); a.cleanup(); b.cleanup(); }
 });
+
+// A rollup note (type 'rollup' needs rollup_of_task: a table-level CHECK) must
+// cross the wire. cr-sqlite merges each cell as INSERT .. ON CONFLICT DO UPDATE,
+// and SQLite checks the INSERT candidate (pk + that one cell) before the conflict
+// is seen: the 'rollup' cell failed whatever the order (office HTTP 400
+// "constraint failed", 2026-10-23 backfill of E-261).
+test('applyChanges merges a rollup note, both ways, and still refuses a row left invalid', async () => {
+  const a = freshDb({ shared: true }), b = freshDb({ shared: true });
+  try {
+    setAllocator({ allocate: async () => 261 });
+    const { id } = await addEntryAsync(a.db, { type: 'decision', title: 'Archive: m', summary: 's', module: 'm' });
+    const u = (a.db.prepare('SELECT ulid FROM entries WHERE id = ?').get(id) as { ulid: string }).ulid;
+    a.db.prepare(`UPDATE entries SET type = 'rollup', rollup_of_task = 'module:m' WHERE ulid = ?`).run(u);
+    const row = (db: typeof a.db) => db.prepare('SELECT type, rollup_of_task FROM entries WHERE ulid = ?').get(u);
+    b.db.transaction(() => applyChanges(b.db, readOwnChanges(a.db, 0).map(decodeChange)))();
+    assert.deepEqual(row(b.db), { type: 'rollup', rollup_of_task: 'module:m' });
+
+    // Back off rollup: here the rollup_of_task = NULL cell is the one that fails first.
+    const v = Number((a.db.prepare('SELECT crsql_db_version() v').get() as { v: number }).v);
+    a.db.prepare(`UPDATE entries SET type = 'decision', rollup_of_task = NULL WHERE ulid = ?`).run(u);
+    b.db.transaction(() => applyChanges(b.db, readOwnChanges(a.db, v).map(decodeChange)))();
+    assert.deepEqual(row(b.db), { type: 'decision', rollup_of_task: null });
+
+    // A 'rollup' cell with no rollup_of_task anywhere still fails, and leaves nothing behind.
+    const c = freshDb({ shared: true });
+    try {
+      const lone = readOwnChanges(a.db, 0).map(decodeChange).filter((r) => r.table !== 'entries' || r.cid !== 'rollup_of_task')
+        .map((r) => (r.table === 'entries' && r.cid === 'type' ? { ...r, val: 'rollup' } : r));
+      assert.throws(() => c.db.transaction(() => applyChanges(c.db, lone))(), /CHECK constraint failed/);
+      assert.equal((c.db.prepare('SELECT COUNT(*) n FROM entries').get() as { n: number }).n, 0);
+      assert.equal(c.db.pragma('ignore_check_constraints', { simple: true }), 0);
+    } finally { c.cleanup(); }
+  } finally { setAllocator(null); a.cleanup(); b.cleanup(); }
+});
