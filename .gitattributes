@@ -1,0 +1,2 @@
+# The container runs this with /bin/sh: CRLF would break it.
+post-office/docker-entrypoint.sh text eol=lf

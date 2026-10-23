@@ -11,6 +11,7 @@ import { setOfficeRole, setProjectMember } from "./access.js";
 import { lastSeq } from "./deliveries.js";
 import { startPostOffice, type PostOffice } from "./server.js";
 import { defaultDataDir, officeFiles } from "./paths.js";
+import { bundleOffice, ENV_VAR_LIMIT } from "./bundle.js";
 
 export interface Io { out(line: string): void; err(line: string): void }
 export interface OfficeConfig { url: string; port: number; fingerprint: string }
@@ -20,7 +21,10 @@ export const USAGE = `collab-post-office: the sync v1 post office
 
   init --seed-from <main laptop's notes .db> | --seed-max-id <n>
        [--url https://<address>:<port>] [--port ${DEFAULT_PORT}]
-  serve [--host 0.0.0.0]
+  serve [--host 0.0.0.0] [--port <n>]   port: --port, else env PORT, else config.json
+  set-url https://<address>:<port>     after a move: the address new join codes carry
+  bundle <out.tgz> [--url https://<address>:<port>] [--force]
+                               snapshot a STOPPED office for a move (see DEPLOY.md)
   add-member <name>            prints a ONE-TIME join code (valid ${JOIN_TTL_HOURS / 24} days)
   revoke <device-id | name>
   set-office-role <device-id | name> <role>   e.g. "Office admin" (no login needed: you are on this machine)
@@ -28,7 +32,7 @@ export const USAGE = `collab-post-office: the sync v1 post office
   status
   share <module> | unshare <module> | modules
 
-Every command takes --data <dir> (default: ${defaultDataDir()}).`;
+Every command takes --data <dir> (else env COLLAB_OFFICE_DATA, else ${defaultDataDir()}).`;
 
 function parseArgs(argv: string[]): { pos: string[]; opt: Record<string, string | true> } {
   const pos: string[] = [];
@@ -65,6 +69,30 @@ export function seedFromNotesDb(path: string): number {
   }
 }
 
+/** --data, else env COLLAB_OFFICE_DATA (containers), else the per-OS default. */
+export function resolveDataDir(opt: Record<string, string | true>, env: NodeJS.ProcessEnv = process.env): string {
+  if (typeof opt.data === "string") return opt.data;
+  return env.COLLAB_OFFICE_DATA || defaultDataDir(env);
+}
+
+function parsePort(raw: string, from: string): number {
+  const port = /^\d+$/.test(raw) ? Number(raw) : NaN;
+  if (!Number.isInteger(port) || port > 65535) throw new StoreError(`not a port (${from}): ${raw}`);
+  return port;
+}
+
+/** serve's port: --port, else env PORT (some hosts inject it), else config.json's. */
+export function resolveServePort(opt: Record<string, string | true>, env: NodeJS.ProcessEnv, configPort: number): number {
+  if (typeof opt.port === "string") return parsePort(opt.port, "--port");
+  if (env.PORT) return parsePort(env.PORT, "env PORT");
+  return configPort;
+}
+
+function checkOfficeUrl(url: string): void {
+  if (!url.startsWith("https://")) throw new StoreError("the post office URL must start with https://");
+  try { new URL(url); } catch { throw new StoreError(`not a URL: ${url}`); }
+}
+
 function readConfig(dir: string): OfficeConfig {
   const f = officeFiles(dir);
   if (!existsSync(f.config)) throw new StoreError(`no post office in ${dir}; run \`collab-post-office init\` first`);
@@ -84,10 +112,10 @@ function withStore<T>(dir: string, fn: (s: Store) => T): T {
   try { return fn(s); } finally { closeStore(s); }
 }
 
-export async function runCli(argv: string[], io: Io): Promise<{ code: number; office?: PostOffice }> {
+export async function runCli(argv: string[], io: Io, env: NodeJS.ProcessEnv = process.env): Promise<{ code: number; office?: PostOffice }> {
   const { pos, opt } = parseArgs(argv);
   const cmd = pos[0];
-  const dir = typeof opt.data === "string" ? opt.data : defaultDataDir();
+  const dir = resolveDataDir(opt, env);
   const f = officeFiles(dir);
   try {
     switch (cmd) {
@@ -100,7 +128,7 @@ export async function runCli(argv: string[], io: Io): Promise<{ code: number; of
         const port = typeof opt.port === "string" ? Number(opt.port) : DEFAULT_PORT;
         if (!Number.isInteger(port) || port < 0 || port > 65535) throw new StoreError(`not a port: ${String(opt.port)}`);
         const url = typeof opt.url === "string" ? opt.url : `https://${lanAddress()}:${port}`;
-        if (!url.startsWith("https://")) throw new StoreError("the post office URL must start with https://");
+        checkOfficeUrl(url);
         mkdirSync(dir, { recursive: true });
         const cert = generateSelfSignedCert();
         writeFileSync(f.cert, cert.certPem);
@@ -121,13 +149,14 @@ export async function runCli(argv: string[], io: Io): Promise<{ code: number; of
       }
       case "serve": {
         const cfg = readConfig(dir);
+        const port = resolveServePort(opt, env, cfg.port);
         const store = openStore(f.store);
         const office = await startPostOffice({
           store,
           certPem: readFileSync(f.cert, "utf8"),
           keyPem: readFileSync(f.key, "utf8"),
           host: typeof opt.host === "string" ? opt.host : "0.0.0.0",
-          port: cfg.port,
+          port,
           log: (line) => io.out(`${new Date().toISOString()} ${line}`),
         });
         io.out(`post office listening on port ${office.port}; members reach it at ${cfg.url}`);
@@ -136,6 +165,31 @@ export async function runCli(argv: string[], io: Io): Promise<{ code: number; of
           code: 0,
           office: { ...office, close: async () => { await office.close(); closeStore(store); } },
         };
+      }
+      case "set-url": {
+        const url = pos[1];
+        if (!url) throw new StoreError("set-url needs the new address, e.g. set-url https://office.example.com:7443");
+        checkOfficeUrl(url);
+        const cfg = readConfig(dir);
+        writeFileSync(f.config, JSON.stringify({ ...cfg, url }, null, 2) + "\n");
+        io.out(`post office address is now ${url} (was ${cfg.url}); new join codes carry it`);
+        io.out(`machines that already joined: run \`collab sync set-address ${url}\` on each`);
+        io.out(`join codes printed before this still carry the old address: revoke those unused members, then add-member again`);
+        return { code: 0 };
+      }
+      case "bundle": {
+        const out = pos[1];
+        if (!out) throw new StoreError("bundle needs an output file, e.g. bundle office.tgz");
+        if (typeof opt.url === "string") checkOfficeUrl(opt.url);
+        // Probe the port serve would use here (--port / PORT / config.json), not only config.json's.
+        const port = resolveServePort(opt, env, readConfig(dir).port);
+        const b = await bundleOffice(dir, out, { url: typeof opt.url === "string" ? opt.url : undefined, force: opt.force === true, port });
+        io.out(`snapshot of ${dir} written to ${b.out} (${b.bytes} bytes)`);
+        io.out(`  store.db (a VACUUM INTO copy), cert.pem, key.pem, config.json (address ${b.url})`);
+        io.out(`base64 for COLLAB_OFFICE_BOOTSTRAP: ${b.base64Out} (${b.base64Length} characters)`);
+        if (b.base64Length > ENV_VAR_LIMIT) io.out(`warning: that is over ${ENV_VAR_LIMIT / 1000} KB, too large for most hosts' env vars; upload ${b.out} to the volume instead (DEPLOY.md)`);
+        io.out(`it holds the private key: delete both files and the env var once the office runs`);
+        return { code: 0 };
       }
       case "add-member": {
         const name = pos.slice(1).join(" ").trim();
