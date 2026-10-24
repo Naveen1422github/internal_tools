@@ -148,7 +148,10 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
     const err = e instanceof Error ? e : new Error(String(e));
     if (res.headersSent) { res.destroy(); return; }
     const status = err instanceof StoreError ? err.status : 500;
+    // Refusals are logged too: a 400 from applyChanges blocked a whole backfill
+    // unseen on the office (COLLAB-205). 404s are routine and stay quiet.
     if (status >= 500) log(`error: ${err.message}`);
+    else if (status !== 404) log(`refused ${status}: ${err.message}`);
     send(res, status, { error: err.message });
   }
 
