@@ -97,9 +97,30 @@ export function applyChanges(
     if (!SHARED.has(r.table)) throw new Error(`refusing a change to ${r.table}: it is not shared (notes only, D5)`);
   }
   const ins = db.prepare(`INSERT INTO crsql_changes (${COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  // cr-sqlite merges each cell as INSERT .. ON CONFLICT DO UPDATE, and SQLite
+  // checks CHECKs on the INSERT candidate (pk + this one cell, the rest at their
+  // defaults) before it sees the conflict. A multi-column CHECK (entries: type
+  // 'rollup' needs rollup_of_task) then fails for one cell although the merged
+  // row is valid. Such a cell is applied again with CHECKs off, and its table is
+  // checked whole once every cell has landed: a row really left invalid still
+  // throws, and the caller's transaction rolls the batch back.
+  const recheck = new Set<string>();
   for (const r of raws) {
     opts.before?.(r);
-    ins.run(r.table, r.pk, r.cid, r.val, r.col_version, r.db_version, r.site_id, r.cl, r.seq);
+    const args = [r.table, r.pk, r.cid, r.val, r.col_version, r.db_version, r.site_id, r.cl, r.seq] as const;
+    try {
+      ins.run(...args);
+    } catch (e) {
+      if ((e as { code?: string }).code !== "SQLITE_CONSTRAINT_CHECK") throw e;
+      db.pragma("ignore_check_constraints = ON");
+      try { ins.run(...args); } finally { db.pragma("ignore_check_constraints = OFF"); }
+      recheck.add(r.table);
+    }
+  }
+  for (const t of recheck) {
+    // t is one of SYNCED_TABLES (checked above), so it is safe to name here.
+    const bad = (db.pragma(`quick_check("${t}")`) as Array<{ quick_check: string }>).map((x) => x.quick_check).filter((x) => x !== "ok");
+    if (bad.length) throw new Error(`a received change leaves ${t} invalid: ${bad.join("; ")}`);
   }
   // Resolve ulids after ALL rows landed: a revision's entry_ulid may arrive after its key.
   const entryUlids = new Set<string>();

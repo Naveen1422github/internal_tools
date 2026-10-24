@@ -1,0 +1,22 @@
+# Build context for post-office/Dockerfile: only what the office image needs.
+# Everything else (notes DBs, post-office data, keys, ui) stays out.
+*
+!package.json
+!package-lock.json
+!tsconfig.base.json
+!addon-manifest.json
+!scripts/fetch-crsqlite.mjs
+!core/package.json
+!core/tsconfig.json
+!core/src/**
+!mcp/migrations/**
+!post-office/package.json
+!post-office/tsconfig.json
+!post-office/src/**
+!post-office/docker-entrypoint.sh
+!courier/package.json
+!mcp/package.json
+!server/package.json
+!ui/package.json
+!gemini-mcp/package.json
+!cli/package.json
