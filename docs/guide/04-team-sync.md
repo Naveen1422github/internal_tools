@@ -43,6 +43,11 @@ Not "Naveen superseded note 41", but **cells**: "table `entries`, row X, column 
 ## Status
 
 - Two-laptop test with Rinku **passed** 2026-10-10 (COLLAB-120).
-- The post office runs on your laptop. A move to the company server (122.160.136.155:7443) was decided (COLLAB-113) but put on hold until development is finished (COLLAB-114).
-- Known: the office still advertises your old Wi-Fi IP 192.168.0.104 (E-767).
+- **2026-10-23: the post office moved off your laptop** to a free Oracle Cloud VM at `https://168.138.114.191:7443` (COLLAB-203), so the first teammate (Gaurav) can reach it from any network.
+  - It runs as a Linux service that restarts itself and starts at boot.
+  - It kept its certificate, so your laptop only ran `collab sync set-address`.
+  - The old laptop office was renamed `post-office.MOVED-TO-ORACLE-2026-10-23` and must never run again: two offices would hand out the same numbers.
+  - Moving it again (e.g. to the company server, COLLAB-113): `bundle` on the stopped office, copy it over, then `set-address` on each laptop (post-office/DEPLOY.md).
+- Shared with the team: the emp1st modules + supporthub. Collab, tooling and personal notes are not shared.
+- First real use found a bug: one old summary note (E-261) made the office refuse the whole upload (COLLAB-205). It was fixed the same day.
 - Not built yet: `collab join` / leave / web welcome page (stage D).
