@@ -20,7 +20,7 @@ export async function createProjectOp(db: DB, args: { name: string; code: string
 export function projectCreatedLines(db: DB, p: Project): string[] {
   const first = p.mode === "team"
     ? `Created team project ${p.code} (${p.name}): numbers come from the post office at ${getSyncValue(db, SYNC_KEYS.url)}; with the office down, notes are saved and wait for their number.`
-    : `Created project ${p.code} (${p.name}), solo: its notes are numbered ${p.code}-1, ${p.code}-2, ... on this computer and never sent.`;
+    : `Created project ${p.code} (${p.name}), private: its notes are numbered ${p.code}-1, ${p.code}-2, ... on this computer and never sent.`;
   return [first, `Use it in this folder: collab project use ${p.code}`];
 }
 

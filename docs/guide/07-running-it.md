@@ -158,12 +158,12 @@ One-time move from "modules shared with everyone" to "E is a project". Do it wit
 | # | Where | Do |
 |---|---|---|
 | 1 | laptop | Run the backup job (section 6). |
-| 2 | laptop | Delete the junk notes: E-13, E-14, E-178, E-179, E-191, E-192, E-193, E-209, E-824. |
-| 3 | laptop | Retag: E-26 to `custom-reports`; E-532 to `timesheet`; E-377, 378, 379, 380, 407, 408, 409, 508 to a new module `infra`; the `supportHub` note to `supporthub`. Then `collab sync share infra` so these old notes reach the office now. |
-| 4 | laptop | Copy the never-shared tooling modules (workspace-redesign, internal-tools, workspace-mvp, dependency-audit, collab, collab-infra) into COLLAB. Copy `qa-system` into a new private project `QA`. |
+| 2 | laptop | Claude does these with you: delete the junk notes: E-13, E-14, E-178, E-179, E-191, E-192, E-193, E-209, E-824. |
+| 3 | laptop | Claude does these with you: retag E-26 to `custom-reports`; E-532 to `timesheet`; E-377, 378, 379, 380, 407, 408, 409, 508 to a new module `infra`; the `supportHub` note to `supporthub`. Then `collab sync share infra` so these old notes reach the office now. |
+| 4 | laptop | Make the private project: `collab project create "QA" --code QA`. Then, for each of workspace-redesign, internal-tools, workspace-mvp, dependency-audit, collab, collab-infra: `collab copy --from <module> --to COLLAB --yes`. Finally `collab copy --from qa-system --to QA --yes`. |
 | 5 | laptop | `collab sync status` must say **connected** with nothing waiting. |
 | 6 | the VM | `sudo -u collab collab office adopt-e --owner personal-laptop --data /var/lib/collab/office` |
-| 7 | laptop | It switches by itself on the next sync. To watch it: `collab project adopt-e --default PS`. |
+| 7 | laptop | It switches by itself on the next sync. To watch it: `collab project adopt-e --default PS`. `infra` is linked to E automatically because step 3 shared it. |
 | 8 | laptop | `collab team list E`. Read who is in it. When Gaurav joins: `collab team set "Gaurav" E Editor`. |
 | 9 | laptop | `collab sync status`: connected, and a line "N private E notes kept on this laptop". |
 

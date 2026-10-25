@@ -49,13 +49,13 @@ Success: `Created <name>: <path>` and `It is your default notebook.`
 
 ## 3. Create a first project (you)
 
-Notes live in projects. A **solo** project stays on this computer and is never sent anywhere. Ask the person what to call it and pick a 2–5 letter code (notes are numbered `<CODE>-1`, `<CODE>-2`, ...).
+Notes live in projects. A **private** project stays on this computer and is never sent anywhere. Ask the person what to call it and pick a 2–5 letter code (notes are numbered `<CODE>-1`, `<CODE>-2`, ...).
 
 ```
 collab project create "<Project name>" --code <CODE>
 ```
 
-Success: `Created project <CODE> (<Project name>), solo: ...`
+Success: `Created project <CODE> (<Project name>), private: ...`
 
 ## 4. Connect collab to your agent (you)
 
