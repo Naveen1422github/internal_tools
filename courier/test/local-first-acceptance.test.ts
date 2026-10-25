@@ -205,7 +205,9 @@ test('old-code laptop keeps syncing formerly shared modules without a 409', asyn
     await s.member.c.syncNow(); await s.owner.c.syncNow();
     assert.equal(has(s.office.store, 'from the old laptop'), true);
     assert.equal(row(s.member.w, 'from the old laptop')?.id, n.id, 'reaches an E member');
-    assert.equal(has(s.outsider.w, 'from the old laptop'), false);
+    await s.outsider.c.syncNow(); await s.outsider.c.syncNow(); // it could arrive: the office stamps it E, so it must not
+    assert.equal(s.outsider.c.status.state, 'connected', s.outsider.c.status.lastError ?? '');
+    assert.equal(has(s.outsider.w, 'from the old laptop'), false, 'not the outsider (not in E)');
     // And it still receives E notes written on adopted laptops.
     await addEntryAsync(s.owner.w, note('to the old laptop', { module: SHARED }));
     await s.owner.c.syncNow(); await s.oldie.c.syncNow();
@@ -258,6 +260,9 @@ test('a binding or membership change reaches connected laptops without a restart
     await addEntryAsync(s.member.w, note('after a live bind', { module: 'fresh' }));
     await until(() => has(s.owner.w, 'after a live bind'), 5000, `the bound note to reach the owner\n${s.logs.join('\n')}`);
     assert.equal(row(s.member.w, 'after a live bind')?.series, 'E');
+    // The member records any refusal when its push is acknowledged: wait for that before counting.
+    const top = (s.member.w.prepare(`SELECT crsql_db_version() v`).get() as { v: number }).v;
+    await until(() => Number(getSyncValue(s.member.w, 'sent_db_version') ?? 0) >= top && !getSyncValue(s.member.w, 'push_inflight'), 5000, 'the member push acknowledged');
     for (const l of s.laptops) assert.equal(refused(l.w), 0, `${l.name}: ${JSON.stringify(l.w.prepare(`SELECT * FROM refused_changes`).all())}\n${s.logs.join('\n')}`);
   } finally { await s.done(); }
 });

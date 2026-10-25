@@ -351,3 +351,103 @@ test('Task 9 ruling: an Office-member E Editor creates a module with its first E
     assert.deepEqual(acceptChanges(store, 'mem', readOwnChanges(lm.db, v)).refused.map((x) => x.key), ['module.edit']);
   } finally { setAllocator(null); lo.cleanup(); lm.cleanup(); cleanup(); }
 });
+
+/** The modules slugs among `ws`. */
+const slugsOf = (s: Store, ws: WireChange[]) => new Set(ws.map(decodeChange).filter((c) => c.table === 'modules')
+  .map((c) => (s.prepare(`SELECT cell FROM crsql_unpack_columns(?)`).get(c.pk) as { cell: string }).cell));
+
+test('Task 9 fix round 2 (I2): a carried modules row is stamped with its note\'s project: TT and E members get it, others never (replay included)', async () => {
+  const { store, cleanup } = tempStore();
+  const lo = laptop(), lm = laptop();
+  try {
+    for (const d of ['owner', 'mem', 'carl']) member(store, d); // owner = Office admin; mem, carl = Office members
+    initModule(lo.db, { slug: 'm', name: 'M' });
+    await note(lo.db, 'e-old');
+    acceptChanges(store, 'owner', readOwnChanges(lo.db, 0));
+    adoptE(store, { name: 'emp1st', ownerDevice: 'owner' });
+    const TT = registerProject(store, { ulid: newUlid(), name: 'Tools', code: 'TT' }, 'owner').ulid;
+    setProjectMember(store, null, TT, 'mem', 'Editor');
+    setProjectMember(store, null, E_PROJECT_ULID, 'mem', 'Editor');
+    const top = lastSeq(store);
+
+    // TT: a new module with a TT note.
+    setAllocator({ allocate: async () => ++n });
+    initModule(lm.db, { slug: 'ttmod', name: 'TT module' });
+    const t = (await addEntryAsync(lm.db, { type: 'decision', title: 'tt note', summary: 's', module: 'ttmod' })).ulid;
+    lm.db.prepare(`UPDATE entries SET series = 'TT', id = ? WHERE ulid = ?`).run(allocate(store, t, null, 'TT'), t);
+    lm.db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(TT, t);
+    let v = 0;
+    assert.deepEqual(acceptChanges(store, 'mem', readOwnChanges(lm.db, v)).refused, []);
+    v = version(lm.db);
+    // E: a new module with an E note.
+    setAllocator({ allocate: async (u) => allocate(store, u, null) });
+    initModule(lm.db, { slug: 'emod', name: 'E module' });
+    await addEntryAsync(lm.db, { type: 'decision', title: 'e note', summary: 's', module: 'emod' });
+    assert.deepEqual(acceptChanges(store, 'mem', readOwnChanges(lm.db, v)).refused, []);
+
+    const toOwner = slugsOf(store, fetchAll(store, 'owner', top).changes);
+    const toCarl = slugsOf(store, fetchAll(store, 'carl', top).changes);
+    assert.ok(toOwner.has('ttmod') && toOwner.has('emod'), 'TT and E members get the rows');
+    assert.ok(!toCarl.has('ttmod'), 'a non-TT member never gets the TT module row');
+    assert.ok(!toCarl.has('emod'), 'a non-E member never gets the E module row');
+    assert.equal((store.prepare(`SELECT COUNT(*) n FROM po_deliveries WHERE tbl = 'modules' AND seq > ? AND project_ulid IS NULL`).get(top) as { n: number }).n, 0);
+
+    // Replay: carl joins E, then TT, and gets each module row through that project's replay.
+    setProjectMember(store, null, E_PROJECT_ULID, 'carl', 'Reader');
+    const eRep = fetchReplay(store, 'carl', E_PROJECT_ULID, 0, 5000);
+    assert.ok(slugsOf(store, eRep.changes).has('emod') && !slugsOf(store, eRep.changes).has('ttmod'));
+    setProjectMember(store, null, TT, 'carl', 'Reader');
+    assert.ok(slugsOf(store, fetchReplay(store, 'carl', TT, 0, 5000).changes).has('ttmod'));
+
+    // An admin's row keeps the NULL stamp (everyone), even beside an E note.
+    setProjectMember(store, null, E_PROJECT_ULID, 'carl', null);
+    const vo = version(lo.db);
+    initModule(lo.db, { slug: 'adminmod', name: 'A' });
+    await addEntryAsync(lo.db, { type: 'decision', title: 'admin e note', summary: 's', module: 'adminmod' });
+    assert.deepEqual(acceptChanges(store, 'owner', readOwnChanges(lo.db, vo)).refused, []);
+    assert.ok(slugsOf(store, fetchAll(store, 'carl', top).changes).has('adminmod'));
+  } finally { setAllocator(null); lo.cleanup(); lm.cleanup(); cleanup(); }
+});
+
+test('Task 9 fix round 2 (M4): a new module tagged on a note the sender may edit is accepted (stamped E); on a note it may not edit, module.create', async () => {
+  const { store, cleanup } = tempStore();
+  const lo = laptop(), lm = laptop();
+  try {
+    for (const d of ['owner', 'mem', 'carl']) member(store, d);
+    initModule(lo.db, { slug: 'm', name: 'M' });
+    await note(lo.db, 'e-old');
+    acceptChanges(store, 'owner', readOwnChanges(lo.db, 0));
+    adoptE(store, { name: 'emp1st', ownerDevice: 'owner' });
+    const TT = registerProject(store, { ulid: newUlid(), name: 'Tools', code: 'TT' }, 'owner').ulid;
+    setProjectMember(store, null, E_PROJECT_ULID, 'mem', 'Editor');
+    setAllocator({ allocate: async (u) => allocate(store, u, null) });
+    const tag = (db: Database.Database, u: string, slug: string) =>
+      db.prepare(`INSERT INTO entry_modules (entry_ulid, entry_id, module, is_primary) VALUES (?, (SELECT id FROM entries WHERE ulid = ?), ?, 0)`).run(u, u, slug);
+
+    // mem's own E note, held by the office.
+    initModule(lm.db, { slug: 'm', name: 'M' });
+    const own = (await addEntryAsync(lm.db, { type: 'decision', title: 'mine', summary: 's', module: 'm' })).ulid;
+    acceptChanges(store, 'mem', readOwnChanges(lm.db, 0));
+    const top = lastSeq(store);
+    // Tag-only: a new module plus a tag on that note, no note created.
+    let v = version(lm.db);
+    initModule(lm.db, { slug: 'tagged', name: 'Tagged' });
+    tag(lm.db, own, 'tagged');
+    assert.deepEqual(acceptChanges(store, 'mem', readOwnChanges(lm.db, v)).refused, [], 'note.edit.own in E carries it');
+    assert.deepEqual(store.prepare(`SELECT DISTINCT project_ulid p FROM po_deliveries WHERE tbl = 'modules' AND seq > ?`).all(top), [{ p: E_PROJECT_ULID }], 'stamped E');
+
+    // A TT note mem can't edit (not in TT): the tag and the new module row are refused.
+    const vo = version(lo.db);
+    const tt = await note(lo.db, 'tt-secret', { store, ulid: TT, code: 'TT' });
+    assert.deepEqual(acceptChanges(store, 'owner', readOwnChanges(lo.db, vo)).refused, []);
+    assert.ok(store.prepare(`SELECT 1 FROM entries WHERE ulid = ? AND project_ulid = ?`).get(tt, TT), 'the office holds the TT note');
+    applyChanges(lm.db, readOwnChanges(lo.db, 0).map(decodeChange)); // mem holds it out of band
+    v = version(lm.db);
+    initModule(lm.db, { slug: 'nope', name: 'Nope' });
+    tag(lm.db, tt, 'nope');
+    const keys = acceptChanges(store, 'mem', readOwnChanges(lm.db, v)).refused.map((x) => x.key);
+    assert.ok(keys.includes('module.create'), JSON.stringify(keys));
+    assert.ok(keys.includes('note.edit.any'), 'the tag itself is refused too');
+    assert.equal(store.prepare(`SELECT 1 FROM modules WHERE slug = 'nope'`).get(), undefined);
+  } finally { setAllocator(null); lo.cleanup(); lm.cleanup(); cleanup(); }
+});

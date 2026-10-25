@@ -94,6 +94,14 @@ test('Task 9 ruling: a member without module.edit creates a module with its note
     assert.equal(refused(), 0, 'nothing sent just to be refused');
     assert.equal((b.w.prepare(`SELECT summary FROM modules WHERE slug = 'from-b'`).get() as { summary: string }).summary, 'b edits b', 'kept local');
 
+    // Fix round 2 (M4): a tag-only change carries a new module (the tag and the row share a page).
+    initModule(b.w, { slug: 'tag-b' });
+    const own = (b.w.prepare(`SELECT ulid FROM entries WHERE title = 'b in from-b'`).get() as { ulid: string }).ulid;
+    b.w.prepare(`INSERT INTO entry_modules (entry_ulid, entry_id, module, is_primary) VALUES (?, (SELECT id FROM entries WHERE ulid = ?), 'tag-b', 0)`).run(own, own);
+    await b.c.syncNow();
+    assert.ok(office.store.prepare(`SELECT 1 FROM modules WHERE slug = 'tag-b'`).get(), 'the tag carried the new module');
+    assert.equal(refused(), 0);
+
     // The admin (module.edit) still sends its edits.
     upsertModule(a.w, { slug: 'from-a', summary: 'a edits a' });
     await addEntryAsync(a.w, note('a again in from-a', { module: 'from-a', project: 'E' }));

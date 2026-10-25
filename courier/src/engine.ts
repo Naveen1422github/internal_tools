@@ -68,8 +68,9 @@ const changeKey = (w: WireChange) => `${w.site_id}|${w.db_version}|${w.seq}|${w.
  * each one whole (R5); and every `entries` cell of one note, because the office
  * (R3) holds a note's rows until it has the note's project cell (a note cut
  * before it would look like a pre-0009 note with no project, and go to
- * everyone). A `modules` row given a note by `noteOf` joins that note's unit:
- * the office accepts a new module's row only beside a note created in it (Task 9).
+ * everyone). A `modules` or `entry_modules` cell given a note by `noteOf` joins
+ * that note's unit: the office accepts a new module's row only beside a note that
+ * carries it (Task 9).
  * These rules join changes into units; a unit bigger than `size`
  * goes alone on its own page. Within a page, the batch order is kept.
  */
@@ -84,7 +85,8 @@ export function pagesOf(batch: WireChange[], noteOf: (w: WireChange) => string |
   };
   const group = (w: WireChange) => `g:${w.site_id}:${w.db_version}`;
   for (const w of batch) {
-    const u = w.table === "entries" || w.table === "modules" ? noteOf(w) : null; // a modules row joins its carrying note (Task 9)
+    // A modules row (and its carrier's tag cells) join the carrying note's unit (Task 9).
+    const u = w.table === "entries" || w.table === "modules" || w.table === "entry_modules" ? noteOf(w) : null;
     const g = root(group(w));
     if (u !== null) { const n = root(`n:${u}`); if (n !== g) up.set(n, g); }
   }
@@ -585,6 +587,7 @@ export class Courier {
     const noteOf = new Map<string, string>(); // changeKey -> note, entries cells only
     const moved = new Set<string>();
     const sentNotes = new Set<string>(); // every note with a row sent in this push, whatever the table
+    const tagCells: Array<[string, string]> = []; // entry_modules cells sent: [changeKey, note]
     const createdNow = new Set<string>();
     const numberedNow = new Set<string>();
     let top = since;
@@ -595,6 +598,7 @@ export class Courier {
       out.set(changeKey(w), w);
       if (ulid) sentNotes.add(ulid);
       if (w.table === "entries" && ulid) noteOf.set(changeKey(w), ulid);
+      if (w.table === "entry_modules" && ulid) tagCells.push([changeKey(w), ulid]);
       if (w.table === "entries" && ulid) {
         if (w.cid === "created_at") createdNow.add(ulid);
         if (w.cid === "module") moved.add(ulid);
@@ -616,6 +620,7 @@ export class Courier {
           (ulid && (moved.has(ulid) || numberedNow.has(ulid)))
         ) {
           if (w.table === "entries" && ulid) noteOf.set(changeKey(w), ulid);
+          if (w.table === "entry_modules" && ulid) tagCells.push([changeKey(w), ulid]);
           if (ulid) sentNotes.add(ulid);
           out.set(changeKey(w), w);
         }
@@ -639,6 +644,9 @@ export class Courier {
           const u = place.module ? carrier.get(place.module) : undefined;
           if (u) noteOf.set(changeKey(w), u);
         }
+        // A carrier's tag cells join it too: a tag-only change carries the row (fix round 2, M4).
+        const carriers = new Set(carrier.values());
+        for (const [k, u] of tagCells) if (carriers.has(u)) noteOf.set(k, u);
       }
     }
     const batch = [...out.values()];

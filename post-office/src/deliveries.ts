@@ -410,11 +410,16 @@ export function acceptChanges(
     const rec = prep(db, RECORD_STAMPED);
     const fresh: RawChange[] = [];
     const stamped: DeliveryRow[] = [];
+    const carriedModules = new Map<string, number[]>(); // Task 9 (I2): project -> seqs of modules rows its note carried
     raws.forEach((r, i) => {
       const p = guess ? guess[i].stamp : null;
       const x = rec.run(origin, r.table, r.pk, r.cid, r.val, r.col_version, r.db_version, r.site_id, r.cl, r.seq, p);
       if (x.changes === 1) {
         fresh.push(r);
+        if (r.table === "modules" && verdict.moduleStamps.size) {
+          const to = verdict.moduleStamps.get(firstTextCell(r.pk) ?? "");
+          if (to !== undefined) { const l = carriedModules.get(to); if (l) l.push(Number(x.lastInsertRowid)); else carriedModules.set(to, [Number(x.lastInsertRowid)]); }
+        }
         const gi = guess?.[i];
         stamped.push(gi && !opts.oldStampPath
           ? { seq: Number(x.lastInsertRowid), tbl: r.table, pk: r.pk, origin, held: 0, stamp: p, key: gi.key, ulid: gi.ulid, final: gi.final, owned: gi.owned }
@@ -445,6 +450,9 @@ export function acceptChanges(
     t0 = performance.now();
     const mine = [...stamped, ...own];
     if (stamp) stampProjects(db, mine.map((r) => r.seq), mine);
+    // Task 9 (I2): a new modules row accepted beside a member's note goes to that note's project only
+    // (modules rows are otherwise NULL: everyone). After R3, which never re-resolves an old row.
+    for (const [p, seqs] of carriedModules) prep(db, `UPDATE po_deliveries SET project_ulid = ? WHERE seq IN (SELECT value FROM json_each(?))`).run(p, JSON.stringify(seqs));
     const seq = lastSeq(db);
     if (stamp && (mine.length || wb.length)) prep(db, SET_STAMPED_UPTO).run(String(seq)); // R3 watermark: stamped up to here
     stampMs += performance.now() - t0;

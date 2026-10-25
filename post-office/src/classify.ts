@@ -35,6 +35,8 @@ export interface Refusal { site_id: string /* hex */; db_version: number; ulid: 
 export interface Verdict {
   groups: Map<string, Refusal | null>; groupOf: string[]; creations: Map<string, string>; noteProjects: Map<string, string | null>;
   keys: Array<string | null>; ulids: Array<string | null>; hints: Hints; held: Map<string, HeldProject>;
+  /** Task 9 (I2): slug -> project of the note that carried a new modules row past module.create; its deliveries get that stamp. */
+  moduleStamps: Map<string, string>;
 }
 /** A held note's project as R3 reads it: hp = its project cell arrived, hs = its series cell did; owner = po_note_owners'. */
 export interface HeldProject { project_ulid: string | null; hp: number; hs: number; owner: string | null }
@@ -353,28 +355,39 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
   }
 
   // Local-first (Task 9 ruling): creating a modules row (a slug the office lacks) needs
-  // no module.create when this batch also creates a note the sender may create
-  // (note.create in its project; E once adopted) whose primary module or a tag is that
-  // slug: binding a new module to a project is how a team member starts one. Editing
-  // a held modules row stays module.edit (office admin). Before adoption a no-project
-  // note has no project here, so nothing changes for it.
-  let carriedSlugs: Set<string> | null = null;
-  const carried = (): Set<string> => {
+  // no module.create when this batch carries it with a note the sender may write:
+  // - a note it creates here (note.create in its project, E once adopted) whose primary
+  //   module or a tag is that slug, or
+  // - an entry_modules row tagging an existing note it may edit (note.edit.own for its
+  //   own note, else note.edit.any, in that note's project) with that slug (fix round 2, M4).
+  // Editing a held modules row stays module.edit (office admin). Before adoption a
+  // no-project note has no project here, so nothing changes for it. The carried row is
+  // stamped with its carrying note's project (moduleStamps, I2): only that project's
+  // members get it.
+  let carriedSlugs: Map<string, string> | null = null;
+  const carried = (): Map<string, string> => {
     if (carriedSlugs) return carriedSlugs;
-    carriedSlugs = new Set();
+    const out = new Map<string, string>();
     raws.forEach((r, i) => {
       const u = ulids[i];
       if (!u) return;
       let slug: string | null = null;
       if (r.table === "entries" && r.cid === "module") slug = typeof r.val === "string" && r.val !== "" ? r.val : null;
       else if (r.table === "entry_modules") slug = textCells(r.pk)?.[1] ?? null;
-      if (!slug || carriedSlugs!.has(slug)) return;
+      if (!slug || out.has(slug)) return;
       const n = notes.get(u)!;
-      if (n.created === null || n.project === null || n.refused || badNumber.has(u)) return;
-      if (answer("note.create", n.project) === "") carriedSlugs!.add(slug);
+      if (n.project === null || n.refused) return;
+      if (n.created !== null) {
+        if (badNumber.has(u) || answer("note.create", n.project) !== "") return;
+      } else {
+        if (r.table !== "entry_modules" || !n.held) return; // a tag on an existing note only
+        if (answer(n.owner === origin ? "note.edit.own" : "note.edit.any", n.project) !== "") return;
+      }
+      out.set(slug, n.project);
     });
-    return carriedSlugs;
+    return (carriedSlugs = out);
   };
+  const moduleStamps = new Map<string, string>();
 
   // Each cell's key (null = refused outright or not judged) and, when refused, why.
   const whyKey: Array<string | null> = new Array(raws.length).fill(null);
@@ -388,7 +401,9 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     if (twice.size && twice.has(i)) { why[i] = TWICE; return; }
     if (r.table === "modules") {
       const k = moduleKey(keys[i]!);
-      if (k === "module.create" && carried().has(keys[i]!)) return; // local-first fix: a new module travels with its first note
+      // Only when the sender lacks module.create: an admin's (or legacy) row keeps the NULL stamp (everyone).
+      const by = k === "module.create" && answer(k, null) !== "" ? carried().get(keys[i]!) : undefined;
+      if (by !== undefined) { moduleStamps.set(keys[i]!, by); return; } // a new module travels with a note it may write
       judge(i, k, null); return;
     }
     const u = ulids[i];
@@ -442,5 +457,5 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     for (const [u, g] of creations) if (groups.get(g) && !dead.has(u)) { dead.add(u); grew = true; }
     if (!grew) break;
   }
-  return { groups, groupOf, creations, noteProjects, keys, ulids, hints, held: heldProjects };
+  return { groups, groupOf, creations, noteProjects, keys, ulids, hints, held: heldProjects, moduleStamps };
 }
