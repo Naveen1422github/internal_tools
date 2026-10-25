@@ -334,6 +334,8 @@ export interface ProjectRow extends Project {
   highest?: number;
 }
 export interface ProjectList {
+  /** This laptop adopted E as the shared project emp1st. */
+  eAdopted?: boolean;
   projects: ProjectRow[];
   /** Modules with a modules row: the ones a project can be bound to. */
   modules: string[];

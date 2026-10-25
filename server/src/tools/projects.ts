@@ -5,7 +5,7 @@
 import http from 'node:http';
 import {
   getDb, projectListRows, createProjectOp, projectCreatedLines, promoteProject, renameProject, highestNumberOf,
-  bindModule, unbindModule, bindChangeLine, findProject, notFound, getSyncValue, SYNC_KEYS,
+  bindModule, unbindModule, isEAdopted, bindChangeLine, findProject, notFound, getSyncValue, SYNC_KEYS,
   planCopy, applyCopy, copyPlanLines, copyResultLines, copyRefusal, resolveAuthor, promotedLines, renamedLine, type CopyArgs,
 } from '@collab-mcp/core';
 import { coreFailure } from './office-errors.js';
@@ -64,7 +64,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       return p.mode === 'solo' ? { ...p, highest: highestNumberOf(db, p.code) } : p;
     });
     send(200, {
-      projects, modules: modulesOf(), copy_modules: copyModulesOf(),
+      projects, eAdopted: isEAdopted(db), modules: modulesOf(), copy_modules: copyModulesOf(),
       office_url: getSyncValue(db, SYNC_KEYS.url) ?? null,
       // Who "only my notes" means (collab copy --author me), as this server resolves it.
       me: resolveAuthor(),

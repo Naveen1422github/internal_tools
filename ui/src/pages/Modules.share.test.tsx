@@ -105,4 +105,12 @@ describe('Modules page: share with the team', () => {
     expect(screen.getByText('Project: –')).toBeTruthy();
     expect(api.teamOverview).not.toHaveBeenCalled();
   });
+
+  it('a failed modules fetch shows no share toggle (nothing is assumed about adoption)', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    page(() => api.modules.mockRejectedValue(new Error('down')));
+    await screen.findByText('Modules');
+    expect(screen.queryByRole('button', { name: 'Share with the team' })).toBeNull();
+    err.mockRestore();
+  });
 });

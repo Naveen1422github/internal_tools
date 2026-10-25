@@ -60,11 +60,20 @@ describe('Projects page', () => {
 
   it('lists E as emp1st (E) shared with its members', async () => {
     page(() => api.projectsList.mockResolvedValue({
-      ...LIST(), projects: [row({ ulid: 'u-e', name: 'emp1st', code: 'E', mode: 'team', team: 'fp', notes: 40 }), ...LIST().projects],
+      ...LIST(), eAdopted: true, projects: [row({ ulid: 'u-e', name: 'emp1st', code: 'E', mode: 'team', team: 'fp', notes: 40 }), ...LIST().projects],
     }));
     const e = await rowOf('E');
     e.getByText('emp1st (E) · shared with its members');
     expect(e.queryByText('Solo')).toBeNull();
+  });
+
+  it('not adopted: an E row keeps its plain name', async () => {
+    page(() => api.projectsList.mockResolvedValue({
+      ...LIST(), projects: [row({ ulid: 'u-e', name: 'emp1st', code: 'E', notes: 40 }), ...LIST().projects],
+    }));
+    const e = await rowOf('E');
+    e.getByText('emp1st');
+    expect(e.queryByText(/shared with its members/)).toBeNull();
   });
 
   it('creates a solo project and shows core\'s sentence', async () => {

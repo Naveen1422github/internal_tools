@@ -122,6 +122,7 @@ export default function Projects() {
                 <Row
                   key={r.ulid}
                   row={r}
+                  eAdopted={!!list.eAdopted}
                   modules={list.modules}
                   renameWhy={renameReason(office, r)}
                   promoteWhy={teamWhy}
@@ -146,8 +147,8 @@ export default function Projects() {
   );
 }
 
-function Row({ row, modules, renameWhy, promoteWhy, onRename, onPromote, onCopy, onDone }: {
-  row: ProjectRow; modules: string[]; renameWhy: string | null; promoteWhy: string | null;
+function Row({ row, eAdopted, modules, renameWhy, promoteWhy, onRename, onPromote, onCopy, onDone }: {
+  row: ProjectRow; eAdopted: boolean; modules: string[]; renameWhy: string | null; promoteWhy: string | null;
   onRename: () => void; onPromote: () => void; onCopy: () => void; onDone: (message: string) => Promise<void>;
 }) {
   const [module, setModule] = useState('');
@@ -165,7 +166,7 @@ function Row({ row, modules, renameWhy, promoteWhy, onRename, onPromote, onCopy,
     <tr className="align-top">
       <td className="px-3 py-2">
         <div className="font-mono text-xs text-gray-500">{row.code}</div>
-        <div className="font-medium">{row.code === 'E' ? `${row.name} (E) · shared with its members` : row.name}</div>
+        <div className="font-medium">{eAdopted && row.code === 'E' ? `${row.name} (${row.code}) · shared with its members` : row.name}</div>
       </td>
       <td className="px-3 py-2">{modeLabel(row)}</td>
       <td className="px-3 py-2 whitespace-nowrap">
