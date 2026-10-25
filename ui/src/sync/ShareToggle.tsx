@@ -22,7 +22,9 @@ export default function ShareToggle({ slug, shared, boundProject, onChange }: {
       .then((o) => {
         if (!alive) return;
         if (!o.connected) setWhy(NOT_CONNECTED);
-        else setWhy(o.office?.keys.includes('office.module.share') ? null : SHARE_NEEDED);
+        // The office's pre-adoption rule (requireLegacyModuleShare): the starter Office admin
+        // (its name is fixed and unique) or a role still listing the retired key.
+        else setWhy(o.office?.role === 'Office admin' || o.office?.keys.includes('office.module.share') ? null : SHARE_NEEDED);
       })
       .catch((e) => { if (alive) setWhy((e as Error).message); });
     return () => { alive = false; };

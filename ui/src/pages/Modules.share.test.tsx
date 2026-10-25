@@ -49,6 +49,13 @@ describe('Modules page: share with the team', () => {
     expect(disabled(share)).toBe(true);
   });
 
+  it('the starter Office admin may share although the retired key is no longer in its keys (local-first Task 5)', async () => {
+    page(() => api.teamOverview.mockResolvedValue({ ...office(['office.project.create']), office: { role: 'Office admin', keys: ['office.project.create'] } }));
+    await open();
+    const share = await screen.findByRole('button', { name: 'Share with the team' });
+    await waitFor(() => expect(disabled(share)).toBe(false));
+  });
+
   it('an office refusal is shown word for word; a notebook that doesn\'t share has no button', async () => {
     page(() => api.moduleShare.mockRejectedValue(Object.assign(new Error("The post office can't be reached right now."), { status: 503 })));
     await open();
