@@ -4,7 +4,7 @@ import {
   closeDb, collabStartDir, createProjectOp, currentProject, findCollabFile, findProject, getDb,
   notFound, promoteProject, renameProject, resolveDbPath, promotedLines, renamedLine, type Project,
   projectCreatedLines, projectListLines, getDefaultProject, setDefaultProject, defaultProjectLine, projectListRows, bindModule, unbindModule, bindChangeLine,
-  adoptELocal, adoptReportLines,
+  adoptEFromOffice, adoptReportLines,
 } from "@collab-mcp/core";
 import { failPlain, type CliResult, type Io } from "./io.js";
 
@@ -132,7 +132,12 @@ export async function runProject(args: string[], io: Io): Promise<CliResult> {
         const extra: string[] = [];
         let def: string | undefined;
         for (let i = 0; i < rest.length; i++) {
-          if (rest[i] === "--default") { def = rest[++i]; continue; }
+          if (rest[i] === "--default") {
+            const v = rest[i + 1];
+            if (!v || v.startsWith("--")) { io.err("usage: collab project adopt-e [--default <CODE>] [--also <module>...]"); return { code: 2 }; }
+            def = v; i++;
+            continue;
+          }
           if (rest[i] === "--also") {
             while (i + 1 < rest.length && !rest[i + 1].startsWith("--")) extra.push(rest[++i]);
             continue;
@@ -140,8 +145,7 @@ export async function runProject(args: string[], io: Io): Promise<CliResult> {
           io.err("usage: collab project adopt-e [--default <CODE>] [--also <module>...]");
           return { code: 2 };
         }
-        if (rest.includes("--default") && !def) { io.err("usage: collab project adopt-e [--default <CODE>] [--also <module>...]"); return { code: 2 }; }
-        for (const l of adoptReportLines(adoptELocal(getDb(), { defaultProject: def, extraModules: extra }))) io.out(l);
+        for (const l of adoptReportLines(await adoptEFromOffice(getDb(), { defaultProject: def, extraModules: extra }))) io.out(l);
         return { code: 0 };
       }
       case "default": {

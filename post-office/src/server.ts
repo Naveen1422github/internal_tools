@@ -218,6 +218,18 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
         if (forced) return send(res, forced, { error: forced === 404 ? `no such endpoint: ${route}` : "broken" });
         return send(res, 200, accessFor(o.store, me.device_id));
       }
+      case "GET /v1/e-held": {
+        // Local-first Task 7: the E notes this office holds (tombstoned too), so a member laptop
+        // adopting E keeps private exactly the notes the team never had. Read-only; E members only
+        // (a non-member keeps every E note private anyway).
+        if (!isEAdoptedOffice(o.store) || !projectKeys(o.store, me.device_id, E_PROJECT_ULID).has("note.view")) {
+          return send(res, 403, { error: "only a member of E can ask which E notes the post office holds" });
+        }
+        const rows = o.store.prepare(
+          `SELECT ulid FROM entries WHERE (project_ulid IS NULL AND series = 'E') OR project_ulid = ? ORDER BY ulid`,
+        ).all(E_PROJECT_ULID) as Array<{ ulid: string }>;
+        return send(res, 200, { ulids: rows.map((r) => r.ulid) });
+      }
       case "GET /v1/projects": {
         // R7a: a project you are not in does not exist for you.
         const mine = new Set((o.store.prepare(`SELECT project_ulid FROM po_project_members WHERE device_id = ?`).all(me.device_id) as Array<{ project_ulid: string }>).map((r) => r.project_ulid));

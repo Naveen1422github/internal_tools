@@ -24,8 +24,9 @@ const access = (eProject?: { adopted: boolean; member: boolean }): AccessPayload
   ({ office: null, projects: [], replays: [], ...(eProject ? { eProject } : {}) });
 
 /**
- * A: shared module (sent already); B: backfilled but no longer listed; C: unshared module;
- * D: no module; T: tombstoned, unshared module. infra is the runbook's extra module.
+ * A: shared module, at the office; B: a module shared then unshared, at the office;
+ * C: unshared module, never sent; D: no module, never sent; T: tombstoned, never sent.
+ * infra is the runbook's extra module. `held` is what GET /v1/e-held would answer.
  */
 function world() {
   const t = freshDb({ shared: true });
@@ -39,9 +40,8 @@ function world() {
   const tomb = addEntry(t.db, note('T', { module: 'qa-system', assigned: assigned(5) })).ulid;
   t.db.prepare(`UPDATE entries SET deleted_at = datetime('now') WHERE ulid = ?`).run(tomb);
   setSyncValue(t.db, SHARED_KEY, JSON.stringify(['custom-reports', 'not-here']));
-  setSyncValue(t.db, 'backfilled_modules', JSON.stringify(['custom-reports', 'old-shared']));
   setSyncValue(t.db, SENT_KEY, String(dbVersion(t.db))); // everything acknowledged
-  return { ...t, u: { a, b, c, d, tomb } };
+  return { ...t, u: { a, b, c, d, tomb }, held: new Set([a, b, 'some-other-laptops-note']) };
 }
 
 const snapshot = (db: any) => ({
@@ -69,26 +69,28 @@ test('refused with unsent changes, naming the count', () => {
     writeAccessCache(t.db, access({ adopted: true, member: true }));
     addEntry(t.db, note('new in shared', { module: 'custom-reports', assigned: assigned(9) }));
     const before = snapshot(t.db);
-    assert.throws(() => adoptELocal(t.db, {}), /sync first: \d+ change\(s\) not yet sent/);
+    assert.throws(() => adoptELocal(t.db, { heldByOffice: t.held }), /sync first: \d+ change\(s\) not yet sent/);
     assert.deepEqual(snapshot(t.db), before);
   } finally { t.cleanup(); }
 });
 
-test('member: never-send = unshared, module-less and tombstoned E notes; binds shared + extra; then "already adopted"', () => {
+test('member: never-send = local E notes the office does not hold (tombstones too); binds shared + extra; then "already adopted"', () => {
   const t = world();
   try {
     writeAccessCache(t.db, access({ adopted: true, member: true }));
-    const r = adoptELocal(t.db, { extraModules: ['infra'] });
+    assert.throws(() => adoptELocal(t.db, { extraModules: ['infra'] }), /needs the post office's list of the E notes it holds/);
+    const r = adoptELocal(t.db, { extraModules: ['infra'], heldByOffice: t.held });
     assert.equal(r.member, true);
     assert.deepEqual(r.bound, ['custom-reports', 'infra', 'not-here'], 'every shared slug, even one with no modules row here');
     assert.equal(r.default, 'PS');
+    // B's module was shared then unshared: the office holds B, so it is NOT kept private.
     assert.deepEqual([...neverSend(t.db)].sort(), [t.u.c, t.u.d, t.u.tomb].sort());
-    assert.equal(r.neverSend, 3);
+    assert.equal(r.neverSend, 2, 'the count is live notes only, like collab sync status');
     assert.equal(isEAdopted(t.db), true);
     assert.equal(getSyncValue(t.db, DEFAULT_PROJECT_KEY), 'PS');
     assert.ok(findProject(t.db, 'PS'));
     assert.deepEqual(listBindings(t.db).map((b) => [b.module, b.project_ulid]), [['custom-reports', E_PROJECT_ULID], ['infra', E_PROJECT_ULID], ['not-here', E_PROJECT_ULID]]);
-    assert.throws(() => adoptELocal(t.db, {}), /already adopted/);
+    assert.throws(() => adoptELocal(t.db, { heldByOffice: t.held }), /already adopted/);
   } finally { t.cleanup(); }
 });
 
@@ -97,7 +99,7 @@ test('an unknown --also module refuses the whole adoption', () => {
   try {
     writeAccessCache(t.db, access({ adopted: true, member: true }));
     const before = snapshot(t.db);
-    assert.throws(() => adoptELocal(t.db, { extraModules: ['nope'] }), /no module "nope"/);
+    assert.throws(() => adoptELocal(t.db, { extraModules: ['nope'], heldByOffice: t.held }), /no module "nope"/);
     assert.deepEqual(snapshot(t.db), before);
   } finally { t.cleanup(); }
 });
@@ -112,6 +114,7 @@ test('non-member: never-send = every E note, nothing bound; the named default is
     assert.deepEqual(r.bound, []);
     assert.equal(r.default, 'MINE');
     assert.deepEqual([...neverSend(t.db)].sort(), Object.values(t.u).sort());
+    assert.equal(r.neverSend, 4, 'live E notes');
     assert.deepEqual(listBindings(t.db), []);
     assert.equal(findProject(t.db, 'PS'), null, 'no PS made when a default is named');
   } finally { t.cleanup(); }
@@ -140,7 +143,7 @@ test('a shared module bound to a private project keeps its binding; --also rebin
     bindModule(t.db, 'custom-reports', 'MINE');
     bindModule(t.db, 'qa-system', 'MINE');
     writeAccessCache(t.db, access({ adopted: true, member: true }));
-    const r = adoptELocal(t.db, { extraModules: ['qa-system'] });
+    const r = adoptELocal(t.db, { extraModules: ['qa-system'], heldByOffice: t.held });
     assert.deepEqual(r.bound, ['not-here', 'qa-system']);
     const b = Object.fromEntries(listBindings(t.db).map((x) => [x.module, x.project_code]));
     assert.deepEqual(b, { 'custom-reports': 'MINE', 'not-here': 'E', 'qa-system': 'E' });

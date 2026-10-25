@@ -8,7 +8,7 @@ import {
   upsertTeamProjectFromOffice, localClashOf, projectClashText, assignPendingNumber, rememberSharedModules,
   writeAccessCache, markProjectLeft, clearProjectLeft, recordRefusal, entryUlidOf,
   AccessRevokedError, SchemaMismatchError, PinMismatchError, COURIER_PORT_KEY,
-  isEAdopted, cachedEAccess, adoptELocal, E_PROJECT_ULID,
+  isEAdopted, cachedEAccess, adoptEFromOffice, E_PROJECT_ULID,
   type PostOfficeTarget, type WireChange, type EventStream, type NotePlace, type ProjectClash, type AccessPayload,
 } from "@collab-mcp/core";
 import { COURIER_KEYS as K } from "./keys.js";
@@ -224,7 +224,7 @@ export class Courier {
       if (numbering === "revoked") return;
       await this.push();
       // Adoption refused earlier for unsent changes: the push just sent them, so try again now.
-      if (this.maybeAdoptE()) await this.push();
+      if (await this.maybeAdoptE()) await this.push();
       if (this.clashes().length > 0) this.holdForClash();
       else if (numbering === "ok") this.set({ state: "connected", lastError: this.notice() });
     });
@@ -418,7 +418,7 @@ export class Courier {
         }
       }
     })();
-    this.maybeAdoptE();
+    await this.maybeAdoptE();
     await this.runReplays(p.replays);
   }
 
@@ -428,18 +428,19 @@ export class Courier {
    * work), so this is tried again after the push and on every later sync. A
    * refusal never fails the sync; each distinct one is logged once. True = adopted now.
    */
-  private maybeAdoptE(): boolean {
+  private async maybeAdoptE(): Promise<boolean> {
     if (!this.opt.autoAdoptE || isEAdopted(this.db) || !cachedEAccess(this.db).adopted) return false;
     try {
-      const r = adoptELocal(this.db, {});
+      const r = await adoptEFromOffice(this.db, {}); // a member asks the office which E notes it holds; a failure is a refusal
       this.adoptRefusal = null;
       this.log(`adopted emp1st (E) as a shared project: ${r.member ? `modules bound to it: ${r.bound.join(", ") || "none"}` : "not a member of it, so none of its notes are sent"}; ` +
         `${r.neverSend} E note(s) stay on this laptop only; new notes with no project go to ${r.default}`);
       return true;
     } catch (e) {
       const msg = (e as Error).message.replace(/^\[collab\] /, "");
-      if (msg !== this.adoptRefusal) this.log(`not adopting emp1st (E) yet, will retry: ${msg}`);
-      this.adoptRefusal = msg;
+      const kind = msg.replace(/\d+/g, "N"); // "sync first: 3 change(s)" and "2 change(s)" are one refusal
+      if (kind !== this.adoptRefusal) this.log(`not adopting emp1st (E) yet, will retry: ${msg}`);
+      this.adoptRefusal = kind;
       return false;
     }
   }

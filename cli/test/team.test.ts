@@ -173,3 +173,13 @@ test('collab project adopt-e follows the office, prints the report, and refuses 
     assert.match(again.err.join('\n'), /already adopted/);
   });
 });
+
+test('collab project adopt-e --default never takes the next flag as its value', async () => {
+  await withOffice(async ({ a, as }) => {
+    for (const argv of [['project', 'adopt-e', '--default', '--also', 'infra'], ['project', 'adopt-e', '--default']]) {
+      const r = await as(a, argv);
+      assert.equal(r.code, 2, argv.join(' '));
+      assert.match(r.err.join('\n'), /usage: collab project adopt-e \[--default <CODE>\] \[--also <module>\.\.\.\]/);
+    }
+  });
+});

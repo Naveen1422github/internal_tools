@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import {
-  addEntryAsync, addEntry, newUlid, initModule, createProject, bindModule, listBindings,
+  addEntryAsync, addEntry, newUlid, initModule, createProject, createProjectOp, bindModule, listBindings,
   getSyncValue, setSyncValue, isEAdopted, neverSend, readAccessCache, requestJson, postOfficeTargetFromDb,
   E_ADOPTED_KEY, NEVER_SEND_KEY, E_PROJECT_ULID,
 } from '@collab-mcp/core';
@@ -119,6 +119,8 @@ test('a laptop that is not in E adopts too, keeping every E note to itself', asy
     const all = (b.w.prepare(`SELECT ulid FROM entries WHERE project_ulid IS NULL AND series = 'E'`).all() as Array<{ ulid: string }>).map((r) => r.ulid);
     assert.deepEqual([...neverSend(b.w)].sort(), all.sort());
     assert.equal(b.w.prepare(`SELECT COUNT(*) n FROM project_modules`).get().n, 0);
+    const r = await requestJson(postOfficeTargetFromDb(b.w)!, 'GET', '/v1/e-held');
+    assert.equal(r.status, 403, 'a non-member may not ask which E notes the office holds');
   } finally { await s.done(); }
 });
 
@@ -155,5 +157,62 @@ test('adoption never re-points a shared module bound to a private project', asyn
     const b = Object.fromEntries(listBindings(a.w).map((x) => [x.module, x.project_code]));
     assert.equal(b.mine, 'PRV', 'the private binding stays');
     assert.equal(b.shared, 'E');
+  } finally { await s.done(); }
+});
+
+test('fix round 1: a module shared, sent, then unshared keeps its notes sendable; a note never sent stays private', async () => {
+  const s = await setting();
+  try {
+    setModuleShared(s.office.store, 'was-shared', true);
+    const a = await s.machine('a');
+    await addEntryAsync(a.w, note('sent then unshared', 'was-shared'));
+    await addEntryAsync(a.w, note('never sent', 'secret'));
+    await a.c.syncNow();
+    assert.equal(inStore(s.office, 'sent then unshared'), true);
+    setModuleShared(s.office.store, 'was-shared', false);
+    await a.c.syncNow(); // the laptop's shared and backfilled lists forget was-shared
+    assert.deepEqual(JSON.parse(getSyncValue(a.w, COURIER_KEYS.backfilled) ?? '[]'), []);
+    adoptE(s.office.store, { name: 'emp1st', ownerDevice: a.device });
+    await a.c.syncNow();
+    assert.equal(isEAdopted(a.w), true, s.logs.join('\n'));
+    const ulidOf = (t: string) => (a.w.prepare(`SELECT ulid FROM entries WHERE title = ?`).get(t) as { ulid: string }).ulid;
+    assert.deepEqual([...neverSend(a.w)], [ulidOf('never sent')], 'the office holds "sent then unshared", so it is not kept private');
+    // Its later edits leave again.
+    a.w.prepare(`UPDATE entries SET summary = 'edited after adoption' WHERE ulid = ?`).run(ulidOf('sent then unshared'));
+    await a.c.pushNow();
+    assert.equal((s.office.store.prepare(`SELECT summary FROM entries WHERE title = 'sent then unshared'`).get() as { summary: string }).summary, 'edited after adoption');
+  } finally { await s.done(); }
+});
+
+test('fix round 1: GET /v1/e-held lists E notes only, never a note of another project', async () => {
+  const s = await setting();
+  try {
+    setModuleShared(s.office.store, 'shared', true);
+    const a = await s.machine('a');
+    await createProjectOp(a.w, { name: 'Team One', code: 'TM', team: true });
+    await addEntryAsync(a.w, note('e note', 'shared'));
+    await addEntryAsync(a.w, { ...note('team note'), project: 'TM' });
+    await a.c.syncNow();
+    const ulidOf = (t: string) => (a.w.prepare(`SELECT ulid FROM entries WHERE title = ?`).get(t) as { ulid: string }).ulid;
+    assert.equal(inStore(s.office, 'team note'), true);
+    adoptE(s.office.store, { name: 'emp1st', ownerDevice: a.device });
+    const r = await requestJson(postOfficeTargetFromDb(a.w)!, 'GET', '/v1/e-held');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body.ulids, [ulidOf('e note')]);
+  } finally { await s.done(); }
+});
+
+test('fix round 1: when the office cannot say what it holds, adoption waits (no guess)', async () => {
+  const s = await setting();
+  try {
+    const a = await s.machine('a');
+    adoptE(s.office.store, { name: 'emp1st', ownerDevice: a.device });
+    // The office answers /v1/access, but this laptop's E membership is gone by the time it asks /v1/e-held.
+    s.office.store.prepare(`DELETE FROM po_project_members WHERE project_ulid = ? AND device_id = ?`).run(E_PROJECT_ULID, a.device);
+    a.w.prepare(`INSERT INTO sync_state (key, value) VALUES ('e_access', '{"adopted":true,"member":true}') ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run();
+    const { adoptEFromOffice } = await import('@collab-mcp/core');
+    await assert.rejects(adoptEFromOffice(a.w, {}), /did not say which E notes it holds \(403/);
+    assert.equal(isEAdopted(a.w), false);
+    assert.equal(getSyncValue(a.w, NEVER_SEND_KEY), null, 'nothing written');
   } finally { await s.done(); }
 });
