@@ -6,7 +6,7 @@ import { freshDb, dbVersion } from './helpers/sync.js';
 import { migrate } from '../src/db.js';
 import { addEntry } from '../src/ops/add.js';
 import { initModule } from '../src/ops/module.js';
-import { listBindings } from '../src/ops/bind.js';
+import { listBindings, bindModule } from '../src/ops/bind.js';
 import { findProject, createProject } from '../src/projects.js';
 import { getSyncValue, setSyncValue } from '../src/sync/state.js';
 import { SYNC_KEYS } from '../src/sync/http-allocator.js';
@@ -130,5 +130,19 @@ test('the access cache keeps eProject and never caches E as a project', () => {
     writeAccessCache(t.db, access()); // an older office: no eProject
     assert.deepEqual(cachedEAccess(t.db), { adopted: false, member: false });
     void E_ADOPTED_KEY; void NEVER_SEND_KEY;
+  } finally { t.cleanup(); }
+});
+
+test('a shared module bound to a private project keeps its binding; --also rebinds explicitly', () => {
+  const t = world();
+  try {
+    createProject(t.db, { name: 'Mine', code: 'MINE' });
+    bindModule(t.db, 'custom-reports', 'MINE');
+    bindModule(t.db, 'qa-system', 'MINE');
+    writeAccessCache(t.db, access({ adopted: true, member: true }));
+    const r = adoptELocal(t.db, { extraModules: ['qa-system'] });
+    assert.deepEqual(r.bound, ['not-here', 'qa-system']);
+    const b = Object.fromEntries(listBindings(t.db).map((x) => [x.module, x.project_code]));
+    assert.deepEqual(b, { 'custom-reports': 'MINE', 'not-here': 'E', 'qa-system': 'E' });
   } finally { t.cleanup(); }
 });

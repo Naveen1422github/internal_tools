@@ -39,8 +39,8 @@ function jsonList(db: DB, key: string): string[] {
 
 /**
  * Adopt E on this laptop, in one transaction (all or nothing).
- * - Member of E at the office: bind every shared module (and `extraModules`) to
- *   E; never_send = E notes whose primary module was never shared, or that
+ * - Member of E at the office: bind every shared module not bound to another
+ *   project here (and every `extraModules`) to E; never_send = E notes whose primary module was never shared, or that
  *   have none (tombstones too: a deleted private note must not leave either).
  * - Not a member: bind nothing; never_send = every E note.
  * - Either way: set the default project (`defaultProject`, else PS "Personal"),
@@ -54,10 +54,12 @@ export function adoptELocal(db: DB, o: { defaultProject?: string; extraModules?:
   const access = cachedEAccess(db);
   if (!access.adopted) throw new Error(`[collab] ${NOT_ADOPTED_AT_OFFICE}`);
   if (!hasProjectModules(db)) throw new Error("[collab] adopting E needs migration 0011 (project_modules): restart the MCP server or run `collab web` once");
-  const unsent = unsentSharedCount(db);
-  if (unsent > 0) throw new Error(`[collab] sync first: ${unsent} change(s) not yet sent`);
 
+  // IMMEDIATE: the write lock is taken before the unsent count, so no other program
+  // (the MCP server writes this DB too) can add an unsent change between check and write.
   return db.transaction((): AdoptReport => {
+    const unsent = unsentSharedCount(db);
+    if (unsent > 0) throw new Error(`[collab] sync first: ${unsent} change(s) not yet sent`);
     const shared = jsonList(db, SHARED_KEY);
     const sent = new Set([...jsonList(db, BACKFILLED_KEY), ...shared]);
     const eNotes = db.prepare(`SELECT ulid, module FROM entries WHERE project_ulid IS NULL AND series = 'E'`).all() as Array<{ ulid: string; module: string | null }>;
@@ -66,17 +68,25 @@ export function adoptELocal(db: DB, o: { defaultProject?: string; extraModules?:
     const bound: string[] = [];
     if (access.member) {
       // Every shared slug, even one with no modules row here (a note can name a module that has none;
-      // project_modules' module is a soft key). A named extra module must be known here.
+      // project_modules' module is a soft key) -- unless it is bound to another project here: a
+      // private binding is the person's choice and adoption never makes it shared. An extra
+      // module is named explicitly, so it must be known here and is bound to E whatever it was.
       const known = db.prepare(
         `SELECT 1 FROM modules WHERE slug = @m UNION ALL SELECT 1 FROM entries WHERE module = @m UNION ALL SELECT 1 FROM entry_modules WHERE module = @m LIMIT 1`,
       );
-      const extras = (o.extraModules ?? []).map((m) => String(m ?? "").trim());
+      const extras = (o.extraModules ?? []).map((m) => String(m ?? "").trim()).filter(Boolean);
       for (const m of extras) if (!known.get({ m })) throw new Error(`[collab] no module "${m}" in this notebook`);
+      const boundTo = db.prepare(`SELECT project_ulid FROM project_modules WHERE module = ?`);
+      const elsewhere = (m: string) => {
+        const r = boundTo.get(m) as { project_ulid: string } | undefined;
+        return !!r && r.project_ulid !== E_PROJECT_ULID;
+      };
       const bind = db.prepare(
         `INSERT INTO project_modules (module, project_ulid) VALUES (?, ?)
            ON CONFLICT(module) DO UPDATE SET project_ulid = excluded.project_ulid, created_at = datetime('now')`,
       );
-      for (const m of [...new Set([...shared, ...extras])].filter(Boolean).sort()) { bind.run(m, E_PROJECT_ULID); bound.push(m); }
+      const slugs = new Set([...shared.filter((m) => m && !elsewhere(m)), ...extras]);
+      for (const m of [...slugs].sort()) { bind.run(m, E_PROJECT_ULID); bound.push(m); }
     }
 
     const def = o.defaultProject ? setDefaultProject(db, o.defaultProject) : ensureDefaultProject(db);
@@ -84,7 +94,7 @@ export function adoptELocal(db: DB, o: { defaultProject?: string; extraModules?:
     setSyncValue(db, NEVER_SEND_KEY, JSON.stringify([...list].sort()));
     setSyncValue(db, E_ADOPTED_KEY, "1");
     return { neverSend: keep.length, bound, default: def.code, member: access.member };
-  })();
+  }).immediate();
 }
 
 /** `collab project adopt-e`'s report, in plain words. */

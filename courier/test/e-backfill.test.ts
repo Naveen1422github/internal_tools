@@ -3,7 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import {
-  addEntryAsync, getSyncValue, setSyncValue, isEAdopted, neverSend, readAccessCache, requestJson, postOfficeTargetFromDb,
+  addEntryAsync, addEntry, newUlid, initModule, createProject, bindModule, listBindings,
+  getSyncValue, setSyncValue, isEAdopted, neverSend, readAccessCache, requestJson, postOfficeTargetFromDb,
   E_ADOPTED_KEY, NEVER_SEND_KEY, E_PROJECT_ULID,
 } from '@collab-mcp/core';
 import { setModuleShared, adoptE } from '@collab-mcp/post-office';
@@ -55,6 +56,7 @@ test('after adoption one backfill sends the E notes not in never-send, and none 
     await a.c.pushNow();
     await a.c.syncNow();
     assert.equal(a.c.status.sentTotal, sent, 'the backfill is not sent again');
+    assert.equal(a.w.prepare(`SELECT COUNT(*) n FROM refused_changes`).get().n, 0, 'the office refused nothing');
     void unsentA;
   } finally { await s.done(); }
 });
@@ -87,6 +89,7 @@ test('the courier adopts E by itself once the office has; unsent changes wait fo
     await a.c.syncNow();
     const after = a.w.prepare(`SELECT id, series, project_ulid FROM entries WHERE title = 'after adoption'`).get();
     assert.equal(inStore(s.office, 'after adoption'), true, `${JSON.stringify(after)}\n${s.logs.join('\n')}`);
+    assert.equal(a.w.prepare(`SELECT COUNT(*) n FROM refused_changes`).get().n, 0, 'the office refused nothing');
     void late;
   } finally { await s.done(); }
 });
@@ -116,5 +119,41 @@ test('a laptop that is not in E adopts too, keeping every E note to itself', asy
     const all = (b.w.prepare(`SELECT ulid FROM entries WHERE project_ulid IS NULL AND series = 'E'`).all() as Array<{ ulid: string }>).map((r) => r.ulid);
     assert.deepEqual([...neverSend(b.w)].sort(), all.sort());
     assert.equal(b.w.prepare(`SELECT COUNT(*) n FROM project_modules`).get().n, 0);
+  } finally { await s.done(); }
+});
+
+test('the E backfill re-sends a locally numbered note the office already has: nothing is refused', async () => {
+  const s = await setting();
+  try {
+    setModuleShared(s.office.store, 'shared', true);
+    const a = await s.machine('a');
+    addEntry(a.w, { ...note('legacy, numbered here', 'shared'), assigned: { ulid: newUlid(), id: 500 } } as any);
+    await a.c.syncNow();
+    assert.equal(inStore(s.office, 'legacy, numbered here'), true, 'sent before adoption');
+    adoptE(s.office.store, { name: 'emp1st', ownerDevice: a.device });
+    await a.c.syncNow();
+    assert.equal(isEAdopted(a.w), true);
+    assert.ok(JSON.parse(getSyncValue(a.w, COURIER_KEYS.backfilledProjects) ?? '[]').includes(E_PROJECT_ULID));
+    assert.equal(a.w.prepare(`SELECT COUNT(*) n FROM refused_changes`).get().n, 0, s.logs.join('\n'));
+    assert.doesNotMatch(a.c.status.lastError ?? '', /refused/);
+  } finally { await s.done(); }
+});
+
+test('adoption never re-points a shared module bound to a private project', async () => {
+  const s = await setting();
+  try {
+    setModuleShared(s.office.store, 'shared', true);
+    setModuleShared(s.office.store, 'mine', true);
+    const a = await s.machine('a');
+    initModule(a.w, { slug: 'mine' });
+    createProject(a.w, { name: 'Private', code: 'PRV' });
+    bindModule(a.w, 'mine', 'PRV');
+    await a.c.syncNow();
+    adoptE(s.office.store, { name: 'emp1st', ownerDevice: a.device });
+    await a.c.syncNow();
+    assert.equal(isEAdopted(a.w), true);
+    const b = Object.fromEntries(listBindings(a.w).map((x) => [x.module, x.project_code]));
+    assert.equal(b.mine, 'PRV', 'the private binding stays');
+    assert.equal(b.shared, 'E');
   } finally { await s.done(); }
 });
