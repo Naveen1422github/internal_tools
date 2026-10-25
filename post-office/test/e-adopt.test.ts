@@ -20,8 +20,10 @@ function member(store: Store, id: string): void {
   assignNewMemberOfficeRole(store, id);
 }
 let n = 0;
+/** Task 5: after adoption the office checks E numbers (R-28), so a test that pushes new E notes then numbers them here. */
+let eOffice: Store | null = null;
 async function note(db: Database.Database, title: string, project?: { store: Store; ulid: string; code: string }): Promise<string> {
-  setAllocator({ allocate: async () => ++n });
+  setAllocator({ allocate: async (u) => (eOffice && !project ? allocate(eOffice, u, null) : ++n) });
   const r = await addEntryAsync(db, {
     type: 'decision', title, summary: `${title} s`, description: `${title} body`, module: 'm',
     refs: [{ ref_type: 'file', ref_value: `${title}.ts` }],
@@ -49,6 +51,7 @@ const count = (s: Store, where: string) => (s.prepare(`SELECT COUNT(*) n FROM po
 test('adoptE: a non-E member gets no E rows (old or new) but keeps TT; members and replay get E (Review Focus 3)', async () => {
   const { store, cleanup } = tempStore();
   const lo = laptop(), lg = laptop();
+  eOffice = store;
   try {
     for (const d of ['owner', 'abhishek', 'gaurav']) member(store, d);
     const TT = registerProject(store, { ulid: newUlid(), name: 'Project TT', code: 'TT' }, 'owner').ulid;
@@ -118,7 +121,7 @@ test('adoptE: a non-E member gets no E rows (old or new) but keeps TT; members a
     assert.ok(!fetchAll(store, 'abhishek', top).changes.some((w) => ownerOf(store, w) === eG), 'abhishek does not');
 
     assert.throws(() => adoptE(store, { name: 'emp1st', ownerDevice: 'owner' }), /already/);
-  } finally { setAllocator(null); lo.cleanup(); lg.cleanup(); cleanup(); }
+  } finally { eOffice = null; setAllocator(null); lo.cleanup(); lg.cleanup(); cleanup(); }
 });
 
 test('after adoption a non-member refused E edit is undone for that sender only (fix round 1, ruling a)', async () => {

@@ -70,9 +70,9 @@ test('Office admin cannot be renamed, re-keyed or deleted; Office member cannot 
     }
     assert.equal(roleById(o, member.ulid)!.name, 'Office member');
     // keeping the exact name (trimmed) is fine; keys change
-    const ed = await requestJson(o.target(n), 'PUT', `/v1/office/roles/${member.ulid}`, { name: ' Office member ', keys: ['office.module.share', 'office.project.create'] });
+    const ed = await requestJson(o.target(n), 'PUT', `/v1/office/roles/${member.ulid}`, { name: ' Office member ', keys: ['module.edit', 'office.project.create'] });
     assert.equal(ed.status, 200);
-    assert.deepEqual(roleById(o, member.ulid), { name: 'Office member', keys: JSON.stringify(['office.project.create', 'office.module.share']) });
+    assert.deepEqual(roleById(o, member.ulid), { name: 'Office member', keys: JSON.stringify(['office.project.create', 'module.edit']) });
     const delMember = await requestJson(o.target(n), 'DELETE', `/v1/office/roles/${member.ulid}`);
     assert.equal(delMember.status, 409);
     assert.equal(delMember.body.error, "Office member is a built-in role and can't be deleted.");
@@ -130,28 +130,28 @@ test('a custom office role is created, assigned via PUT /v1/office/members/:d, a
     const ev = await listen(o, n);
     try {
       const start = ev.count();
-      const made = await requestJson(o.target(n), 'POST', '/v1/office/roles', { name: '  Module keeper ', keys: ['office.module.share', 'office.project.create', 'office.module.share'] });
+      const made = await requestJson(o.target(n), 'POST', '/v1/office/roles', { name: '  Module keeper ', keys: ['module.edit', 'office.project.create', 'module.edit'] });
       assert.equal(made.status, 200);
       assert.equal(made.body.role.name, 'Module keeper');
-      assert.deepEqual(made.body.role.keys, ['office.project.create', 'office.module.share'], 'catalog order, no duplicates');
+      assert.deepEqual(made.body.role.keys, ['office.project.create', 'module.edit'], 'catalog order, no duplicates');
       const id = made.body.role.ulid as string;
-      assert.deepEqual(roleById(o, id), { name: 'Module keeper', keys: JSON.stringify(['office.project.create', 'office.module.share']) });
+      assert.deepEqual(roleById(o, id), { name: 'Module keeper', keys: JSON.stringify(['office.project.create', 'module.edit']) });
       assert.equal(roleRow(o, 'Module keeper')!.is_starter, 0);
       assert.equal(await ev.waitFor(start + 1), start + 1, 'create rings access');
 
       // a no-op edit rings nothing
-      assert.equal((await requestJson(o.target(n), 'PUT', `/v1/office/roles/${id}`, { name: 'Module keeper', keys: ['office.module.share', 'office.project.create'] })).status, 200);
+      assert.equal((await requestJson(o.target(n), 'PUT', `/v1/office/roles/${id}`, { name: 'Module keeper', keys: ['module.edit', 'office.project.create'] })).status, 200);
       await new Promise((q) => setTimeout(q, 150));
       assert.equal(ev.count(), start + 1, 'a no-op rings nothing');
       // a real edit rings
-      assert.equal((await requestJson(o.target(n), 'PUT', `/v1/office/roles/${id}`, { name: 'Keeper', keys: ['office.module.share'] })).status, 200);
+      assert.equal((await requestJson(o.target(n), 'PUT', `/v1/office/roles/${id}`, { name: 'Keeper', keys: ['module.edit'] })).status, 200);
       assert.equal(await ev.waitFor(start + 2), start + 2);
-      assert.deepEqual(roleById(o, id), { name: 'Keeper', keys: JSON.stringify(['office.module.share']) });
+      assert.deepEqual(roleById(o, id), { name: 'Keeper', keys: JSON.stringify(['module.edit']) });
 
       assert.equal((await requestJson(o.target(n), 'PUT', `/v1/office/members/${r.device}`, { role: 'Keeper' })).status, 200);
       assert.equal(officeRoleOf(o, r.device), 'Keeper');
       const access = await requestJson(o.target(r), 'GET', '/v1/access');
-      assert.deepEqual(access.body.office, { role: 'Keeper', keys: ['office.module.share'] });
+      assert.deepEqual(access.body.office, { role: 'Keeper', keys: ['module.edit'] });
 
       setOfficeRole(o.store, null, x.device, 'Keeper');
       const live = await requestJson(o.target(n), 'DELETE', `/v1/office/roles/${id}`);
@@ -215,8 +215,8 @@ test('office role names and keys: unknown and project-scope keys refused by name
     // S3-4 in office scope: no office key is inactive today, so only the sanitizing shows here:
     // a stored unknown key is not kept by an edit (an inactive one would be, as in project scope)
     const id = officeRole(o, 'Legacy', ['office.project.create', 'office.zap']);
-    assert.equal((await requestJson(o.target(n), 'PUT', `/v1/office/roles/${id}`, { keys: ['office.module.share'] })).status, 200);
-    assert.deepEqual(JSON.parse(roleById(o, id)!.keys), ['office.module.share']);
+    assert.equal((await requestJson(o.target(n), 'PUT', `/v1/office/roles/${id}`, { keys: ['module.edit'] })).status, 200);
+    assert.deepEqual(JSON.parse(roleById(o, id)!.keys), ['module.edit']);
   } finally { await o.stop(); }
 });
 
@@ -224,7 +224,7 @@ test('GET /v1/office/members lists live members with their office role; each rol
   const o = await office();
   try {
     const { n, r, x } = await team(o);
-    const keeper = officeRole(o, 'Keeper', ['office.module.share', 'office.zap']);
+    const keeper = officeRole(o, 'Keeper', ['module.edit', 'office.zap']);
     setOfficeRole(o.store, null, r.device, 'Keeper');
     revoke(o, x.device);
     addMember(o.store, 'Waiting');   // never joined
@@ -242,7 +242,7 @@ test('GET /v1/office/members lists live members with their office role; each rol
     const by = (name: string) => roles.find((q) => q.name === name)!;
     assert.deepEqual(by('Office admin'), { ulid: admin.ulid, name: 'Office admin', keys: keysOf('office'), is_starter: true, locked: 'all', holders: 1 });
     assert.deepEqual(by('Office member'), { ulid: member.ulid, name: 'Office member', keys: ['office.project.create'], is_starter: true, locked: 'name', holders: 2 }, 'the revoked X and the waiting device');
-    assert.deepEqual(by('Keeper'), { ulid: keeper, name: 'Keeper', keys: ['office.module.share'], is_starter: false, locked: null, holders: 1 }, 'stored keys are sanitized');
+    assert.deepEqual(by('Keeper'), { ulid: keeper, name: 'Keeper', keys: ['module.edit'], is_starter: false, locked: null, holders: 1 }, 'stored keys are sanitized');
     assert.equal(roles.length, 3);
     // a revoked device reads nothing
     await assert.rejects(requestJson(o.target(x), 'GET', '/v1/office/members'), { name: 'AccessRevokedError' });

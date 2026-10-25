@@ -45,7 +45,7 @@ test('assigning a role holding a key you lack, to someone else or to yourself ->
     assert.equal(roleIn(o, p, r.device), 'Inviter');
     assert.equal(roleIn(o, p, k.device), undefined);
     // office: may manage office roles, may not add members -> may not hand out Office admin
-    officeRole(o, 'Role keeper', ['office.project.create', 'office.module.share', 'office.role.manage']);
+    officeRole(o, 'Role keeper', ['office.project.create', 'module.edit', 'office.role.manage']);
     setOfficeRole(o.store, null, r.device, 'Role keeper');
     for (const who of [k.device, r.device]) {
       const res = await requestJson(o.target(r), 'PUT', `/v1/office/members/${who}`, { role: 'Office admin' });
@@ -68,7 +68,7 @@ test('managing a higher-ranked member (set, remove, office role, revoke) -> 403 
     officeRole(o, 'Keeper', ['office.project.create', 'office.member.revoke', 'office.role.manage']);
     setOfficeRole(o.store, null, r.device, 'Keeper');
     const project = 'You need "Create notes" (note.create) in SH to do this';
-    const officeWant = 'You need "Share modules" (office.module.share) in this office to do this';
+    const officeWant = 'You need "Add office members" (office.member.add) in this office to do this';
     const tries: Array<[string, string, unknown, string]> = [
       ['PUT', `/v1/projects/${p}/members/${k.device}`, { role: 'Reader' }, project],
       ['DELETE', `/v1/projects/${p}/members/${k.device}`, undefined, project],
@@ -183,9 +183,9 @@ test('creating an office role holding a key you lack -> 403 naming that key; not
     const { r } = await team(o);
     officeRole(o, 'Keeper', ['office.project.create', 'office.role.manage']);
     setOfficeRole(o.store, null, r.device, 'Keeper');
-    const res = await requestJson(o.target(r), 'POST', '/v1/office/roles', { name: 'Boss', keys: ['office.project.create', 'office.member.revoke', 'office.module.share'] });
+    const res = await requestJson(o.target(r), 'POST', '/v1/office/roles', { name: 'Boss', keys: ['office.project.create', 'module.edit'] });
     assert.equal(res.status, 403);
-    assert.equal(res.body.error, 'You need "Share modules" (office.module.share) in this office to do this');
+    assert.equal(res.body.error, 'You need "Edit modules" (module.edit) in this office to do this');
     assert.equal(o.store.prepare(`SELECT 1 FROM po_office_roles WHERE name = 'Boss'`).get(), undefined);
     // within its own keys, Keeper may create
     assert.equal((await requestJson(o.target(r), 'POST', '/v1/office/roles', { name: 'Small', keys: ['office.project.create'] })).status, 200);

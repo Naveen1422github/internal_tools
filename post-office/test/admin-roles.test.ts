@@ -89,7 +89,7 @@ test('unknown, office-scope and inactive keys are refused by name; names clash c
   try {
     const { n, p } = await team(o);
     const post = (body: unknown) => requestJson(o.target(n), 'POST', `/v1/projects/${p}/roles`, body);
-    for (const key of ['note.fly', 'office.module.share', 'task.create', 'project.delete']) {
+    for (const key of ['note.fly', 'office.member.add', 'task.create', 'project.delete']) {
       const res = await post({ name: 'Bad', keys: ['note.view', key] });
       assert.equal(res.status, 400, key);
       assert.equal(res.body.error, `"${key}" is not a permission that can be given.`);

@@ -215,7 +215,7 @@ test('no one assigns a role holding a key they lack (ruling 4)', () => {
     assert.deepEqual([...projectKeys(store, k, p)], ['note.view']);
     assert.throws(() => setProjectMember(store, r, p, k, 'Editor'), refused(403, 'note.create'), 'role change is checked too');
     // office: may manage roles but not add members -> may not hand out Office admin
-    store.prepare(`INSERT INTO po_office_roles (ulid, name, keys) VALUES (?, 'Role keeper', '["office.project.create","office.module.share","office.role.manage"]')`).run(newUlid());
+    store.prepare(`INSERT INTO po_office_roles (ulid, name, keys) VALUES (?, 'Role keeper', '["office.project.create","module.edit","office.role.manage"]')`).run(newUlid());
     setOfficeRole(store, null, r, 'Role keeper');
     assert.throws(() => setOfficeRole(store, r, k, 'Office admin'),
       (e: unknown) => e instanceof StoreError && e.status === 403 && e.message === `You need "${labelOf('office.member.add')}" (office.member.add) in this office to do this`);

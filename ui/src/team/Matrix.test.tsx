@@ -6,7 +6,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 // RnR S3 (Task 8, S3-8): "Who can do what", roles against permissions, read-only.
 const ALL_PROJECT = ['note.view', 'note.create', 'note.edit.own', 'note.edit.any', 'note.supersede', 'note.archive',
   'note.copy.out', 'merge.resolve', 'project.edit', 'member.invite', 'member.revoke', 'role.manage', 'ai_limits.manage'];
-const ALL_OFFICE = ['office.project.create', 'office.module.share', 'office.member.add', 'office.member.revoke',
+const ALL_OFFICE = ['office.project.create', 'office.member.add', 'office.member.revoke',
   'office.role.manage', 'module.create', 'module.edit'];
 const TASKS = ['task.create', 'task.assign', 'task.status.change'];
 const LAPTOP_NOTE = 'Checked on this laptop. It limits your AI, but it is not a security boundary.';

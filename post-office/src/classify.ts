@@ -1,8 +1,9 @@
 // file: post-office/src/classify.ts
-import { labelOf, COPIED_TO_PREFIX, type RawChange } from "@collab-mcp/core";
+import { labelOf, COPIED_TO_PREFIX, E_PROJECT_ULID, type RawChange } from "@collab-mcp/core";
 import type { Store } from "./store.js";
 import { projectKeys, officeKeys } from "./access.js";
 import { firstTextCell, textCells, prep, batchHints, revisionEntries, type Hints } from "./deliveries.js";
+import { isEAdoptedOffice } from "./e-adopt.js";
 
 // RnR S2: the change classifier. A pure judge: it reads, it never writes.
 //
@@ -189,11 +190,15 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     return projects.get(p)!;
   };
 
+  // Local-first Task 5: once the office adopted E, a note known to have no project
+  // is judged in E (its roles, po_note_owners). Only for judging: noteProjects keeps
+  // NULL, so write-backs and the note's own rows stay NULL on the wire.
+  const eAdopted = isEAdoptedOffice(db);
   const notes = new Map<string, Note>();
   for (const u of wanted) {
     const f = facts.get(u)!;
     const created = firstEntriesGroup.get(u) ?? null;
-    let project: string | null = null, existing: Facts | null = null, isNew = false, movable = false;
+    let project: string | null = null, existing: Facts | null = null, isNew = false, movable = false, decided = true;
     if (f.held && (f.hp || !f.hs)) {
       // Existing: its project is the office's, never the batch's (hp = 0, hs = 0: before 0009, no project).
       existing = f; movable = true;
@@ -205,9 +210,10 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
       // New here, or held with its project cell still arriving: the batch says its project.
       isNew = true;
       project = hints.project.get(u) ?? null;
-    } // else: S1 holds it as '?', not judged here
+    } else decided = false; // S1 holds it as '?', not judged here
     noteProjects.set(u, project);
-    if (project !== null && !team(project)) project = null; // solo or unknown project (rule 2)
+    if (project === null && decided && eAdopted) project = E_PROJECT_ULID; // no project = E (never a '?' or solo note)
+    else if (project !== null && !team(project)) project = null; // solo or unknown project (rule 2)
     if (isNew) creations.set(u, created!);
     // The owner is po_note_owners' whenever the office has the note (fix 6); the sender's only for a note new here.
     const owner = isNew && !f.held ? origin : f.owner;

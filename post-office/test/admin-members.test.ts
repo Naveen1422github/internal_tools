@@ -104,14 +104,14 @@ test('office: a custom office role with office.role.manage but not office.member
   try {
     const { n, o2, r, x } = await team(o);
     setOfficeRole(o.store, null, o2.device, 'Office admin');   // N is not the only admin: no 409 to hide behind
-    officeRole(o, 'Role keeper', ['office.project.create', 'office.module.share', 'office.role.manage']);
+    officeRole(o, 'Role keeper', ['office.project.create', 'module.edit', 'office.role.manage']);
     setOfficeRole(o.store, null, r.device, 'Role keeper');
     const res = await requestJson(o.target(r), 'PUT', `/v1/office/members/${n.device}`, { role: 'Office member' });
     assert.equal(res.status, 403);
     assert.equal(res.body.error, 'You need "Add office members" (office.member.add) in this office to do this');
     assert.equal(officeRoleOf(o, n.device), 'Office admin');
     // an Office member is below Role keeper: changing it is fine
-    officeRole(o, 'Sharer', ['office.project.create', 'office.module.share']);
+    officeRole(o, 'Sharer', ['office.project.create', 'module.edit']);
     assert.equal((await requestJson(o.target(r), 'PUT', `/v1/office/members/${x.device}`, { role: 'Sharer' })).status, 200);
     assert.equal(officeRoleOf(o, x.device), 'Sharer');
   } finally { await o.stop(); }
@@ -122,7 +122,7 @@ test('office: revoking a device ranked above you is refused naming the key; the 
   try {
     const { n, o2, r, x } = await team(o);
     setOfficeRole(o.store, null, o2.device, 'Office admin');
-    officeRole(o, 'Revoker', ['office.project.create', 'office.module.share', 'office.member.revoke']);
+    officeRole(o, 'Revoker', ['office.project.create', 'module.edit', 'office.member.revoke']);
     setOfficeRole(o.store, null, r.device, 'Revoker');
     const res = await requestJson(o.target(r), 'DELETE', `/v1/office/members/${o2.device}`);
     assert.equal(res.status, 403);

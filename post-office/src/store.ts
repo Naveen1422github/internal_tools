@@ -2,9 +2,10 @@
 import Database from "better-sqlite3";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
-import { migrate, latestMigration, enableSync, loadCrsqlite, isCrsqliteLoaded, SLUG_REGEX } from "@collab-mcp/core";
+import { migrate, latestMigration, enableSync, loadCrsqlite, isCrsqliteLoaded, SLUG_REGEX, E_PROJECT_ULID } from "@collab-mcp/core";
 import { seedAccess, seedNewProject, newMemberOfficeRole, assignNewMemberOfficeRole, assertRevocable, requireProjectKey } from "./access.js";
 import { backfillProjectStamps } from "./deliveries.js";
+import { isEAdoptedOffice } from "./e-adopt.js";
 
 // The post office's ONE SQLite file (D14). The notes schema (0007 + CRRs) is a
 // replica of every shared row; the po_* tables are the office's own and never
@@ -232,21 +233,38 @@ export interface OfficeProject { ulid: string; name: string; code: string; creat
  * project (nothing recorded). R7: a member needs note.create; a refusal is recorded
  * in po_refused_notes (the note's later changes are refused too), and lifted when
  * a later ask passes while the office holds nothing of the note. `deviceId = null`
- * = the office machine's CLI: unguarded.
+ * = the office machine's CLI: unguarded. Once the office adopted E (Task 5), an
+ * E number is guarded the same way (note.create in E; a non-member gets the 403).
  */
 export function allocate(db: Store, ulid: unknown, deviceId: string | null, series = "E"): number {
   if (typeof ulid !== "string" || !ULID_RE.test(ulid)) throw new StoreError(`not a ULID: ${String(ulid).slice(0, 40)}`);
   if (series === "E") {
-    return db.transaction(() => {
+    let refusedE: StoreError | null = null;
+    const id = db.transaction(() => {
       const other = db.prepare(`SELECT series, id FROM po_series_allocations WHERE ulid = ?`).get(ulid) as { series: string; id: number } | undefined;
       if (other) throw new StoreError(`this note was already numbered ${other.series}-${other.id}`, 409);
       const hit = db.prepare(`SELECT id FROM po_allocations WHERE ulid = ?`).get(ulid) as { id: number } | undefined;
       if (hit) return hit.id;
+      // Local-first Task 5: once E is adopted, a new E number needs note.create in E,
+      // judged and recorded as the team branch below does (a non-member holds no key: 403).
+      if (deviceId !== null && isEAdoptedOffice(db)) {
+        try {
+          requireProjectKey(db, deviceId, E_PROJECT_ULID, "note.create");
+        } catch (e) {
+          if (!(e instanceof StoreError) || e.status !== 403) throw e;
+          db.prepare(`INSERT OR IGNORE INTO po_refused_notes (ulid, device_id, key, reason) VALUES (?, ?, 'note.create', ?)`).run(ulid, deviceId, e.message);
+          refusedE = e;
+          return 0;
+        }
+        if (!db.prepare(`SELECT 1 FROM entries WHERE ulid = ?`).get(ulid)) db.prepare(`DELETE FROM po_refused_notes WHERE ulid = ?`).run(ulid);
+      }
       const id = nextNumber(db);
       setMeta(db, "counter", String(id));
       db.prepare(`INSERT INTO po_allocations (ulid, id, device_id) VALUES (?, ?, ?)`).run(ulid, id, deviceId);
       return id;
     }).immediate();
+    if (refusedE) throw refusedE;
+    return id;
   }
   let refused: StoreError | null = null;
   const id = db.transaction(() => {

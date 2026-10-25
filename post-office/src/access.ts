@@ -61,6 +61,26 @@ export function requireOfficeKey(db: Store, deviceId: string, key: string): void
 }
 
 /**
+ * Local-first Task 5: `office.module.share` left the catalog (module sharing retires
+ * with E adoption), so grant() can no longer return it. Until the office adopts E,
+ * POST /v1/modules keeps today's rule from the stored role itself: the key still in
+ * the role's raw keys, or the starter Office admin (who held every office key).
+ * Today's sentence, verbatim (labelOf no longer knows the key).
+ */
+export const LEGACY_MODULE_SHARE = "office.module.share";
+export function requireLegacyModuleShare(db: Store, deviceId: string): void {
+  const r = db
+    .prepare(`SELECT r.name, r.keys, r.is_starter FROM po_office_members x JOIN po_office_roles r ON r.ulid = x.role_ulid WHERE x.device_id = ? AND ${LIVE}`)
+    .get(deviceId) as { name: string; keys: string; is_starter: number } | undefined;
+  let held = false;
+  if (r) {
+    try { const k: unknown = JSON.parse(r.keys); held = Array.isArray(k) && k.includes(LEGACY_MODULE_SHARE); } catch { /* grants nothing */ }
+    held ||= r.is_starter === 1 && r.name === OFFICE_ADMIN;
+  }
+  if (!held) throw new StoreError(`You need "Share modules" (${LEGACY_MODULE_SHARE}) in this office to do this`, 403);
+}
+
+/**
  * The rank rule (S3-1): you manage a member only if you hold every active key
  * of their current role. Throws on the first key you lack, in the usual wording.
  */

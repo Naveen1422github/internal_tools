@@ -8,7 +8,7 @@ import {
   type Member, type Store,
 } from "./store.js";
 import {
-  officeKeys, projectKeys, requireOfficeKey, requireProjectKey, setProjectMember, setOfficeRole,
+  officeKeys, projectKeys, requireOfficeKey, requireLegacyModuleShare, requireProjectKey, setProjectMember, setOfficeRole,
   createProjectRole, updateProjectRole, deleteProjectRole, isOwnerRole, projectRoleHolders,
   createOfficeRole, updateOfficeRole, deleteOfficeRole, listOfficeMembers,
 } from "./access.js";
@@ -262,8 +262,10 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
       case "GET /v1/modules":
         return send(res, 200, { shared: sharedModules(o.store) });
       case "POST /v1/modules": {
+        // Local-first Task 5: module sharing is retired once E is adopted (GET still answers old peers).
+        if (isEAdoptedOffice(o.store)) return send(res, 410, { error: "modules follow their project now: collab project bind <module> <CODE>" });
         const b = await readJson(req, maxBody);
-        requireOfficeKey(o.store, me.device_id, "office.module.share");
+        requireLegacyModuleShare(o.store, me.device_id); // before adoption: today's rule (the key left the catalog)
         const shared = setModuleShared(o.store, b?.slug, b?.shared !== false);
         ring("modules", { shared });
         return send(res, 200, { shared });

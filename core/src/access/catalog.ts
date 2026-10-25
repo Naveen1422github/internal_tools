@@ -78,7 +78,7 @@ export const CATALOG: PermissionArea[] = [
     area: 'office', label: 'Office', scope: 'office',
     permissions: [
       def('office.project.create', 'Create projects', 'Create team projects in the office'),
-      def('office.module.share', 'Share modules', 'Share modules across the office'),
+      // office.module.share retired (local-first Task 5): modules follow their project; stored roles drop it via sanitizeKeys.
       def('office.member.add', 'Add office members', 'Add people to the office'),
       def('office.member.revoke', 'Revoke office members', 'Remove people from the office'),
       def('office.role.manage', 'Manage office roles', 'Create, edit and assign office roles'),

@@ -138,11 +138,11 @@ test('built-in roles by their ULID: Office member\'s keys change; Owner and Offi
   const member = office.find((x: any) => x.name === 'Office member');
   const admin = office.find((x: any) => x.name === 'Office admin');
   const owner = (await srv.api(`/api/team/project?ulid=${tm.ulid}`)).body.roles.find((x: any) => x.name === 'Owner');
-  const up = await srv.api('/api/team/role/update', { scope: 'office', role: member.ulid, keys: ['office.project.create', 'office.module.share'] });
+  const up = await srv.api('/api/team/role/update', { scope: 'office', role: member.ulid, keys: ['office.project.create', 'module.edit'] });
   try {
     assert.deepEqual([up.status, up.body], [200, { ok: true }]);
     const now = (await srv.api('/api/team/office')).body.roles.find((x: any) => x.ulid === member.ulid);
-    assert.deepEqual([...now.keys].sort(), ['office.module.share', 'office.project.create']);
+    assert.deepEqual([...now.keys].sort(), ['module.edit', 'office.project.create']);
   } finally {
     await srv.api('/api/team/role/update', { scope: 'office', role: member.ulid, keys: member.keys });
   }
@@ -280,14 +280,14 @@ test('revoke: refused without the key, and refused by rank (naming the first key
     const no = await srv.api('/api/team/revoke', { device: jc.device });
     assert.equal(no.status, 403);
     assert.deepEqual(no.body, { error: 'You need "Revoke office members" (office.member.revoke) in this office to do this' });
-    // Rank (S3-1): a may revoke, but Temp's role holds office.module.share, which a's role lacks.
-    po.createOfficeRole(srv.office.store, null, { name: 'Sharer', keys: ['office.project.create', 'office.module.share'] });
+    // Rank (S3-1): a may revoke, but Temp's role holds module.edit, which a's role lacks.
+    po.createOfficeRole(srv.office.store, null, { name: 'Sharer', keys: ['office.project.create', 'module.edit'] });
     po.createOfficeRole(srv.office.store, null, { name: 'Remover', keys: ['office.project.create', 'office.member.revoke'] });
     po.setOfficeRole(srv.office.store, null, jc.device, 'Sharer');
     po.setOfficeRole(srv.office.store, null, srv.a.device, 'Remover');
     const rank = await srv.api('/api/team/revoke', { device: jc.device });
     assert.equal(rank.status, 403);
-    assert.deepEqual(rank.body, { error: 'You need "Share modules" (office.module.share) in this office to do this' });
+    assert.deepEqual(rank.body, { error: 'You need "Edit modules" (module.edit) in this office to do this' });
   } finally {
     po.setOfficeRole(srv.office.store, null, srv.a.device, 'Office admin');
     po.setOfficeRole(srv.office.store, null, srv.b.device, 'Office member');

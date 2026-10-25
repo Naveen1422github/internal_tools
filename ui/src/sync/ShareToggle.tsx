@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react';
 import { moduleShare, teamOverview } from '../api/client';
 import { buttonClass } from '../components/Dialog';
 import { toast } from '../components/Toast';
-import { needSentence } from '../team/view';
 
 // UI parity Task 7c: `collab sync share|unshare <module>` on the web. These are
 // the office-wide (legacy E) modules. The office checks office.module.share;
 // without it the button is greyed with the office's sentence.
 
 const NOT_CONNECTED = "This notebook isn't connected to a post office.";
+// office.module.share left the catalog (local-first Task 5), so labelOf no longer knows it: today's sentence, verbatim.
+const SHARE_NEEDED = 'You need "Share modules" (office.module.share) in this office to do this';
 
 export default function ShareToggle({ slug, shared, boundProject, onChange }: {
   slug: string; shared: boolean; boundProject?: string; onChange: (shared: string[]) => void;
@@ -21,7 +22,7 @@ export default function ShareToggle({ slug, shared, boundProject, onChange }: {
       .then((o) => {
         if (!alive) return;
         if (!o.connected) setWhy(NOT_CONNECTED);
-        else setWhy(o.office?.keys.includes('office.module.share') ? null : needSentence('office.module.share', 'this office'));
+        else setWhy(o.office?.keys.includes('office.module.share') ? null : SHARE_NEEDED);
       })
       .catch((e) => { if (alive) setWhy((e as Error).message); });
     return () => { alive = false; };
