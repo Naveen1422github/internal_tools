@@ -380,7 +380,7 @@ test('collab_project_rename / _promote / _team_list / _refused_list / _refused_c
     assert.equal(p.isError, true);
     assert.match(p.text, /^share this notebook first \(`collab sync setup <join code>`\)/);
     const solo = await call('collab_team_list', { project: 'SH' });
-    assert.deepEqual([solo.isError, solo.text], [true, 'SH is a solo project: it has no team or roles']);
+    assert.deepEqual([solo.isError, solo.text], [true, 'SH is a private project: it has no team or roles']);
     const none = await call('collab_refused_list', {});
     assert.deepEqual([none.isError, none.text], [false, 'Nothing was refused.']);
     const nope = await call('collab_refused_copy', { id: 'nope', to: 'SH' });

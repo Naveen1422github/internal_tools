@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import { migrateTo, addEntry, isSyncEnabled, hasCrrTables, getSyncValue, SYNC_KEYS } from '@collab-mcp/core';
+import { migrateTo, addEntry, isSyncEnabled, hasCrrTables, getSyncValue, setSyncValue, SYNC_KEYS, E_ADOPTED_KEY } from '@collab-mcp/core';
 import { tempDir, startOffice, openWriter, closeWriter, until } from './world.js';
 import { runCli } from '../src/cli.js';
 import type { Command } from '../src/autostart.js';
@@ -199,4 +199,20 @@ test('sync run refuses to start when its notebook is missing, with the doctor se
     if (saved === undefined) delete process.env.COLLAB_DATA_DIR; else process.env.COLLAB_DATA_DIR = saved;
     t.cleanup();
   }
+});
+
+test('once E is adopted here, sync share|unshare say modules follow their project (exit 2); modules still lists', async () => {
+  const e = await env();
+  try {
+    await runCli(['sync', 'setup', e.office.code('b').code, '--db', e.db, '--no-autostart', '--include-staged'], io().io, e.deps());
+    const w = openWriter(e.db);
+    try { setSyncValue(w, E_ADOPTED_KEY, '1'); } finally { closeWriter(w); }
+    for (const cmd of ['share', 'unshare']) {
+      const c = io();
+      assert.equal((await runCli(['sync', cmd, 'x'], c.io, e.deps())).code, 2);
+      assert.deepEqual(c.err, ['modules follow their project now: collab project bind <module> <CODE>']);
+    }
+    const m = io();
+    assert.equal((await runCli(['sync', 'modules'], m.io, e.deps())).code, 0);
+  } finally { await e.done(); }
 });

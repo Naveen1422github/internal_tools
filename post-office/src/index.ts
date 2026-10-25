@@ -5,3 +5,4 @@ export * from "./merge.js";
 export * from "./server.js";
 export * from "./cli.js";
 export * from "./paths.js";
+export { adoptE, isEAdoptedOffice } from "./e-adopt.js";

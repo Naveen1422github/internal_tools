@@ -18,6 +18,7 @@ export * from './ops/export.js';
 export * from './ops/savings.js';
 export * from './ops/bind.js';
 export * from './ops/default-project.js';
+export * from './ops/adopt-e.js';
 export * from './ops/copy.js';
 export * from './ops/project.js';
 export * from './ops/team.js';

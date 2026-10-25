@@ -1,5 +1,5 @@
 import {
-  closeDb, findProject, formatJoinCode, getDb, postOfficeTargetFromDb, requestJson, teamListLines, type PostOfficeTarget,
+  closeDb, findProject, isEProject, E_PROJECT_ULID, formatJoinCode, getDb, postOfficeTargetFromDb, requestJson, teamListLines, type PostOfficeTarget,
 } from "@collab-mcp/core";
 import { failPlain, type CliResult, type Io } from "./io.js";
 
@@ -36,7 +36,10 @@ async function ask(c: Ctx, method: "GET" | "POST" | "PUT" | "DELETE", path: stri
 function teamProject(c: Ctx, code: string): { ulid: string; code: string; name: string } {
   const p = findProject(c.db, code);
   if (!p) return refuse(`no project ${code} in this notebook`);
-  if (p.mode !== "team") return refuse(`${p.code} is a solo project: it has no team or roles`);
+  // E is never in the local projects table: ask the office about it by its fixed ulid and let it decide
+  // (this laptop may not have adopted E yet, though the office has).
+  if (isEProject(p)) return { ulid: E_PROJECT_ULID, code: "E", name: p.name };
+  if (p.mode !== "team") return refuse(`${p.code} is a private project: it has no team or roles`);
   return p;
 }
 

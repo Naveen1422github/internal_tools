@@ -89,6 +89,7 @@ import {
   type NoteRef,
   type NoteKey,
   setDefaultActor,
+  isEProject, E_PROJECT_ULID,
 } from "@collab-mcp/core";
 
 // R8: every core write from this server is the AI's. The role check still
@@ -1632,9 +1633,11 @@ server.registerTool(
   },
   async (args) => {
     try {
-      const p = findProject(db, args.project);
-      if (!p) throw notFound(db, args.project);
-      if (p.mode !== "team") throw new Error(`[collab] ${p.code} is a solo project: it has no team or roles`);
+      const found = findProject(db, args.project);
+      if (!found) throw notFound(db, args.project);
+      // E: asked of the office by its fixed ulid, adopted here or not (local-first Task 7); the office decides.
+      const p = isEProject(found) ? { ...found, ulid: E_PROJECT_ULID } : found;
+      if (p.mode !== "team" && !isEProject(p)) throw new Error(`[collab] ${p.code} is a private project: it has no team or roles`);
       const target = postOfficeTargetFromDb(db);
       if (!target) throw new Error("[collab] this notebook is not sharing with a post office (collab sync setup <join code>)");
       const r = await requestJson(target, "GET", `/v1/projects/${encodeURIComponent(p.ulid)}/members`);

@@ -16,6 +16,8 @@ export const E_ADOPTED_KEY = "e_project";
 export const NEVER_SEND_KEY = "never_send";
 /** sync_state: the project new notes go to when none is named. */
 export const DEFAULT_PROJECT_KEY = "default_project";
+/** sync_state: JSON {adopted, member}, the office's last /v1/access answer about E (local-first Task 7). */
+export const E_ACCESS_KEY = "e_access";
 
 export function isEAdopted(db: DB): boolean {
   return getSyncValue(db, E_ADOPTED_KEY) === "1";
@@ -52,5 +54,16 @@ export function neverSend(db: DB): Set<string> {
     return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
   } catch {
     return new Set();
+  }
+}
+
+/** What the office last said about E (its /v1/access eProject); an older office, or none yet, reads as not adopted. */
+export function cachedEAccess(db: DB): { adopted: boolean; member: boolean } {
+  const raw = getSyncValue(db, E_ACCESS_KEY);
+  try {
+    const v = raw ? JSON.parse(raw) : null;
+    return { adopted: v?.adopted === true, member: v?.adopted === true && v?.member === true };
+  } catch {
+    return { adopted: false, member: false };
   }
 }

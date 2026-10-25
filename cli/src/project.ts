@@ -4,6 +4,7 @@ import {
   closeDb, collabStartDir, createProjectOp, currentProject, findCollabFile, findProject, getDb,
   notFound, promoteProject, renameProject, resolveDbPath, promotedLines, renamedLine, type Project,
   projectCreatedLines, projectListLines, getDefaultProject, setDefaultProject, defaultProjectLine, projectListRows, bindModule, unbindModule, bindChangeLine,
+  adoptELocal, adoptReportLines,
 } from "@collab-mcp/core";
 import { failPlain, type CliResult, type Io } from "./io.js";
 
@@ -11,7 +12,7 @@ import { failPlain, type CliResult, type Io } from "./io.js";
 
 const fail = (io: Io, msg: string): CliResult => { io.err(`collab: ${msg.replace(/^\[collab(-mcp)?\] /, "")}`); return { code: 1 }; };
 
-const USAGE = "usage: collab project create <name> --code <CODE> [--team] | promote <code> | rename <code> <new name> | list | use <code> | bind <module> <code> | unbind <module> | default [<code>]";
+const USAGE = "usage: collab project create <name> --code <CODE> [--team] | promote <code> | rename <code> <new name> | list | use <code> | bind <module> <code> | unbind <module> | default [<code>] | adopt-e [--default <CODE>] [--also <module>...]";
 
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -124,6 +125,24 @@ export async function runProject(args: string[], io: Io): Promise<CliResult> {
         const p = findProject(db, code);
         if (!p) throw notFound(db, code);
         return useProject(p, io);
+      }
+      case "adopt-e": {
+        // Local-first Task 7: follow the post office's adoption of E. The courier does
+        // this by itself; this is the explicit run (and the only way to name --default / --also).
+        const extra: string[] = [];
+        let def: string | undefined;
+        for (let i = 0; i < rest.length; i++) {
+          if (rest[i] === "--default") { def = rest[++i]; continue; }
+          if (rest[i] === "--also") {
+            while (i + 1 < rest.length && !rest[i + 1].startsWith("--")) extra.push(rest[++i]);
+            continue;
+          }
+          io.err("usage: collab project adopt-e [--default <CODE>] [--also <module>...]");
+          return { code: 2 };
+        }
+        if (rest.includes("--default") && !def) { io.err("usage: collab project adopt-e [--default <CODE>] [--also <module>...]"); return { code: 2 }; }
+        for (const l of adoptReportLines(adoptELocal(getDb(), { defaultProject: def, extraModules: extra }))) io.out(l);
+        return { code: 0 };
       }
       case "default": {
         const [code] = words(rest);

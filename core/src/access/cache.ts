@@ -4,6 +4,8 @@
  */
 import type { DB } from "../db.js";
 import { sanitizeKeys } from "./catalog.js";
+import { E_ACCESS_KEY, E_PROJECT_ULID } from "../e-project.js";
+import { getSyncValue, setSyncValue } from "../sync/state.js";
 
 export interface AccessPayload {
   office: { role: string; keys: string[] } | null;
@@ -25,7 +27,11 @@ export interface CachedAccess {
   ai: Record<string, string>;
 }
 
-/** Replace every row in one transaction; return project ULIDs cached before and absent now. */
+/**
+ * Replace every row in one transaction; return project ULIDs cached before and absent now.
+ * E is never cached as a project (it is not in `projects` here): what the office
+ * says about it is kept as eProject in sync_state, in the same transaction.
+ */
 export function writeAccessCache(db: DB, p: AccessPayload): { dropped: string[] } {
   const run = db.transaction((): { dropped: string[] } => {
     const before = (db.prepare(`SELECT project_ulid FROM access_cache WHERE project_ulid IS NOT NULL`).all() as Array<{ project_ulid: string }>)
@@ -35,9 +41,13 @@ export function writeAccessCache(db: DB, p: AccessPayload): { dropped: string[] 
     if (p.office) ins.run("office", null, p.office.role, JSON.stringify(sanitizeKeys("office", p.office.keys)), "{}");
     const now = new Set<string>();
     for (const pr of p.projects) {
+      if (pr.ulid === E_PROJECT_ULID || pr.code === "E") continue;
       now.add(pr.ulid);
       ins.run(pr.ulid, pr.ulid, pr.role, JSON.stringify(sanitizeKeys("project", pr.keys)), JSON.stringify(pr.ai ?? {}));
     }
+    const e = p.eProject;
+    const eJson = JSON.stringify({ adopted: e?.adopted === true, member: e?.adopted === true && e?.member === true });
+    if (getSyncValue(db, E_ACCESS_KEY) !== eJson) setSyncValue(db, E_ACCESS_KEY, eJson);
     return { dropped: before.filter((u) => !now.has(u)) };
   });
   return run();

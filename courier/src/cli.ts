@@ -6,7 +6,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import {
-  resolveDbPath, loadCrsqlite, getSyncValue,
+  resolveDbPath, loadCrsqlite, getSyncValue, isEAdopted,
   postOfficeTargetFromDb, unsentSharedCount, requestJson, type PostOfficeTarget,
   describeMemberState, TEAM_STATUS_NOTE,
   startupProblem, startHeartbeat, runtimeDirFor, readBuildInfo, nameForPath,
@@ -275,6 +275,15 @@ export async function runCli(argv: string[], io: Io, deps: CliDeps = {}): Promis
         let r;
         if (cmd === "modules") r = await requestJson(target(), "GET", "/v1/modules");
         else {
+          // Local-first Task 7: once E is adopted here, a module follows its project's binding.
+          // Before adoption sharing still works (the switch runbook shares modules first).
+          const db = openReadable(needConfig().dbPath);
+          let adopted: boolean;
+          try { adopted = isEAdopted(db); } finally { closeReadable(db); }
+          if (adopted) {
+            io.err("modules follow their project now: collab project bind <module> <CODE>");
+            return { code: 2 };
+          }
           const slug = pos[2];
           if (!slug) throw new Error(`${cmd} needs a module slug`);
           r = await requestJson(target(), "POST", "/v1/modules", { slug, shared: cmd === "share" });

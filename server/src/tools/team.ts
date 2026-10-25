@@ -1,7 +1,7 @@
 // file: server/src/tools/team.ts
 import http from 'node:http';
 import {
-  getDb, postOfficeTargetFromDb, requestJson, listProjects, isUlid, formatJoinCode, rememberSharedModules,
+  getDb, postOfficeTargetFromDb, requestJson, listProjects, isUlid, formatJoinCode, rememberSharedModules, E_PROJECT_ULID,
   AccessRevokedError, SchemaMismatchError, PinMismatchError,
 } from '@collab-mcp/core';
 import { NOT_CONNECTED, REVOKED, UNREACHABLE } from './office-errors.js';
@@ -90,6 +90,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     if (!r.ok) return send(r.status, { error: r.error });
     // Names are this notebook's; a project not yet pulled here has none.
     const names = new Map(listProjects(db).map((p) => [p.ulid, p.name]));
+    if (!names.has(E_PROJECT_ULID)) names.set(E_PROJECT_ULID, 'emp1st'); // E is listed here only once this laptop adopted it
     const projects = ((r.body?.projects ?? []) as Array<{ ulid: string; code: string; role: string; keys: string[] }>).map((p) => ({
       ulid: p.ulid, code: p.code, name: names.get(p.ulid) ?? null, role: p.role, keys: p.keys,
     }));

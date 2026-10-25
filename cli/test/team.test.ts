@@ -5,8 +5,8 @@ import assert from 'node:assert';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { closeDb, newUlid, parseJoinCode } from '@collab-mcp/core';
-import { setProjectMember, setOfficeRole } from '@collab-mcp/post-office';
+import { closeDb, getDb, newUlid, parseJoinCode, writeAccessCache, initModule } from '@collab-mcp/core';
+import { setProjectMember, setOfficeRole, adoptE } from '@collab-mcp/post-office';
 import { main } from '../src/main.js';
 import { startOffice, joinedDb, type Office } from '../../courier/test/world.js';
 
@@ -129,9 +129,47 @@ test('a solo project has no team or roles', async () => {
     await as(a, ['project', 'create', 'Mine', '--code', 'SO']);
     const r = await as(a, ['team', 'list', 'SO']);
     assert.equal(r.code, 1);
-    assert.equal(r.err.join('\n'), 'collab: SO is a solo project: it has no team or roles');
+    assert.equal(r.err.join('\n'), 'collab: SO is a private project: it has no team or roles');
     const u = await as(a, ['team', 'list', 'NOPE']);
     assert.equal(u.code, 1);
     assert.match(u.err.join('\n'), /NOPE/);
+  });
+});
+
+test('collab team set/list <member> E reach the office for E, adopted on this laptop or not', async () => {
+  await withOffice(async ({ office, a, as }) => {
+    adoptE(office.store, { name: 'emp1st', ownerDevice: a.device });
+    const set = await as(a, ['team', 'set', 'b', 'E', 'Editor']);
+    assert.equal(set.code, 0, set.err.join('\n'));
+    assert.deepEqual(set.out, ['b is now Editor in E']);
+    const list = await as(a, ['team', 'list', 'E']);
+    assert.equal(list.code, 0, list.err.join('\n'));
+    assert.match(list.out.join('\n'), /\bb\b.*Editor/);
+    const route = office.requests.filter((r) => r.device === a.device).map((r) => r.route).join('\n');
+    assert.match(route, /0000000000000000000000000E/);
+  });
+});
+
+test('collab project adopt-e follows the office, prints the report, and refuses a second run', async () => {
+  await withOffice(async ({ office, a, as }) => {
+    const before = await as(a, ['project', 'adopt-e']);
+    assert.equal(before.code, 1);
+    assert.match(before.err.join('\n'), /the post office hasn't adopted E yet: run collab office adopt-e there first/);
+    adoptE(office.store, { name: 'emp1st', ownerDevice: a.device });
+    // What the courier's refreshAccess caches.
+    const db = getDb();
+    writeAccessCache(db, { office: null, projects: [], replays: [], eProject: { adopted: true, member: true } });
+    initModule(db, { slug: 'infra' });
+    closeDb();
+    const r = await as(a, ['project', 'adopt-e', '--also', 'infra']);
+    assert.equal(r.code, 0, r.err.join('\n'));
+    const text = r.out.join('\n');
+    assert.match(text, /emp1st \(E\) is now a shared project on this laptop/);
+    assert.match(text, /Modules whose new notes go to E: infra/);
+    assert.match(text, /New notes with no project go to PS/);
+    assert.doesNotMatch(text, /solo/i);
+    const again = await as(a, ['project', 'adopt-e']);
+    assert.equal(again.code, 1);
+    assert.match(again.err.join('\n'), /already adopted/);
   });
 });

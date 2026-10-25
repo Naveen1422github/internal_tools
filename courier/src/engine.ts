@@ -8,6 +8,7 @@ import {
   upsertTeamProjectFromOffice, localClashOf, projectClashText, assignPendingNumber, rememberSharedModules,
   writeAccessCache, markProjectLeft, clearProjectLeft, recordRefusal, entryUlidOf,
   AccessRevokedError, SchemaMismatchError, PinMismatchError, COURIER_PORT_KEY,
+  isEAdopted, cachedEAccess, adoptELocal, E_PROJECT_ULID,
   type PostOfficeTarget, type WireChange, type EventStream, type NotePlace, type ProjectClash, type AccessPayload,
 } from "@collab-mcp/core";
 import { COURIER_KEYS as K } from "./keys.js";
@@ -44,6 +45,8 @@ export interface CourierOptions {
   batchSize?: number;
   /** Listen for save pings (off in unit tests that drive push/pull by hand). */
   watch?: boolean;
+  /** Adopt E on this laptop once the office has (local-first Task 7). Off = an older laptop (tests). */
+  autoAdoptE?: boolean;
   log?: (line: string) => void;
   onStatus?: (s: CourierStatus) => void;
 }
@@ -132,9 +135,11 @@ export class Courier {
   private numberingProblem: string | null = null;
   private oldOfficeLogged = false;
   private noAccessLogged = false;
+  /** The last auto-adopt refusal logged, so each distinct one is logged once. */
+  private adoptRefusal: string | null = null;
 
   constructor(opts: CourierOptions) {
-    this.opt = { retryMs: 30_000, debounceMs: 200, maxReconnectMs: 30_000, batchSize: 2000, watch: true, ...opts };
+    this.opt = { retryMs: 30_000, debounceMs: 200, maxReconnectMs: 30_000, batchSize: 2000, watch: true, autoAdoptE: true, ...opts };
     this.db = new Database(opts.dbPath, { fileMustExist: true });
     try {
       this.db.pragma("journal_mode = WAL");
@@ -218,6 +223,8 @@ export class Courier {
       const numbering = await this.numberPending();
       if (numbering === "revoked") return;
       await this.push();
+      // Adoption refused earlier for unsent changes: the push just sent them, so try again now.
+      if (this.maybeAdoptE()) await this.push();
       if (this.clashes().length > 0) this.holdForClash();
       else if (numbering === "ok") this.set({ state: "connected", lastError: this.notice() });
     });
@@ -357,6 +364,7 @@ export class Courier {
     this.db.transaction(() => {
       const clashes: ProjectClash[] = [];
       for (const p of list) {
+        if (p.code === "E" || p.ulid === E_PROJECT_ULID) continue; // E is never a local project (an older office could list it)
         if (upsertTeamProjectFromOffice(this.db, p, fingerprint) !== "clash") continue;
         const local = localClashOf(this.db, p);
         clashes.push({ code: p.code, office_ulid: p.ulid, local_ulid: local?.ulid ?? null, ...(local ? { local_code: local.code } : {}) });
@@ -410,7 +418,30 @@ export class Courier {
         }
       }
     })();
+    this.maybeAdoptE();
     await this.runReplays(p.replays);
+  }
+
+  /**
+   * Local-first Task 7: the office adopted E and this laptop hasn't. adoptELocal
+   * refuses while changes are unsent (the before-adoption rule must finish its
+   * work), so this is tried again after the push and on every later sync. A
+   * refusal never fails the sync; each distinct one is logged once. True = adopted now.
+   */
+  private maybeAdoptE(): boolean {
+    if (!this.opt.autoAdoptE || isEAdopted(this.db) || !cachedEAccess(this.db).adopted) return false;
+    try {
+      const r = adoptELocal(this.db, {});
+      this.adoptRefusal = null;
+      this.log(`adopted emp1st (E) as a shared project: ${r.member ? `modules bound to it: ${r.bound.join(", ") || "none"}` : "not a member of it, so none of its notes are sent"}; ` +
+        `${r.neverSend} E note(s) stay on this laptop only; new notes with no project go to ${r.default}`);
+      return true;
+    } catch (e) {
+      const msg = (e as Error).message.replace(/^\[collab\] /, "");
+      if (msg !== this.adoptRefusal) this.log(`not adopting emp1st (E) yet, will retry: ${msg}`);
+      this.adoptRefusal = msg;
+      return false;
+    }
   }
 
   /** This notebook's team projects of the office `fingerprint`, left or not. */
@@ -521,6 +552,7 @@ export class Courier {
   }
 
   private async refreshModules(): Promise<void> {
+    if (isEAdopted(this.db)) return; // modules follow their project now: the office's list no longer decides anything here
     const r = await requestJson(this.target, "GET", "/v1/modules");
     if (r.status !== 200 || !Array.isArray(r.body?.shared)) throw new Error(`the post office did not list the shared modules (${r.status})`);
     rememberSharedModules(this.db, r.body.shared as string[]);
@@ -541,7 +573,10 @@ export class Courier {
     const done = this.backfilledModules();
     const backfill = new Set([...shared].filter((m) => !done.has(m)));
     const doneProjects = this.backfilledProjects();
-    const projectBackfill = new Set([...ctx.teamProjects].filter((p) => !doneProjects.has(p)));
+    // E adopted: E is a team project for the backfill too (its notes are project_ulid NULL, series 'E').
+    const projectsNow = ctx.eAdopted ? new Set([...ctx.teamProjects, E_PROJECT_ULID]) : ctx.teamProjects;
+    const projectBackfill = new Set([...projectsNow].filter((p) => !doneProjects.has(p)));
+    const eNotes = projectBackfill.has(E_PROJECT_ULID) ? this.eNoteUlids() : new Set<string>();
     const memo = new Map<string, NotePlace>();
     const out = new Map<string, WireChange>();
     const noteOf = new Map<string, string>(); // changeKey -> note, entries cells only
@@ -574,6 +609,7 @@ export class Courier {
         if (
           (place.project === null && place.module && backfill.has(place.module)) ||
           (place.project !== null && projectBackfill.has(place.project)) ||
+          (place.project === null && ulid !== null && eNotes.has(ulid)) || // never-send was skipped by the verdict
           (ulid && (moved.has(ulid) || numberedNow.has(ulid)))
         ) {
           if (w.table === "entries" && ulid) noteOf.set(changeKey(w), ulid);
@@ -594,7 +630,7 @@ export class Courier {
     }
     const batch = [...out.values()];
     const sharedJson = JSON.stringify([...shared].sort());
-    const projectsJson = JSON.stringify([...ctx.teamProjects].sort());
+    const projectsJson = JSON.stringify([...projectsNow].sort());
     // R5: pages never split a laptop transaction; the office judges each one whole.
     const box: Outbox = { top, shared: sharedJson, projects: projectsJson, pages: pagesOf(batch, (w) => noteOf.get(changeKey(w)) ?? null, this.opt.batchSize) };
     // R-22: kept before the first POST, so a lost answer or a failed page is
@@ -611,6 +647,12 @@ export class Courier {
       this.set({ sentTotal: this.st.sentTotal + batch.length, lastPushAt: now(), lastError: this.notice() });
       this.log(`sent ${batch.length} change(s)`);
     }
+  }
+
+  /** Ulids of the E notes here (project_ulid NULL, series 'E'): the E backfill's notes. */
+  private eNoteUlids(): Set<string> {
+    if (!hasSeries(this.db)) return new Set();
+    return new Set((this.db.prepare(`SELECT ulid FROM entries WHERE project_ulid IS NULL AND series = 'E'`).all() as Array<{ ulid: string }>).map((r) => r.ulid));
   }
 
   /** POST the pages in order; the office's refusals of all of them (R5). Throws on any non-200. */
@@ -801,12 +843,9 @@ export class Courier {
         } else if (name === "projects") {
           void this.syncNow(); // a team project was created or promoted: learn it, then send
         } else if (name === "access") {
-          // A membership or role changed (R2): learn the projects, then the keys and any replay.
-          void this.enqueue(async () => {
-            await this.flushInflight(); // R-22: before a replay applies anything
-            await this.refreshProjects();
-            await this.refreshAccess();
-          });
+          // A membership or role changed (R2), or E was adopted: learn the projects, the keys and
+          // any replay, adopt E if the office has, then catch up both ways.
+          void this.syncNow();
         } else if (name === "modules") {
           void this.enqueue(async () => {
             await this.refreshModules();
