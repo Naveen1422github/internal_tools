@@ -12,6 +12,7 @@ import { hasProjectLeft } from "../schema.js";
 import { insertEntryRow, insertEntryModules, insertRefs, COPIED_TO_PREFIX, type RefRowInput } from "../entry-write.js";
 import { formatEntryRef } from "../entry-ref.js";
 import { resolveAuthor } from "../author.js";
+import { E_PROJECT_ULID, writeProjectUlid } from "../e-project.js";
 import { findProject, isLeftProject, isTeamProject, notFound, listProjects, type Project } from "../projects.js";
 import { resolveAllocator, allocateWithRetry, SAVE_ATTEMPT } from "../sync/allocator.js";
 import { ensureCrsqlite } from "../sync/extension.js";
@@ -122,11 +123,11 @@ function resolveTarget(db: DB, raw: string): Project {
 }
 
 /** The live copy of `ulid` in project `target`, found by the original's copied_to link, or null. */
-function existingCopy(db: DB, ulid: string, target: string): { id: number | null; series: string } | null {
+function existingCopy(db: DB, ulid: string, target: string | null): { id: number | null; series: string } | null {
   return (db.prepare(
     `SELECT c.id, c.series FROM refs r JOIN entries c ON c.ulid = r.target_ulid
       WHERE r.entry_ulid = ? AND r.ref_type = 'entry' AND r.ref_value LIKE '${COPIED_TO_PREFIX}%'
-        AND c.project_ulid = ? AND c.deleted_at IS NULL
+        AND c.project_ulid IS ? AND c.deleted_at IS NULL
       ORDER BY c.ulid LIMIT 1`,
   ).get(ulid, target) as { id: number | null; series: string } | undefined) ?? null;
 }
@@ -161,8 +162,8 @@ export function planCopy(db: DB, args: CopyArgs): CopyPlan {
     where.push("e.ulid = ?");
     params.push(source.note_ulid);
   } else if (source.kind === "project") {
-    where.push("e.project_ulid = ?");
-    params.push(source.project_ulid);
+    where.push("e.project_ulid IS ?"); // E is the NULL project
+    params.push(source.project_ulid === E_PROJECT_ULID ? null : source.project_ulid);
   } else {
     // A module source means the E notes of that module (spec P8): notes in a
     // project are copied from their project.
@@ -181,7 +182,7 @@ export function planCopy(db: DB, args: CopyArgs): CopyPlan {
   const skipped: CopySkip[] = [];
   for (const r of rows) {
     const ref = formatEntryRef(r.id, r.series);
-    const done = existingCopy(db, r.ulid, target.ulid);
+    const done = existingCopy(db, r.ulid, writeProjectUlid(target));
     if (done) {
       skipped.push({ ulid: r.ulid, ref, title: r.title, reason: `already copied to ${formatEntryRef(done.id, done.series)}` });
       continue;
@@ -226,8 +227,8 @@ export async function applyCopy(db: DB, plan: CopyPlan): Promise<CopyResult> {
   // note.copy.out there (a module source holds E notes: no project); a team
   // target needs note.create. The copied-to breadcrumbs on the originals are
   // not gated here (an open Task 3 question).
-  if (now.source.project_ulid) assertCan(db, now.source.project_ulid, "note.copy.out");
-  assertCan(db, target.ulid, "note.create"); // the same checks as copyRefusal, which asks without throwing
+  if (now.source.project_ulid && now.source.project_ulid !== E_PROJECT_ULID) assertCan(db, now.source.project_ulid, "note.copy.out");
+  assertCan(db, writeProjectUlid(target), "note.create"); // the same checks as copyRefusal, which asks without throwing
 
   // Numbers for a team target, asked BEFORE the transaction (never inside it).
   // Solo: no allocator, no network, ever (rule 4).
@@ -265,7 +266,7 @@ export async function applyCopy(db: DB, plan: CopyPlan): Promise<CopyResult> {
         type: s.type, kind: s.kind, title: s.title, summary: s.summary, description: s.description,
         status: s.status, agent: s.agent, module: s.module, task_id: s.task_id,
         tokens_estimate: s.tokens_estimate, category: s.category, rollup_of_task: s.rollup_of_task,
-        series: code, project_ulid: target.ulid,
+        series: code, project_ulid: writeProjectUlid(target),
         ...(id !== undefined ? { assigned: { ulid: plannedUlids[i], id } } : {}),
         ...(isTeamProject(target) && id === undefined ? { pending: true, pendingUlid: plannedUlids[i] } : {}),
       });
@@ -368,7 +369,7 @@ export function copyResultLines(r: CopyResult): string[] {
  * page can say so before showing the list (UI parity Task 7a).
  */
 export function copyRefusal(db: DB, plan: CopyPlan): string | null {
-  for (const [ulid, key] of [[plan.source.project_ulid ?? null, "note.copy.out"], [plan.target.ulid, "note.create"]] as const) {
+  for (const [ulid, key] of [[plan.source.project_ulid === E_PROJECT_ULID ? null : plan.source.project_ulid ?? null, "note.copy.out"], [plan.target.ulid === E_PROJECT_ULID ? null : plan.target.ulid, "note.create"]] as const) {
     if (key === "note.copy.out" && !ulid) continue;
     const c = can(db, ulid, key);
     if (!c.ok) return c.reason;

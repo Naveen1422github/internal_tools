@@ -35,7 +35,7 @@ test('a name or code clash stops with both fixes (P10)', () => {
       e instanceof ProjectClashError && /name/.test(e.message) && /rename/.test(e.message) && /different notebook/.test(e.message));
     assert.throws(() => createProject(db, { name: 'other', code: 'sh' }), (e: Error) =>
       e instanceof ProjectClashError && /code/.test(e.message) && /rename/.test(e.message) && /different notebook/.test(e.message));
-    assert.equal(listProjects(db).length, 1);
+    assert.equal(listProjects(db).filter((p) => p.code !== 'E').length, 1);
   });
 });
 
@@ -72,7 +72,7 @@ test('list by name; find by code (any case) or ulid', () => {
   at0009((db) => {
     const z = createProject(db, { name: 'zulu', code: 'ZU' });
     createProject(db, { name: 'alpha', code: 'AL' });
-    assert.deepEqual(listProjects(db).map((p) => p.name), ['alpha', 'zulu']);
+    assert.deepEqual(listProjects(db).map((p) => p.name), ['alpha', 'zulu', 'emp1st']);
     assert.equal(findProject(db, 'zu')!.ulid, z.ulid);
     assert.equal(findProject(db, z.ulid)!.code, 'ZU');
     assert.equal(findProject(db, 'NOPE'), null);

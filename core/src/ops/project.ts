@@ -3,6 +3,7 @@
 // decision 2026-10-11: an AI agent can do anything the CLI can). The CLI
 // (`collab project create|list`) and the MCP tools (collab_project_create,
 // collab_project_list) call these and print exactly these lines.
+import { writeProjectUlid } from "../e-project.js";
 import type { DB } from "../db.js";
 import { listBindings } from "./bind.js";
 import { createProject, createTeamProject, listProjects, isLeftProject, highestNumberOf, type Project } from "../projects.js";
@@ -27,13 +28,13 @@ export interface ProjectListRow extends Project { notes: number; pending: number
 
 /** Every project with its note count and the notes waiting for a number (rule 8). */
 export function projectListRows(db: DB, current: Project | null): ProjectListRow[] {
-  const count = db.prepare(`SELECT COUNT(*) n FROM entries WHERE project_ulid = ? AND deleted_at IS NULL`);
+  const count = db.prepare(`SELECT COUNT(*) n FROM entries WHERE project_ulid IS ? AND deleted_at IS NULL`);
   const pending = new Map(pendingCounts(db).filter((r) => r.project).map((r) => [r.project as string, r.n]));
   const bound = new Map<string, string[]>();
   for (const b of listBindings(db)) bound.set(b.project_ulid, [...(bound.get(b.project_ulid) ?? []), b.module]);
   return listProjects(db).map((p) => ({
     ...p,
-    notes: (count.get(p.ulid) as { n: number }).n,
+    notes: (count.get(writeProjectUlid(p)) as { n: number }).n,
     pending: pending.get(p.ulid) ?? 0,
     current: current?.ulid === p.ulid,
     modules: bound.get(p.ulid) ?? [],

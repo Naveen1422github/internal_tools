@@ -12,6 +12,7 @@ import { postOfficeTargetFromDb } from "./sync/http-allocator.js";
 import { requestJson, type PostOfficeTarget } from "./sync/http.js";
 import { formatEntryRef } from "./entry-ref.js";
 import { assertCan } from "./access/can.js";
+import { E_PROJECT_ULID, eProject } from "./e-project.js";
 import { NotConnectedError, OfficeRefusedError, OfficeUnreachableError } from "./sync/errors.js";
 
 export interface Project {
@@ -346,13 +347,15 @@ export async function renameProject(db: DB, codeOrUlid: string, newName: string)
 /** Every project in this notebook, by name. */
 export function listProjects(db: DB): Project[] {
   needs0009(db);
-  return db.prepare(`SELECT ${cols(db)} FROM projects ORDER BY lower(name), ulid`).all() as Project[];
+  const rows = db.prepare(`SELECT ${cols(db)} FROM projects ORDER BY lower(name), ulid`).all() as Project[];
+  return [...rows, eProject(db)]; // E is virtual (never a row): always listed, last
 }
 
 /** A project by code (any case) or exact ULID, or null. */
 export function findProject(db: DB, codeOrUlid: string): Project | null {
   needs0009(db);
   const v = String(codeOrUlid ?? "").trim();
+  if (v.toUpperCase() === "E" || v === E_PROJECT_ULID) return eProject(db);
   return (db.prepare(`SELECT ${cols(db)} FROM projects WHERE code = upper(?) OR ulid = ? LIMIT 1`).get(v, v) as Project | undefined) ?? null;
 }
 

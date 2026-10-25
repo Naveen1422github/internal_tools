@@ -4,6 +4,7 @@
 // 0011): a binding is this laptop's own setting and is never sent anywhere.
 import type { DB } from "../db.js";
 import { hasProjectModules } from "../schema.js";
+import { E_PROJECT_ULID } from "../e-project.js";
 import { findProject, isLeftProject, leftProjectError, notFound, type Project } from "../projects.js";
 
 export interface Binding {
@@ -27,7 +28,7 @@ function needs0011(db: DB): void {
 }
 
 const codeOf = (db: DB, ulid: string): string | null =>
-  (db.prepare(`SELECT code FROM projects WHERE ulid = ?`).get(ulid) as { code: string } | undefined)?.code ?? null;
+  ulid === E_PROJECT_ULID ? "E" : (db.prepare(`SELECT code FROM projects WHERE ulid = ?`).get(ulid) as { code: string } | undefined)?.code ?? null;
 
 function boundUlid(db: DB, module: string): string | null {
   return (db.prepare(`SELECT project_ulid FROM project_modules WHERE module = ?`).get(module) as { project_ulid: string } | undefined)?.project_ulid ?? null;
@@ -65,8 +66,9 @@ export function unbindModule(db: DB, module: string): BindChange {
 export function listBindings(db: DB): Binding[] {
   if (!hasProjectModules(db)) return [];
   return db.prepare(
-    `SELECT b.module, b.project_ulid, p.code AS project_code, p.name AS project_name
-       FROM project_modules b JOIN projects p ON p.ulid = b.project_ulid ORDER BY b.module`,
+    `SELECT b.module, b.project_ulid, COALESCE(p.code, 'E') AS project_code, COALESCE(p.name, 'emp1st') AS project_name
+       FROM project_modules b LEFT JOIN projects p ON p.ulid = b.project_ulid
+      WHERE p.ulid IS NOT NULL OR b.project_ulid = '${E_PROJECT_ULID}' ORDER BY b.module`,
   ).all() as Binding[];
 }
 

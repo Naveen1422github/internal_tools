@@ -19,6 +19,7 @@ import {
   KIND_BY_TYPE,
   CATEGORY_BY_TYPE,
 } from "../constants.js";
+import { writeProjectUlid } from "../e-project.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { assertCan, AccessDeniedError, refusalText } from "../access/can.js";
 
@@ -207,7 +208,7 @@ export function addEntry(
   ensureCrsqlite(db);
   validateAddEntryArgs(args);
   const project = resolveProjectArg(db, args);
-  assertCan(db, project?.ulid ?? null, "note.create"); // R8
+  assertCan(db, writeProjectUlid(project), "note.create"); // R8 (E is the null project)
 
   // Repair a double-encoded description before anything downstream sees it --
   // including estimateTokens, which would otherwise count the escape sequences.
@@ -251,7 +252,7 @@ export function addEntry(
       // A team note without a number from the office waits for one (rule 4).
       pending: isTeamProject(project) && !a.assigned,
       pendingUlid: a.pendingUlid,
-      ...(project ? { series: project.code, project_ulid: project.ulid } : {}),
+      ...(project ? { series: project.code, project_ulid: writeProjectUlid(project) } : {}),
     });
     insertEntryModules(db, owner, orderedModules, primaryModule);
     insertRefs(db, owner, a.refs ?? []);
@@ -316,7 +317,7 @@ export async function addEntryAsync(db: DB, args: AddEntryArgs): Promise<AddEntr
   ensureCrsqlite(db);
   validateAddEntryArgs(args);
   const project = resolveProjectArg(db, args, true);
-  assertCan(db, project?.ulid ?? null, "note.create"); // R8: before any network call
+  assertCan(db, writeProjectUlid(project), "note.create"); // R8: before any network call
   if (args.project === undefined) args = { ...args, project: project ? project.ulid : "none" };
   if (project && !isTeamProject(project)) return addEntry(db, args); // solo: never the office (rule 4)
   if (!project && !isSyncEnabled(db)) return addEntry(db, args);      // unshared notebook: as today
