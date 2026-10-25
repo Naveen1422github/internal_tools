@@ -546,6 +546,7 @@ export class Courier {
     const out = new Map<string, WireChange>();
     const noteOf = new Map<string, string>(); // changeKey -> note, entries cells only
     const moved = new Set<string>();
+    const sentNotes = new Set<string>(); // every note with a row sent in this push, whatever the table
     const createdNow = new Set<string>();
     const numberedNow = new Set<string>();
     let top = since;
@@ -554,6 +555,7 @@ export class Courier {
       const { ulid, verdict } = sendVerdictOf(this.db, w, ctx, memo);
       if (verdict !== "send") continue; // hold = waiting (status only); the bookmark still passes it
       out.set(changeKey(w), w);
+      if (ulid) sentNotes.add(ulid);
       if (w.table === "entries" && ulid) noteOf.set(changeKey(w), ulid);
       if (w.table === "entries" && ulid) {
         if (w.cid === "created_at") createdNow.add(ulid);
@@ -575,13 +577,14 @@ export class Courier {
           (ulid && (moved.has(ulid) || numberedNow.has(ulid)))
         ) {
           if (w.table === "entries" && ulid) noteOf.set(changeKey(w), ulid);
+          if (ulid) sentNotes.add(ulid);
           out.set(changeKey(w), w);
         }
       }
     }
     if (ctx.eAdopted) {
       // E adopted: a modules row travels with the (non-never-send) notes sent in THIS push that reference it.
-      for (const m of moduleSlugsOf(this.db, new Set(noteOf.values()))) ctx.sentModules.add(m);
+      for (const m of moduleSlugsOf(this.db, sentNotes)) ctx.sentModules.add(m);
       if (ctx.sentModules.size > 0) {
         for (const w of readOwnChanges(this.db, 0)) {
           if (w.table !== "modules" || w.db_version > top) continue;
