@@ -154,11 +154,19 @@ Plus the existing suites. Gate: all green before merge.
 | Schema | the only multi-column CHECK is entries 0006:94; no CRR rebuild precedent; guard is exact equality server.ts:196 |
 | Default project | add.ts:151-176; mcp server.ts:453 |
 
-## 9. Open questions for the owner
+## 9. Owner rulings on the open questions (2026-10-25)
 
-1. The 19 no-module E notes: sort them now (I'll list them), or default them to COLLAB?
-2. The default solo project for *your* notebook: `PS`, or a new `ME`/`WORK`?
-3. Who is in E, and with which role (you Owner; Gaurav Editor; Abhishek?)
-4. OK to drop 0014 from scope (§3.5)?
+1. **The 19 no-module E notes:**
+   - Delete the junk: E-13, E-14, and the six "Testing FTS" notes E-178/179/191/192/193/209.
+   - Delete the old changelog E-824.
+   - E-26 → E, tag `custom-reports`.
+   - E-532 → E, tag `timesheet`.
+   - The ECS/EC2 notes E-377..380, 407..409, 508 → E, new module `infra` (shared).
+2. **"Solo" isn't a word the user sees.** Any project not shared is private. The project comes from: explicit project, then module binding, then folder. When none of these applies, the note goes to the owner's private catch-all project and the AI says where it went (Claude's default: never refuse a save, never land in a shared project by accident).
+3. **E membership = owner only at the switch.**
+   - Abhishek is a member only of the two projects the owner gave him (TT Editor, TESTNP Contributor), never of E. He received E notes only through office-wide module sharing (the bug this spec removes), so he simply isn't added.
+   - Gaurav is added when he joins.
+   - The switch step must **read memberships from the office**, never ask.
+4. **0014 dropped** (§3.5).
 
 Estimate: 10–14 h build + 2 h switch. Plan written after approval; built in a worktree or cloud, merged only on a green gate.
