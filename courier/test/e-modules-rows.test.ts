@@ -24,7 +24,7 @@ test('adopted: modules rows travel with sent notes only (new note, never-send no
     setSyncValue(w, E_ADOPTED_KEY, '1');
     setSyncValue(w, NEVER_SEND_KEY, JSON.stringify([y.ulid]));
     // The new note X is created after adoption so it is sent whole.
-    const x2 = await addEntryAsync(w, note('new in X', { module: 'modx' }));
+    const x2 = await addEntryAsync(w, note('new in X', { module: 'modx', project: 'E' })); // Task 3: no project on an adopted laptop = the private default
     await c.syncNow();
     const mods = () => (office.store.prepare(`SELECT slug FROM modules`).all() as Array<{ slug: string }>).map((r) => r.slug);
     assert.ok(office.store.prepare(`SELECT 1 FROM entries WHERE ulid = ?`).get(x2.ulid), 'the new E note reached the office');

@@ -146,3 +146,30 @@ test('POST /v1/modules: today it shares; after adoption 410 with the bind hint; 
     assert.deepEqual([get.status, get.body.shared], [200, ['sync']]);
   } finally { await o.stop(); }
 });
+
+test('fix round 1: a held E note numbered locally (never allocated) stays editable after adoption; a never-held local number is refused NUMBER', async () => {
+  const w = world();
+  let local = 5000;
+  setAllocator({ allocate: async () => ++local }); // numbers the office never gave (notes made before the office existed)
+  try {
+    const ownersNote = await w.note(w.O, "owner's old note");
+    const cNote = await w.note(w.C, "c's old note");
+    assert.deepEqual(w.O.push().refused, [], 'before adoption a local number is not checked (today)');
+    assert.deepEqual(w.C.push().refused, []);
+    assert.equal((w.store.prepare(`SELECT COUNT(*) n FROM po_allocations WHERE ulid IN (?, ?)`).get(ownersNote, cNote) as { n: number }).n, 0);
+
+    w.adopt();
+    updateEntry(w.O.db, { ulid: ownersNote, description: 'owner edits after adoption' });
+    updateEntryRefs(w.O.db, { ulid: ownersNote, add: [{ ref_type: 'file', ref_value: 'more.ts' }] });
+    assert.deepEqual(w.O.push().refused, [], 'the E Owner edits its held, locally numbered note');
+    updateEntry(w.C.db, { ulid: cNote, description: 'c edits its own after adoption' });
+    updateEntryRefs(w.C.db, { ulid: cNote, add: [{ ref_type: 'file', ref_value: 'mine.ts' }] });
+    assert.deepEqual(w.C.push().refused, [], 'a Contributor edits its own held, locally numbered note (po_note_owners)');
+
+    const fresh = await w.note(w.C, 'locally numbered after adoption');
+    const res = w.C.push();
+    assert.ok(res.refused.length > 0);
+    assert.ok(res.refused.every((r) => r.ulid === fresh && r.reason === "A note's number is given by the post office"), JSON.stringify(res.refused));
+    assert.equal(w.store.prepare(`SELECT 1 FROM entries WHERE ulid = ?`).get(fresh), undefined);
+  } finally { w.done(); }
+});
