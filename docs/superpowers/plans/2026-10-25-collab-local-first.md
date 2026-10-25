@@ -124,12 +124,12 @@
 - **Produces:**
   - `getDefaultProject(db: DB): Project | null`
   - `setDefaultProject(db: DB, codeOrUlid: string): Project`. Refuses E and team projects with "the default must be a project that isn't shared".
-  - `ensureDefaultProject(db: DB): Project`. Returns the set one, else creates private project code `ME`, name "My notes" (or uses an existing `ME`), stores it, and returns it.
+  - `ensureDefaultProject(db: DB): Project`. Returns the set one, else uses `PS` if it exists, else creates private project code `PS`, name "Personal", stores it, and returns it.
   - The resolution order becomes: explicit → binding → folder → (sync enabled ? `ensureDefaultProject` : none→E).
-  - `NoteDestination.why` gains `"default"`, with line `It goes into ME (My notes), your catch-all for notes with no project; it isn't shared.`
+  - `NoteDestination.why` gains `"default"`, with line `It goes into PS (Personal): no project was named for it, and PS is private.`
 
 - [ ] **Step 1: Write failing tests:**
-  - Sync enabled + `e_project`, no binding/folder, office allocator throwing (down): `addEntryAsync` returns `{ series:"ME", id:1, pending:false }` (Review Focus 4).
+  - Sync enabled + `e_project`, no binding/folder, office allocator throwing (down): `addEntryAsync` returns `{ series:"PS", pending:false }` with a number (Review Focus 4).
   - `setDefaultProject(db,"E")` throws.
   - With no sync: a no-project note is still `E` with a local number (E-834 item 2).
   - `noteDestination` returns `why:"default"`.
@@ -318,7 +318,7 @@
      - the `supportHub` note → `supporthub`
   4. `collab copy` the never-shared tooling/collab modules → COLLAB and `qa-system` → new private `QA`.
   5. On the VM: `collab office adopt-e --owner personal-laptop --name emp1st`.
-  6. On the laptop: `collab project adopt-e --default PS --also infra`. (The owner may pick another default.)
+  6. On the laptop: `collab project adopt-e --default PS --also infra`.
   7. `collab team list E`. **Read** the members; don't ask. Add Gaurav when he joins.
   8. Verify with `collab sync status`: connected, "N private E notes kept".
 - [ ] **Step 2: Commit** `docs: sharing is by project; the E switch runbook`
@@ -341,4 +341,4 @@
   | §6 | Task 9 |
   | §9 rulings | Task 10 switch steps |
 
-- **Default project:** spec §3.3 named it `ME` for new notebooks. The owner's catch-all is chosen at the switch (`--default`).
+- **Default project:** `PS` (owner 2026-10-25). No new project is invented for it.

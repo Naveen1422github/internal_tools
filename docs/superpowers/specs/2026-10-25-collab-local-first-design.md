@@ -72,7 +72,7 @@ Order (add.ts:151-176):
 
 - E is chosen only explicitly or through a binding: `collab project bind custom-reports E`, and the same for each emp1st module and `supporthub`. Every module that was shared is bound to E by the switch step (§5), so work notes keep flowing to the team with no change in habit.
 - An unknown or new module lands in the default solo project. **New modules can never leak.** That replaces today's "new modules aren't shared" trap with a safe default.
-- **Default solo project:** owner picks per notebook (`collab project default <CODE>`). Notebooks created by `collab notebook new` get one called `ME`.
+- **Fallback project:** `PS` (the owner's private project). It can be changed with `collab project default <CODE>`. The user-facing words are "shared" and "private", never "solo".
 
 ### 3.4 Module sharing retires
 
