@@ -4,7 +4,7 @@ import { createSocket, type Socket } from "node:dgram";
 import {
   loadCrsqlite, isCrsqliteLoaded, isSyncEnabled, getSyncValue, setSyncValue, postOfficeTargetFromDb,
   readOwnChanges, decodeChange, applyChanges, reindexFts, requestJson, openEventStream, hasSeries, hasProjectLeft,
-  sendContext, sendVerdictOf, resolveAllocator, allocateWithRetry, formatEntryRef,
+  sendContext, sendVerdictOf, moduleSlugsOf, resolveAllocator, allocateWithRetry, formatEntryRef,
   upsertTeamProjectFromOffice, localClashOf, projectClashText, assignPendingNumber, rememberSharedModules,
   writeAccessCache, markProjectLeft, clearProjectLeft, recordRefusal, entryUlidOf,
   AccessRevokedError, SchemaMismatchError, PinMismatchError, COURIER_PORT_KEY,
@@ -576,6 +576,16 @@ export class Courier {
         ) {
           if (w.table === "entries" && ulid) noteOf.set(changeKey(w), ulid);
           out.set(changeKey(w), w);
+        }
+      }
+    }
+    if (ctx.eAdopted) {
+      // E adopted: a modules row travels with the (non-never-send) notes sent in THIS push that reference it.
+      for (const m of moduleSlugsOf(this.db, new Set(noteOf.values()))) ctx.sentModules.add(m);
+      if (ctx.sentModules.size > 0) {
+        for (const w of readOwnChanges(this.db, 0)) {
+          if (w.table !== "modules" || w.db_version > top) continue;
+          if (sendVerdictOf(this.db, w, ctx, memo).verdict === "send") out.set(changeKey(w), w);
         }
       }
     }

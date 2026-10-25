@@ -6,6 +6,7 @@ import { readOwnChanges } from "./changes.js";
 import { ensureCrsqlite } from "./extension.js";
 import { courierDir as defaultCourierDir, courierFiles } from "./courier-paths.js";
 import { SYNC_KEYS } from "./http-allocator.js";
+import { neverSend } from "../e-project.js";
 import { SHARED_KEY, SENT_KEY, sendContext, sendVerdictOf, type NotePlace } from "./send-filter.js";
 import { setSyncValue } from "./state.js";
 import { hasProjectLeft, hasSeries, hasUlidPrimaryKey } from "../schema.js";
@@ -22,6 +23,8 @@ export type SyncOverview =
       deviceId: string;
       sharedModules: string[];
       unsent: number;
+      /** Live notes this laptop keeps private (the never_send list); 0 before E is adopted. */
+      privateKept: number;
       /** Notes saved without a number yet (stage C): the courier numbers them when it reaches the office. */
       pending: number;
       courier: { running: boolean; state: string; lastError: string | null; lastPushAt: string | null; lastPullAt: string | null };
@@ -86,6 +89,14 @@ export function pendingCounts(db: DB): Array<{ series: string; project: string |
   ).all() as Array<{ series: string; project: string | null; n: number }>;
 }
 
+/** How many never-send ulids are live (not tombstoned) notes. */
+export function privateKeptCount(db: DB): number {
+  const ids = [...neverSend(db)];
+  if (ids.length === 0) return 0;
+  const q = db.prepare(`SELECT 1 FROM entries WHERE ulid = ? AND deleted_at IS NULL`);
+  return ids.filter((u) => q.get(u)).length;
+}
+
 export function readSyncOverview(
   db: DB,
   opts: { courierDir?: string; isAlive?: (pid: number) => boolean } = {},
@@ -117,6 +128,7 @@ export function readSyncOverview(
     deviceId: getSyncValue(db, SYNC_KEYS.device) ?? "",
     sharedModules: [...sharedSet(db)].sort(),
     unsent,
+    privateKept: privateKeptCount(db),
     pending: pendingCounts(db).reduce((sum, r) => sum + r.n, 0),
     courier: { running, state, lastError: st?.lastError ?? null, lastPushAt, lastPullAt },
     lastContactAt,

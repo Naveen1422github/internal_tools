@@ -9,6 +9,7 @@ import { getSyncValue } from "./state.js";
 import { entryUlidOf, type WireChange } from "./changes.js";
 import { SYNC_KEYS } from "./http-allocator.js";
 import { isCopiedToValue } from "../entry-write.js";
+import { isEAdopted, neverSend } from "../e-project.js";
 
 // The courier's own sync_state keys (courier/src/keys.ts COURIER_KEYS; core cannot import the courier).
 export const SHARED_KEY = "shared_modules";
@@ -25,6 +26,15 @@ export interface SendContext {
   /** Ulids of the team projects of THIS notebook's office. */
   teamProjects: Set<string>;
   fingerprint: string | null;
+  /** E has been adopted as the shared project "emp1st" (sync_state e_project). */
+  eAdopted: boolean;
+  /** Ulids that never leave this laptop, whatever else is true of them. */
+  neverSend: Set<string>;
+  /**
+   * Slugs referenced by a note sent in THIS push (filled by the caller, see
+   * moduleSlugsOf). Once E is adopted a modules row goes only with them.
+   */
+  sentModules: Set<string>;
 }
 
 /** Where a note lives, as the send rule sees it. */
@@ -57,7 +67,7 @@ export function sendContext(db: DB): SendContext {
       teamProjects.add(r.ulid);
     }
   }
-  return { shared, teamProjects, fingerprint };
+  return { shared, teamProjects, fingerprint, eAdopted: isEAdopted(db), neverSend: neverSend(db), sentModules: new Set() };
 }
 
 const GONE: NotePlace = { module: null, project: null, pending: false, knownProject: true, deleted: false, exists: false, refused: false };
@@ -90,7 +100,9 @@ function notePlace(db: DB, ulid: string): NotePlace {
  * 0. a pending note that is tombstoned -> skip (it never left this laptop);
  * 0b. an original's copied_to link (stage B2) -> skip: it points at a copy the
  *    team never gets (a solo project's note, rule 5);
- * 1. a modules row -> send iff its slug is shared;
+ * -1. a ulid in never_send -> skip, every row of that note, before all else;
+ * 1. a modules row -> send iff its slug is shared (E adopted: iff a note sent
+ *    in this push references it, ctx.sentModules);
  * 2. a change of no note here -> skip;
  * 2b. a note whose creation the office refused (refused_changes kind 'new', R7)
  *    -> skip: the person's to recover or discard, never resent, never counted as
@@ -98,8 +110,8 @@ function notePlace(db: DB, ulid: string): NotePlace {
  * 3. a note in a project: a team project of this office -> pending ? hold : send;
  *    a project not in this notebook yet -> hold (pull learns it, then the
  *    project backfill sends it whole); solo, or another office's team -> skip;
- * 4. no project: pending -> hold (the courier numbers it); primary module
- *    shared -> send; else skip.
+ * 4. no project: pending -> hold (the courier numbers it); E adopted -> send;
+ *    else primary module shared -> send; else skip.
  * `memo` caches note places for one pass (a push or a count).
  */
 export function sendVerdictOf(
@@ -110,10 +122,13 @@ export function sendVerdictOf(
     const r = db.prepare(`SELECT cell FROM crsql_unpack_columns(?)`).get(pk) as { cell: unknown } | undefined;
     const module = r ? String(r.cell) : null;
     const place: NotePlace = { ...GONE, module };
-    return { ulid: null, verdict: module && ctx.shared.has(module) ? "send" : "skip", place };
+    // Adopted: a modules row goes only with a sent note that references it (never-send notes are never sent).
+    const ok = ctx.eAdopted ? !!module && ctx.sentModules.has(module) : !!module && ctx.shared.has(module);
+    return { ulid: null, verdict: ok ? "send" : "skip", place };
   }
   const ulid = entryUlidOf(db, w.table, pk);
   if (!ulid) return { ulid: null, verdict: "skip", place: GONE };
+  if (ctx.neverSend.has(ulid)) return { ulid, verdict: "skip", place: GONE }; // before every other rule, for every table
   if (w.table === "refs" && isCopiedToRef(db, pk)) return { ulid, verdict: "skip", place: GONE };
   let place = memo.get(ulid);
   if (!place) { place = notePlace(db, ulid); memo.set(ulid, place); }
@@ -136,5 +151,14 @@ function verdictOf(p: NotePlace, ctx: SendContext): SendVerdict {
     return "skip";
   }
   if (p.pending) return "hold";
+  if (ctx.eAdopted) return "send"; // E is the team project emp1st: every non-never-send note goes
   return p.module && ctx.shared.has(p.module) ? "send" : "skip";
+}
+
+/** The module slugs these notes reference (primary or not): the modules rows that must travel with them. */
+export function moduleSlugsOf(db: DB, ulids: Iterable<string>): Set<string> {
+  const out = new Set<string>();
+  const q = db.prepare(`SELECT module FROM entry_modules WHERE entry_ulid = ? UNION SELECT module FROM entries WHERE ulid = ? AND module IS NOT NULL`);
+  for (const u of ulids) for (const r of q.all(u, u) as Array<{ module: string }>) out.add(r.module);
+  return out;
 }
