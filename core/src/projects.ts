@@ -12,7 +12,7 @@ import { postOfficeTargetFromDb } from "./sync/http-allocator.js";
 import { requestJson, type PostOfficeTarget } from "./sync/http.js";
 import { formatEntryRef } from "./entry-ref.js";
 import { assertCan } from "./access/can.js";
-import { E_PROJECT_ULID, eProject } from "./e-project.js";
+import { E_PROJECT_ULID, eProject, isEAdopted, isEProject } from "./e-project.js";
 import { NotConnectedError, OfficeRefusedError, OfficeUnreachableError } from "./sync/errors.js";
 
 export interface Project {
@@ -230,6 +230,7 @@ export async function promoteProject(db: DB, codeOrUlid: string): Promise<Projec
   needs0009(db);
   const p = findProject(db, codeOrUlid);
   if (!p) throw notFound(db, codeOrUlid);
+  if (isEProject(p)) throw eRefusal("promote");
   const target = officeOf(db);
   if (p.mode === "team") {
     if (p.team === target.fingerprint) return p;
@@ -295,6 +296,7 @@ export function markProjectLeft(db: DB, codeOrUlid: string): Project {
   }
   const p = findProject(db, codeOrUlid);
   if (!p) throw notFound(db, codeOrUlid);
+  if (isEProject(p)) throw eRefusal("leave");
   if (p.mode !== "team") throw new Error(`[collab] ${p.code} is a solo project: only a team project can be left`);
   if (p.left_at) return p;
   db.prepare(`UPDATE projects SET left_at = datetime('now'), updated_at = datetime('now') WHERE ulid = ?`).run(p.ulid);
@@ -325,6 +327,7 @@ export async function renameProject(db: DB, codeOrUlid: string, newName: string)
   needs0009(db);
   const p = findProject(db, codeOrUlid);
   if (!p) throw notFound(db, codeOrUlid);
+  if (isEProject(p)) throw eRefusal("rename");
   assertCan(db, p.ulid, "project.edit"); // R8: the quick answer here; the office decides for a team project
   const name = String(newName ?? "").trim();
   if (!name) throw new Error("[collab] a project needs a name");
@@ -344,11 +347,16 @@ export async function renameProject(db: DB, codeOrUlid: string, newName: string)
   return findProject(db, p.ulid)!;
 }
 
+/** E is the shared emp1st series, not a project you promote, leave or rename. */
+function eRefusal(verb: string): Error {
+  return new Error(`[collab] E (emp1st) is the shared series, not a project you can ${verb}. It becomes shared through adoption by the post office.`);
+}
+
 /** Every project in this notebook, by name. */
 export function listProjects(db: DB): Project[] {
   needs0009(db);
   const rows = db.prepare(`SELECT ${cols(db)} FROM projects ORDER BY lower(name), ulid`).all() as Project[];
-  return [...rows, eProject(db)]; // E is virtual (never a row): always listed, last
+  return isEAdopted(db) ? [...rows, eProject(db)] : rows; // E is virtual (never a row): listed only once adopted
 }
 
 /** A project by code (any case) or exact ULID, or null. */

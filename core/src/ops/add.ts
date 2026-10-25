@@ -19,7 +19,7 @@ import {
   KIND_BY_TYPE,
   CATEGORY_BY_TYPE,
 } from "../constants.js";
-import { writeProjectUlid } from "../e-project.js";
+import { isEProject, writeProjectUlid } from "../e-project.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { assertCan, AccessDeniedError, refusalText } from "../access/can.js";
 
@@ -250,7 +250,7 @@ export function addEntry(
       category,
       assigned: a.assigned,
       // A team note without a number from the office waits for one (rule 4).
-      pending: isTeamProject(project) && !a.assigned,
+      pending: isTeamProject(project) && !isEProject(project) && !a.assigned, // E numbers like no project
       pendingUlid: a.pendingUlid,
       ...(project ? { series: project.code, project_ulid: writeProjectUlid(project) } : {}),
     });
@@ -319,9 +319,11 @@ export async function addEntryAsync(db: DB, args: AddEntryArgs): Promise<AddEntr
   const project = resolveProjectArg(db, args, true);
   assertCan(db, writeProjectUlid(project), "note.create"); // R8: before any network call
   if (args.project === undefined) args = { ...args, project: project ? project.ulid : "none" };
-  if (project && !isTeamProject(project)) return addEntry(db, args); // solo: never the office (rule 4)
-  if (!project && !isSyncEnabled(db)) return addEntry(db, args);      // unshared notebook: as today
-  const series = project ? project.code : "E";
+  // E numbers EXACTLY like no project (adopted or not): the office when sync is on, local only on a never-joined notebook.
+  const named = isEProject(project) ? null : project;
+  if (named && !isTeamProject(named)) return addEntry(db, args); // solo: never the office (rule 4)
+  if (!named && !isSyncEnabled(db)) return addEntry(db, args);   // unshared notebook: as today
+  const series = named ? named.code : "E";
   const allocator = resolveAllocator(db);
   const ulid = newUlid();
   if (!allocator) return withReason(addEntry(db, { ...args, pendingUlid: ulid }), "no post office connection is configured on this machine");

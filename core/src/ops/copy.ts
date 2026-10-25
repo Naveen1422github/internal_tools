@@ -12,7 +12,7 @@ import { hasProjectLeft } from "../schema.js";
 import { insertEntryRow, insertEntryModules, insertRefs, COPIED_TO_PREFIX, type RefRowInput } from "../entry-write.js";
 import { formatEntryRef } from "../entry-ref.js";
 import { resolveAuthor } from "../author.js";
-import { E_PROJECT_ULID, writeProjectUlid } from "../e-project.js";
+import { E_PROJECT_ULID, isEProject, writeProjectUlid } from "../e-project.js";
 import { findProject, isLeftProject, isTeamProject, notFound, listProjects, type Project } from "../projects.js";
 import { resolveAllocator, allocateWithRetry, SAVE_ATTEMPT } from "../sync/allocator.js";
 import { ensureCrsqlite } from "../sync/extension.js";
@@ -111,11 +111,11 @@ function resolveSource(db: DB, raw: string): CopyPlan["source"] {
 function resolveTarget(db: DB, raw: string): Project {
   const v = String(raw ?? "").trim();
   if (!v) throw new Error("[collab] copy needs --to <project>");
-  if (v.toLowerCase() === "none" || v.toUpperCase() === "E") {
-    throw new Error("[collab] copies go into a project (its code numbers them); the E series is only for notes without a project");
-  }
+  const noE = () => new Error("[collab] copies go into a project (its code numbers them); the E series is only for notes without a project");
+  if (v.toLowerCase() === "none" || v.toUpperCase() === "E") throw noE();
   const p = findProject(db, v);
   if (!p) throw notFound(db, v);
+  if (isEProject(p)) throw noE(); // by ulid too: a copy into E would take a local E number
   if (isLeftProject(p)) {
     throw new Error(`[collab] ${p.code} (${p.name}) is a team you left: its notes are read-only, so nothing can be copied into it`);
   }

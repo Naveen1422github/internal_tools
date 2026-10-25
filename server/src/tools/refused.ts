@@ -1,7 +1,7 @@
 // file: server/src/tools/refused.ts
 import http from 'node:http';
 import {
-  getDb, listRefused, describeRefused, copyRefused, discardRefused, listProjects, isTeamProject, formatEntryRef,
+  getDb, listRefused, describeRefused, copyRefused, discardRefused, listProjects, isTeamProject, isEProject, formatEntryRef,
   RefusedNotFoundError, TeamTargetError, ProjectNotFoundError,
 } from '@collab-mcp/core';
 
@@ -41,7 +41,7 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
       id: r.ulid, at: r.at, ...describeRefused(db, r), kind: r.kind, key: r.key, reason: r.reason,
     }));
     // Only this notebook's solo projects can take a copy (S3-10).
-    const solo_projects = listProjects(db).filter((p) => !isTeamProject(p)).map((p) => ({ code: p.code, name: p.name }));
+    const solo_projects = listProjects(db).filter((p) => !isTeamProject(p) && !isEProject(p)).map((p) => ({ code: p.code, name: p.name }));
     send(200, { results, solo_projects });
   }),
 
