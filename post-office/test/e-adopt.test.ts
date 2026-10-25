@@ -131,6 +131,9 @@ test('adoptE is one transaction: a bad owner leaves nothing behind', () => {
     assert.equal(isEAdoptedOffice(store), false);
     assert.equal(store.prepare(`SELECT 1 FROM po_projects WHERE ulid = ?`).get(E_PROJECT_ULID), undefined);
     assert.equal(count(store, `project_ulid IS NULL`), 1);
+    // That row's note can't be resolved (a deleted E note's history): it was NULL = no project, so it becomes E.
+    assert.equal(adoptE(store, { name: 'emp1st', ownerDevice: 'owner' }).restamped, 1);
+    assert.equal(count(store, `project_ulid = '${E_PROJECT_ULID}'`), 1);
   } finally { cleanup(); }
 });
 
