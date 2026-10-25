@@ -352,6 +352,30 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     if (!e.series.length || e.series.some((x) => x !== code) || e.ids.some((id) => !allocated(u, code, id) && !promoted(u, code, id))) badNumber.add(u);
   }
 
+  // Local-first (Task 9 ruling): creating a modules row (a slug the office lacks) needs
+  // no module.create when this batch also creates a note the sender may create
+  // (note.create in its project; E once adopted) whose primary module or a tag is that
+  // slug: binding a new module to a project is how a team member starts one. Editing
+  // a held modules row stays module.edit (office admin). Before adoption a no-project
+  // note has no project here, so nothing changes for it.
+  let carriedSlugs: Set<string> | null = null;
+  const carried = (): Set<string> => {
+    if (carriedSlugs) return carriedSlugs;
+    carriedSlugs = new Set();
+    raws.forEach((r, i) => {
+      const u = ulids[i];
+      if (!u) return;
+      let slug: string | null = null;
+      if (r.table === "entries" && r.cid === "module") slug = typeof r.val === "string" && r.val !== "" ? r.val : null;
+      else if (r.table === "entry_modules") slug = textCells(r.pk)?.[1] ?? null;
+      if (!slug || carriedSlugs!.has(slug)) return;
+      const n = notes.get(u)!;
+      if (n.created === null || n.project === null || n.refused || badNumber.has(u)) return;
+      if (answer("note.create", n.project) === "") carriedSlugs!.add(slug);
+    });
+    return carriedSlugs;
+  };
+
   // Each cell's key (null = refused outright or not judged) and, when refused, why.
   const whyKey: Array<string | null> = new Array(raws.length).fill(null);
   const why: Array<string | null> = new Array(raws.length).fill(null);
@@ -362,7 +386,11 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
   raws.forEach((r, i) => {
     if (keys[i] === null) { why[i] = UNREADABLE; return; } // fix 5: fail closed
     if (twice.size && twice.has(i)) { why[i] = TWICE; return; }
-    if (r.table === "modules") { judge(i, moduleKey(keys[i]!), null); return; }
+    if (r.table === "modules") {
+      const k = moduleKey(keys[i]!);
+      if (k === "module.create" && carried().has(keys[i]!)) return; // local-first fix: a new module travels with its first note
+      judge(i, k, null); return;
+    }
     const u = ulids[i];
     if (!u) return;
     const n = notes.get(u)!;

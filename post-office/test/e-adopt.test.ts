@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import { addEntryAsync, updateEntry, initModule, setAllocator, readOwnChanges, applyChanges, decodeChange, encodeChange, newUlid, requestJson, E_PROJECT_ULID, type WireChange } from '@collab-mcp/core';
+import { addEntryAsync, updateEntry, initModule, upsertModule, setAllocator, readOwnChanges, applyChanges, decodeChange, encodeChange, newUlid, requestJson, E_PROJECT_ULID, type WireChange } from '@collab-mcp/core';
 import { tempStore, tempDir, laptop } from './helpers.js';
 import { office } from './office.js';
 import { acceptChanges, fetchDeliveries, fetchReplay, lastSeq } from '../src/deliveries.js';
@@ -316,4 +316,38 @@ test('CLI adopt-e --owner <member> prints the count and how to add members', asy
     const again = io();
     assert.equal((await runCli(['adopt-e', '--owner', 'main', '--data', data], again.io)).code, 1);
   } finally { t.cleanup(); }
+});
+
+test('Task 9 ruling: an Office-member E Editor creates a module with its first E note; alone it is module.create, an edit is module.edit', async () => {
+  const { store, cleanup } = tempStore();
+  const lo = laptop(), lm = laptop();
+  try {
+    for (const d of ['owner', 'mem']) member(store, d); // owner = Office admin, mem = Office member
+    initModule(lo.db, { slug: 'm', name: 'M' });
+    await note(lo.db, 'e-old');
+    acceptChanges(store, 'owner', readOwnChanges(lo.db, 0));
+    adoptE(store, { name: 'emp1st', ownerDevice: 'owner' });
+    setProjectMember(store, null, E_PROJECT_ULID, 'mem', 'Editor');
+    setAllocator({ allocate: async (u) => allocate(store, u, null) });
+
+    // A new module and an E note in it, in one push: accepted whole.
+    initModule(lm.db, { slug: 'fresh', name: 'Fresh' });
+    const u = (await addEntryAsync(lm.db, { type: 'decision', title: 'first', summary: 'first s', module: 'fresh' })).ulid;
+    const r = acceptChanges(store, 'mem', readOwnChanges(lm.db, 0));
+    assert.deepEqual(r.refused, [], 'the modules row travels with a note mem may create in E');
+    assert.ok(store.prepare(`SELECT 1 FROM modules WHERE slug = 'fresh'`).get(), 'the office holds the module');
+    assert.ok(store.prepare(`SELECT 1 FROM entries WHERE ulid = ?`).get(u));
+
+    // The same kind of row creation with no such note: module.create, as before.
+    let v = version(lm.db);
+    initModule(lm.db, { slug: 'lonely', name: 'Lonely' });
+    assert.deepEqual(acceptChanges(store, 'mem', readOwnChanges(lm.db, v)).refused.map((x) => x.key), ['module.create']);
+    assert.equal(store.prepare(`SELECT 1 FROM modules WHERE slug = 'lonely'`).get(), undefined);
+
+    // An edit to the held row: module.edit (Office admin only), even with a new note in it.
+    v = version(lm.db);
+    upsertModule(lm.db, { slug: 'fresh', summary: 'changed' });
+    await addEntryAsync(lm.db, { type: 'decision', title: 'second', summary: 'second s', module: 'fresh' });
+    assert.deepEqual(acceptChanges(store, 'mem', readOwnChanges(lm.db, v)).refused.map((x) => x.key), ['module.edit']);
+  } finally { setAllocator(null); lo.cleanup(); lm.cleanup(); cleanup(); }
 });

@@ -8,7 +8,7 @@ import {
   upsertTeamProjectFromOffice, localClashOf, projectClashText, assignPendingNumber, rememberSharedModules,
   writeAccessCache, markProjectLeft, clearProjectLeft, recordRefusal, entryUlidOf,
   AccessRevokedError, SchemaMismatchError, PinMismatchError, COURIER_PORT_KEY,
-  isEAdopted, cachedEAccess, adoptEFromOffice, E_PROJECT_ULID,
+  isEAdopted, cachedEAccess, adoptEFromOffice, E_PROJECT_ULID, SENT_MODULES_KEY,
   type PostOfficeTarget, type WireChange, type EventStream, type NotePlace, type ProjectClash, type AccessPayload,
 } from "@collab-mcp/core";
 import { COURIER_KEYS as K } from "./keys.js";
@@ -68,7 +68,9 @@ const changeKey = (w: WireChange) => `${w.site_id}|${w.db_version}|${w.seq}|${w.
  * each one whole (R5); and every `entries` cell of one note, because the office
  * (R3) holds a note's rows until it has the note's project cell (a note cut
  * before it would look like a pre-0009 note with no project, and go to
- * everyone). Both rules join changes into units; a unit bigger than `size`
+ * everyone). A `modules` row given a note by `noteOf` joins that note's unit:
+ * the office accepts a new module's row only beside a note created in it (Task 9).
+ * These rules join changes into units; a unit bigger than `size`
  * goes alone on its own page. Within a page, the batch order is kept.
  */
 export function pagesOf(batch: WireChange[], noteOf: (w: WireChange) => string | null, size: number): WireChange[][] {
@@ -82,7 +84,7 @@ export function pagesOf(batch: WireChange[], noteOf: (w: WireChange) => string |
   };
   const group = (w: WireChange) => `g:${w.site_id}:${w.db_version}`;
   for (const w of batch) {
-    const u = w.table === "entries" ? noteOf(w) : null;
+    const u = w.table === "entries" || w.table === "modules" ? noteOf(w) : null; // a modules row joins its carrying note (Task 9)
     const g = root(group(w));
     if (u !== null) { const n = root(`n:${u}`); if (n !== g) up.set(n, g); }
   }
@@ -623,9 +625,19 @@ export class Courier {
       // E adopted: a modules row travels with the (non-never-send) notes sent in THIS push that reference it.
       for (const m of moduleSlugsOf(this.db, sentNotes)) ctx.sentModules.add(m);
       if (ctx.sentModules.size > 0) {
+        // Task 9 ruling: the office accepts a new module's row only in the page that creates
+        // a note in it, so each modules row shares a page unit with one such note (a note
+        // created now first). R5 holds: a unit only grows, a transaction is never split.
+        const carrier = new Map<string, string>();
+        const order = [...createdNow].filter((u) => sentNotes.has(u)).concat([...sentNotes].filter((u) => !createdNow.has(u)));
+        for (const u of order) for (const m of moduleSlugsOf(this.db, [u])) if (!carrier.has(m)) carrier.set(m, u);
         for (const w of readOwnChanges(this.db, 0)) {
           if (w.table !== "modules" || w.db_version > top) continue;
-          if (sendVerdictOf(this.db, w, ctx, memo).verdict === "send") out.set(changeKey(w), w);
+          const { verdict, place } = sendVerdictOf(this.db, w, ctx, memo);
+          if (verdict !== "send") continue;
+          out.set(changeKey(w), w);
+          const u = place.module ? carrier.get(place.module) : undefined;
+          if (u) noteOf.set(changeKey(w), u);
         }
       }
     }
@@ -674,12 +686,33 @@ export class Courier {
   private acknowledge(box: Outbox, refused: Refusal[]): void {
     this.db.transaction(() => {
       if (refused.length > 0) this.recordRefusals(box.pages.flat(), refused);
+      this.rememberSentModules(box.pages.flat(), refused);
       const sent = Number(getSyncValue(this.db, K.sent) ?? 0);
       setSyncValue(this.db, K.sent, String(Math.max(sent, box.top)));
       setSyncValue(this.db, K.backfilled, box.shared);
       setSyncValue(this.db, K.backfilledProjects, box.projects);
       this.db.prepare(`DELETE FROM sync_state WHERE key = ?`).run(K.inflight);
     })();
+  }
+
+  /**
+   * Task 9 ruling: the slugs whose modules row the office just accepted (a refused
+   * group is left out). The send filter reads them as "the office holds it": a later
+   * change to that row is a module.edit, sent only with that office key.
+   */
+  private rememberSentModules(batch: WireChange[], refused: Refusal[]): void {
+    const no = new Set(refused.map((r) => r.site_id.toLowerCase() + ":" + r.db_version));
+    const slugs = new Set<string>();
+    for (const w of batch) {
+      if (w.table !== "modules" || no.has(groupKey(w))) continue;
+      const c = this.db.prepare(`SELECT cell FROM crsql_unpack_columns(?)`).get(Buffer.from(w.pk, "base64")) as { cell: unknown } | undefined;
+      if (c && c.cell != null) slugs.add(String(c.cell));
+    }
+    if (!slugs.size) return;
+    let had: string[] = [];
+    try { had = JSON.parse(getSyncValue(this.db, SENT_MODULES_KEY) ?? "[]") as string[]; } catch { /* rebuilt */ }
+    const all = new Set([...had, ...slugs]);
+    if (all.size !== had.length) setSyncValue(this.db, SENT_MODULES_KEY, JSON.stringify([...all].sort()));
   }
 
   /**

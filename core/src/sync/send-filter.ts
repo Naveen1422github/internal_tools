@@ -14,6 +14,12 @@ import { isEAdopted, neverSend } from "../e-project.js";
 // The courier's own sync_state keys (courier/src/keys.ts COURIER_KEYS; core cannot import the courier).
 export const SHARED_KEY = "shared_modules";
 export const SENT_KEY = "sent_db_version";
+/**
+ * JSON list: slugs whose modules row the office accepted from this laptop (written by the
+ * courier when a push is acknowledged, refused groups left out). With the slugs whose row
+ * has a cell that arrived by pull, it is how this laptop knows the office holds a module.
+ */
+export const SENT_MODULES_KEY = "sent_modules";
 /** JSON list of team projects that clash with a local one (written by the courier, read by doctor). */
 export const PROJECT_CLASH_KEY = "project_clash";
 
@@ -35,6 +41,10 @@ export interface SendContext {
    * moduleSlugsOf). Once E is adopted a modules row goes only with them.
    */
   sentModules: Set<string>;
+  /** Slugs the office already holds: sent_modules, rows with a cell that arrived by pull, and the legacy shared list. */
+  officeModules: Set<string>;
+  /** This laptop holds the office key module.edit (access_cache 'office'; no row = the office decides). */
+  moduleEdit: boolean;
 }
 
 /** Where a note lives, as the send rule sees it. */
@@ -67,7 +77,32 @@ export function sendContext(db: DB): SendContext {
       teamProjects.add(r.ulid);
     }
   }
-  return { shared, teamProjects, fingerprint, eAdopted: isEAdopted(db), neverSend: neverSend(db), sentModules: new Set() };
+  const eAdopted = isEAdopted(db);
+  return {
+    shared, teamProjects, fingerprint, eAdopted, neverSend: neverSend(db), sentModules: new Set(),
+    // A slug shared the legacy way was sent (rule 1) before adoption: the office holds it too.
+    officeModules: eAdopted ? new Set([...officeModules(db), ...shared]) : new Set(), moduleEdit: eAdopted ? holdsModuleEdit(db) : true,
+  };
+}
+
+/** The slugs the office holds, as this laptop knows it: sent and accepted, or arrived by pull. */
+export function officeModules(db: DB): Set<string> {
+  const out = new Set<string>();
+  try { for (const s of JSON.parse(getSyncValue(db, SENT_MODULES_KEY) ?? "[]") as string[]) out.add(s); } catch { /* none */ }
+  try {
+    for (const r of db.prepare(
+      `SELECT DISTINCT p.slug FROM modules__crsql_pks p JOIN modules__crsql_clock c ON c.key = p.__crsql_key WHERE c.site_id <> 0`,
+    ).all() as Array<{ slug: string }>) out.add(r.slug);
+  } catch { /* sync off: no clock tables */ }
+  return out;
+}
+
+/** The office key module.edit, from the access cache (no 'office' row = not cached: the office decides, like can()). */
+function holdsModuleEdit(db: DB): boolean {
+  try {
+    const r = db.prepare(`SELECT EXISTS (SELECT 1 FROM json_each(keys) WHERE value = 'module.edit') AS has FROM access_cache WHERE scope_key = 'office'`).get() as { has: number } | undefined;
+    return !r || r.has === 1;
+  } catch { return true; } // before access_cache exists
 }
 
 const GONE: NotePlace = { module: null, project: null, pending: false, knownProject: true, deleted: false, exists: false, refused: false };
@@ -102,7 +137,9 @@ function notePlace(db: DB, ulid: string): NotePlace {
  *    team never gets (a solo project's note, rule 5);
  * -1. a ulid in never_send -> skip, every row of that note, before all else;
  * 1. a modules row -> send iff its slug is shared (E adopted: iff a note sent
- *    in this push references it, ctx.sentModules);
+ *    in this push references it, ctx.sentModules, and, for a slug the office
+ *    already holds, only with the office key module.edit: else kept local, never
+ *    sent just to be refused);
  * 2. a change of no note here -> skip;
  * 2b. a note whose creation the office refused (refused_changes kind 'new', R7)
  *    -> skip: the person's to recover or discard, never resent, never counted as
@@ -123,7 +160,10 @@ export function sendVerdictOf(
     const module = r ? String(r.cell) : null;
     const place: NotePlace = { ...GONE, module };
     // Adopted: a modules row goes only with a sent note that references it (never-send notes are never sent).
-    const ok = ctx.eAdopted ? !!module && ctx.sentModules.has(module) : !!module && ctx.shared.has(module);
+    // A slug the office holds is an edit (module.edit, Office admin): without the key it stays local.
+    const ok = ctx.eAdopted
+      ? !!module && ctx.sentModules.has(module) && (ctx.moduleEdit || !ctx.officeModules.has(module))
+      : !!module && ctx.shared.has(module);
     return { ulid: null, verdict: ok ? "send" : "skip", place };
   }
   const ulid = entryUlidOf(db, w.table, pk);
