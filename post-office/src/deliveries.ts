@@ -7,6 +7,7 @@ import { divergentStatusOrType, flagNeedsMerge, mergeEntries } from "./merge.js"
 import { memberProjects } from "./access.js";
 import { classify, REFUSED_BEFORE, type Refusal, type Verdict } from "./classify.js";
 import { writeBack } from "./writeback.js";
+import { eStamp, isEAdoptedOffice } from "./e-adopt.js";
 
 export const OFFICE_ORIGIN = "post-office";
 
@@ -156,11 +157,18 @@ function resolve(db: Store, rows: DeliveryRow[], hints?: Hints): Resolved[] {
     }
   }
   if (hints) for (const [u, p] of hints.project) project.set(u, p);
+  // Task 4: once the office adopted E, a note with no project is delivered as E (modules rows stay NULL).
+  const adopted = isEAdoptedOffice(db);
   return rows.map((r, i) => {
     const u = ulids[i];
     const stamp = r.final ? r.stamp ?? null : r.tbl === "modules" ? null : u === null || !project.has(u) ? "?" : (project.get(u) as string | null);
-    return { seq: r.seq, tbl: r.tbl, origin: r.origin, held: r.held, key: keys[i], ulid: u, stamp };
+    return { seq: r.seq, tbl: r.tbl, origin: r.origin, held: r.held, key: keys[i], ulid: u, stamp: eStamp(adopted, r.tbl, stamp) };
   });
+}
+
+/** resolve() for adoptE's restamp: each row's seq and the stamp its note gets now. */
+export function resolveStamps(db: Store, rows: DeliveryRow[]): Array<{ seq: number; stamp: string | null }> {
+  return resolve(db, rows).map((r) => ({ seq: r.seq, stamp: r.stamp }));
 }
 
 /** One UPDATE per distinct stamp, not per row. */
@@ -190,7 +198,7 @@ function guessStamps(db: Store, raws: RawChange[]): Array<Resolved & { final: bo
  * above). No second pk decode, hints pass or office query. A note the office held
  * with its project cell keeps that project (S2-1 refuses a move): its stamp is final.
  */
-function guessFromVerdict(raws: RawChange[], v: Verdict): Array<Resolved & { final: boolean; owned?: boolean }> {
+function guessFromVerdict(raws: RawChange[], v: Verdict, adopted: boolean): Array<Resolved & { final: boolean; owned?: boolean }> {
   return raws.map((r, i) => {
     const u = v.ulids[i];
     let stamp: string | null = "?", final = false, owned = false;
@@ -202,7 +210,7 @@ function guessFromVerdict(raws: RawChange[], v: Verdict): Array<Resolved & { fin
         if (h) { stamp = h.hp ? h.project_ulid : h.hs ? "?" : null; final = !!h.hp; owned = h.owner !== null; }
       }
     }
-    return { seq: 0, tbl: r.table, origin: "", held: 0, key: r.table === "modules" ? null : v.keys[i], ulid: u, stamp, final, owned };
+    return { seq: 0, tbl: r.table, origin: "", held: 0, key: r.table === "modules" ? null : v.keys[i], ulid: u, stamp: eStamp(adopted, r.table, stamp), final, owned };
   });
 }
 
@@ -389,7 +397,7 @@ export function acceptChanges(
 
     t0 = performance.now();
     // `oldStampPath`: the equivalence test's reference (R-29), never set in production.
-    const guess = !stamp ? null : raws === all && !opts.oldStampPath ? guessFromVerdict(raws, verdict) : guessStamps(db, raws);
+    const guess = !stamp ? null : raws === all && !opts.oldStampPath ? guessFromVerdict(raws, verdict, isEAdoptedOffice(db)) : guessStamps(db, raws);
     let stampMs = performance.now() - t0;
     const rec = prep(db, RECORD_STAMPED);
     const fresh: RawChange[] = [];

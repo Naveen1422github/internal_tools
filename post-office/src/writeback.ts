@@ -2,6 +2,7 @@
 import { rootRevId, type RawChange } from "@collab-mcp/core";
 import type { Store } from "./store.js";
 import { OFFICE_ORIGIN, RECORD_STAMPED, firstTextCell, textCells, prep, revisionEntries, type DeliveryRow } from "./deliveries.js";
+import { eStamp, isEAdoptedOffice } from "./e-adopt.js";
 
 // RnR S2, R6: the office's undo of a refused group. Mechanism (b) of the spike
 // (docs/superpowers/plans/2026-10-18-collab-rnr-s2-spike.md §1, §2): insert into
@@ -77,6 +78,7 @@ export function writeBack(db: Store, refused: RawChange[], projects?: Map<string
 
   const out: Cell[] = [];
   const todo: Array<{ x: Row; stamp: string | null }> = [];
+  const adopted = isEAdoptedOffice(db); // Task 4: no project = E once adopted
   for (const x of rows.values()) {
     let stamp: string | null = null;
     if (x.table !== "modules") {
@@ -84,7 +86,7 @@ export function writeBack(db: Store, refused: RawChange[], projects?: Map<string
       if (!n || !n.held || n.refused) continue; // R-13: a note the office doesn't hold, or refused at creation
       // The office's project cell; none yet but a series cell (still arriving): the
       // project classify judged it in, else held. Neither cell: before 0009, no project.
-      stamp = n.hp ? n.project_ulid : !n.hs ? null : projects?.get(x.ulid!) ?? "?";
+      stamp = eStamp(adopted, x.table, n.hp ? n.project_ulid : !n.hs ? null : projects?.get(x.ulid!) ?? "?");
     } else if (!x.key) continue;
     todo.push({ x, stamp });
   }

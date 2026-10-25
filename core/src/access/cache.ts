@@ -15,6 +15,8 @@ export interface AccessPayload {
     ai: Record<string, "allow" | "ask" | "deny">;
   }>;
   replays: Array<{ project_ulid: string; upto_seq: number }>;
+  /** Whether the office adopted E, and whether this device holds note.view in it (absent from an older office). */
+  eProject?: { adopted: boolean; member: boolean };
 }
 
 export interface CachedAccess {

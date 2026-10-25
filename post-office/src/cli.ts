@@ -8,6 +8,7 @@ import {
   nextNumber, JOIN_TTL_HOURS, StoreError, type Store,
 } from "./store.js";
 import { setOfficeRole, setProjectMember } from "./access.js";
+import { adoptE } from "./e-adopt.js";
 import { lastSeq } from "./deliveries.js";
 import { startPostOffice, type PostOffice } from "./server.js";
 import { defaultDataDir, officeFiles } from "./paths.js";
@@ -29,6 +30,7 @@ export const USAGE = `collab-post-office: the sync v1 post office
   revoke <device-id | name>
   set-office-role <device-id | name> <role>   e.g. "Office admin" (no login needed: you are on this machine)
   set-project-role <device-id | name> <CODE> <role>   e.g. a new Owner before revoking the only one
+  adopt-e --owner <device-id | name> [--name emp1st]   E becomes a team project: its notes reach its members only
   status
   share <module> | unshare <module> | modules
 
@@ -235,6 +237,19 @@ export async function runCli(argv: string[], io: Io, env: NodeJS.ProcessEnv = pr
           return m;
         });
         io.out(`${m.name} (${m.device_id}) is now ${role} in ${code}; laptops learn it on their next sync`);
+        return { code: 0 };
+      }
+      case "adopt-e": {
+        const who = typeof opt.owner === "string" ? opt.owner.trim() : "";
+        if (!who) throw new StoreError("adopt-e needs --owner <member>, e.g. adopt-e --owner main");
+        const name = typeof opt.name === "string" ? opt.name : "emp1st";
+        // The office machine is unguarded (R13).
+        const r = withStore(dir, (s) => {
+          const m = liveMemberNamed(s, who);
+          return { m, ...adoptE(s, { name, ownerDevice: m.device_id }) };
+        });
+        io.out(`E (${name}) is now a team project; ${r.m.name} (${r.m.device_id}) is its Owner. restamped ${r.restamped} past E deliveries: they now reach E's members only`);
+        io.out("add members: collab team set <member> E <role>");
         return { code: 0 };
       }
       case "status": {

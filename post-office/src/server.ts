@@ -12,8 +12,9 @@ import {
   createProjectRole, updateProjectRole, deleteProjectRole, isOwnerRole, projectRoleHolders,
   createOfficeRole, updateOfficeRole, deleteOfficeRole, listOfficeMembers,
 } from "./access.js";
-import { sanitizeKeys, type AccessPayload } from "@collab-mcp/core";
+import { sanitizeKeys, E_PROJECT_ULID, type AccessPayload } from "@collab-mcp/core";
 import { acceptChanges, fetchDeliveries, fetchReplay, lastSeq } from "./deliveries.js";
+import { isEAdoptedOffice } from "./e-adopt.js";
 
 // The post office's HTTPS + SSE API (spec Components 3, D12, D13). Plain Node
 // https: no framework. Every route but /v1/join authenticates against the
@@ -88,7 +89,9 @@ function accessFor(db: Store, device: string): AccessPayload {
     return { ...p, keys: [...projectKeys(db, device, p.ulid)], ai };
   });
   const replays = db.prepare(`SELECT project_ulid, upto_seq FROM po_replays WHERE device_id = ?`).all(device) as AccessPayload["replays"];
-  return { office: office ? { role: office.name, keys: [...officeKeys(db, device)] } : null, projects, replays };
+  const adopted = isEAdoptedOffice(db);
+  const eProject = { adopted, member: adopted && projectKeys(db, device, E_PROJECT_ULID).has("note.view") };
+  return { office: office ? { role: office.name, keys: [...officeKeys(db, device)] } : null, projects, replays, eProject };
 }
 
 /** A path parameter, decoded; bad percent-encoding is a 400, not a crash. */
