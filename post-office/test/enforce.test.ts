@@ -341,7 +341,7 @@ test('a refused group touching a held note still arriving: its write-back is hel
     const seq0 = fetchDeliveries(w.store, 'd-n', 0, 5000).lastSeq;
     const res = w.R.push({ changes: readOwnChanges(w.R.db, rv) });
     assert.equal(res.refused.length, 1);
-    const stamps = w.store.prepare(`SELECT pk, project_ulid p FROM po_deliveries WHERE seq > ? AND origin = ?`).all(seq0, OFFICE_ORIGIN) as Array<{ pk: Buffer; p: string | null }>;
+    const stamps = w.store.prepare(`SELECT pk, project_ulid p FROM po_deliveries WHERE seq > ? AND (origin = ? OR origin LIKE 'post-office>%')`).all(seq0, OFFICE_ORIGIN) as Array<{ pk: Buffer; p: string | null }>;
     const of = (u: string) => stamps.filter((s) => firstTextCell(s.pk) === u).map((s) => s.p);
     assert.ok(of(other).length > 0 && of(other).every((p) => p === w.A));
     assert.ok(of(half).length > 0 && of(half).every((p) => p === '?'), 'held like its note, never NULL (sent to everyone)');

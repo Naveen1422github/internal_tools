@@ -1,7 +1,8 @@
 // file: post-office/src/writeback.ts
 import { rootRevId, type RawChange } from "@collab-mcp/core";
 import type { Store } from "./store.js";
-import { OFFICE_ORIGIN, RECORD_STAMPED, firstTextCell, textCells, prep, revisionEntries, type DeliveryRow } from "./deliveries.js";
+import { memberProjects } from "./access.js";
+import { OFFICE_ORIGIN, WRITEBACK_TO, RECORD_STAMPED, firstTextCell, textCells, prep, revisionEntries, type DeliveryRow } from "./deliveries.js";
 import { eStamp, isEAdoptedOffice } from "./e-adopt.js";
 
 // RnR S2, R6: the office's undo of a refused group. Mechanism (b) of the spike
@@ -47,7 +48,7 @@ interface Cell { table: string; pk: Buffer; cid: string; val: unknown; cv: numbe
  * judged project per note (Verdict.noteProjects), for a note whose project cell
  * the office doesn't hold yet.
  */
-export function writeBack(db: Store, refused: RawChange[], projects?: Map<string, string | null>): DeliveryRow[] {
+export function writeBack(db: Store, refused: RawChange[], projects?: Map<string, string | null>, sender?: string): DeliveryRow[] {
   if (!refused.length) return [];
   // Refused cells by row, decoded once per run of equal pks.
   const rows = new Map<string, Row>();
@@ -131,9 +132,18 @@ export function writeBack(db: Store, refused: RawChange[], projects?: Map<string
   // never had, and would hold it as '?' forever).
   const rec = prep(db, RECORD_STAMPED);
   const done: DeliveryRow[] = [];
+  // Ruling a: a row the sender can't view by its stamp is addressed to the sender too
+  // (it already holds the note: nothing leaks). Stamp NULL reaches everyone anyway.
+  let viewable: Set<string> | null = null;
+  const originOf = (stamp: string | null): string => {
+    if (sender === undefined || stamp === null) return OFFICE_ORIGIN;
+    viewable ??= new Set(memberProjects(db, sender));
+    return viewable.has(stamp) ? OFFICE_ORIGIN : WRITEBACK_TO + sender;
+  };
   out.forEach((c, i) => {
-    const x = rec.run(OFFICE_ORIGIN, c.table, c.pk, c.cid, c.val, c.cv, stored, site, c.cl, i, c.stamp);
-    if (x.changes === 1) done.push({ seq: Number(x.lastInsertRowid), tbl: c.table, pk: c.pk, origin: OFFICE_ORIGIN, held: 0, stamp: c.stamp });
+    const origin = originOf(c.stamp);
+    const x = rec.run(origin, c.table, c.pk, c.cid, c.val, c.cv, stored, site, c.cl, i, c.stamp);
+    if (x.changes === 1) done.push({ seq: Number(x.lastInsertRowid), tbl: c.table, pk: c.pk, origin, held: 0, stamp: c.stamp });
   });
   return done;
 }

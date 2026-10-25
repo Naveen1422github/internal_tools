@@ -10,6 +10,14 @@ import { writeBack } from "./writeback.js";
 import { eStamp, isEAdoptedOffice } from "./e-adopt.js";
 
 export const OFFICE_ORIGIN = "post-office";
+/**
+ * Fix round 1 (ruling a): an office write-back for a refused change the sender can't
+ * view by stamp (a non-member's edit of an E note it already holds) is recorded with
+ * origin `post-office>{sender}`: it goes to that sender whatever its stamp, and to
+ * the stamp's members as usual. No schema change. Every other office row keeps OFFICE_ORIGIN.
+ */
+export const WRITEBACK_TO = `${OFFICE_ORIGIN}>`;
+export const isOfficeOrigin = (origin: string) => origin === OFFICE_ORIGIN || origin.startsWith(WRITEBACK_TO);
 
 const RECORD = `INSERT OR IGNORE INTO po_deliveries (origin, tbl, pk, cid, val, col_version, db_version, site_id, cl, ch_seq)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
@@ -259,7 +267,7 @@ export function stampProjects(db: Store, seqs: number[], inHand?: DeliveryRow[])
 
   const owners = new Map<string, string>();
   const own = (tbl: string, stamp: string | null, ulid: string | null, origin: string) => {
-    if (tbl === "entries" && stamp !== "?" && ulid && origin !== OFFICE_ORIGIN && !owners.has(ulid)) owners.set(ulid, origin);
+    if (tbl === "entries" && stamp !== "?" && ulid && !isOfficeOrigin(origin) && !owners.has(ulid)) owners.set(ulid, origin);
   };
   for (const r of rows) own(r.tbl, r.stamp, r.ulid, r.origin);
   if (open !== all) for (const r of fresh) if (r.final && !r.owned) own(r.tbl, r.stamp ?? null, r.ulid ?? null, r.origin);
@@ -431,7 +439,7 @@ export function acceptChanges(
     // recorded and stamped by writeBack itself before recordOwnChanges.
     t0 = performance.now();
     if (dead.size) refuseCreations(db, origin, dead);
-    const wb = writeBack(db, out, verdict.noteProjects);
+    const wb = writeBack(db, out, verdict.noteProjects, origin);
     const writeBackMs = performance.now() - t0;
     const own = recordOwnChanges(db);
     t0 = performance.now();
@@ -478,8 +486,10 @@ export function fetchDeliveries(db: Store, deviceId: string, after: number, limi
     db.prepare(`UPDATE po_members SET receive_bookmark = MAX(receive_bookmark, ?) WHERE device_id = ?`).run(after, deviceId);
     const top = rows.length ? rows[rows.length - 1].seq : after;
     const withheld = new Set<string>();
+    const forMe = WRITEBACK_TO + deviceId;
     const changes = rows
       .filter((r) => {
+        if (r.origin === forMe) return true; // the undo of this device's own refused change (ruling a)
         if (r.origin === deviceId || (r.project_ulid !== null && !mine.has(r.project_ulid))) return false;
         if (r.project_ulid !== null && owed.has(r.project_ulid)) { withheld.add(r.project_ulid); return false; }
         return true;

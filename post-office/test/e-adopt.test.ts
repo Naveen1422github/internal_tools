@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import { addEntryAsync, updateEntry, initModule, setAllocator, readOwnChanges, decodeChange, newUlid, requestJson, E_PROJECT_ULID, type WireChange } from '@collab-mcp/core';
+import { addEntryAsync, updateEntry, initModule, setAllocator, readOwnChanges, applyChanges, decodeChange, newUlid, requestJson, E_PROJECT_ULID, type WireChange } from '@collab-mcp/core';
 import { tempStore, tempDir, laptop } from './helpers.js';
 import { office } from './office.js';
 import { acceptChanges, fetchDeliveries, fetchReplay, lastSeq } from '../src/deliveries.js';
@@ -119,6 +119,38 @@ test('adoptE: a non-E member gets no E rows (old or new) but keeps TT; members a
 
     assert.throws(() => adoptE(store, { name: 'emp1st', ownerDevice: 'owner' }), /already/);
   } finally { setAllocator(null); lo.cleanup(); lg.cleanup(); cleanup(); }
+});
+
+test('after adoption a non-member refused E edit is undone for that sender only (fix round 1, ruling a)', async () => {
+  const { store, cleanup } = tempStore();
+  const lo = laptop(), la = laptop();
+  try {
+    for (const d of ['owner', 'abhishek', 'carol']) member(store, d); // owner = Office admin; the others Office member
+    const TT = registerProject(store, { ulid: newUlid(), name: 'Project TT', code: 'TT' }, 'owner').ulid;
+    setProjectMember(store, null, TT, 'abhishek', 'Editor');
+    store.prepare(`DELETE FROM po_replays`).run();
+    initModule(lo.db, { slug: 'm', name: 'M' });
+    const eOld = await note(lo.db, 'e-old');
+    acceptChanges(store, 'owner', readOwnChanges(lo.db, 0));
+    // Abhishek holds the old E note (delivered to everyone before adoption).
+    applyChanges(la.db, fetchAll(store, 'abhishek').changes.map(decodeChange));
+    const officeId = (la.db.prepare(`SELECT id FROM entries WHERE ulid = ?`).get(eOld) as { id: number }).id;
+
+    adoptE(store, { name: 'emp1st', ownerDevice: 'owner' });
+    const top = lastSeq(store);
+    const v = version(la.db);
+    la.db.prepare(`UPDATE entries SET id = 99999 WHERE ulid = ?`).run(eOld); // numbers are the office's: refused (NUMBER)
+    const r = acceptChanges(store, 'abhishek', readOwnChanges(la.db, v));
+    assert.ok(r.refused.length > 0, 'the renumbering is refused');
+    assert.ok(count(store, `seq > ${top} AND project_ulid = '${E_PROJECT_ULID}'`) > 0, 'the write-back is stamped E');
+
+    const a = fetchAll(store, 'abhishek', top);
+    assert.ok(a.changes.some((w) => ownerOf(store, w) === eOld), 'the sender receives the undo of its own refused change');
+    applyChanges(la.db, a.changes.map(decodeChange));
+    assert.equal((la.db.prepare(`SELECT id FROM entries WHERE ulid = ?`).get(eOld) as { id: number }).id, officeId, 'and its laptop reverts');
+    assert.ok(!fetchAll(store, 'carol', top).changes.some((w) => ownerOf(store, w) === eOld), 'another non-member gets nothing of it');
+    assert.ok(fetchAll(store, 'owner', top).changes.some((w) => ownerOf(store, w) === eOld), 'E members still get the write-back');
+  } finally { setAllocator(null); lo.cleanup(); la.cleanup(); cleanup(); }
 });
 
 test('adoptE is one transaction: a bad owner leaves nothing behind', () => {

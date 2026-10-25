@@ -158,7 +158,7 @@ export function seedAccess(db: Store): void {
     const firsts = db
       .prepare(
         `SELECT d.pk, d.origin FROM po_deliveries d
-           JOIN (SELECT pk, MIN(seq) s FROM po_deliveries WHERE tbl = 'entries' AND origin <> ? GROUP BY pk) f ON f.s = d.seq`,
+           JOIN (SELECT pk, MIN(seq) s FROM po_deliveries WHERE tbl = 'entries' AND origin <> ? AND origin NOT LIKE 'post-office>%' GROUP BY pk) f ON f.s = d.seq`,
       )
       .all(OFFICE_ORIGIN) as Array<{ pk: Buffer; origin: string }>;
     const unpack = db.prepare(`SELECT cell FROM crsql_unpack_columns(?)`);
