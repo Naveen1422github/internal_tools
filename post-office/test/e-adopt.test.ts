@@ -133,7 +133,9 @@ test('after adoption a non-member refused E edit is undone for that sender only 
     const eOld = await note(lo.db, 'e-old');
     acceptChanges(store, 'owner', readOwnChanges(lo.db, 0));
     // Abhishek holds the old E note (delivered to everyone before adoption).
-    applyChanges(la.db, fetchAll(store, 'abhishek').changes.map(decodeChange));
+    const got = fetchAll(store, 'abhishek');
+    applyChanges(la.db, got.changes.map(decodeChange));
+    fetchAll(store, 'abhishek', got.lastSeq); // the next pull acknowledges it (receive_bookmark)
     const officeId = (la.db.prepare(`SELECT id FROM entries WHERE ulid = ?`).get(eOld) as { id: number }).id;
 
     adoptE(store, { name: 'emp1st', ownerDevice: 'owner' });
@@ -150,6 +152,67 @@ test('after adoption a non-member refused E edit is undone for that sender only 
     assert.equal((la.db.prepare(`SELECT id FROM entries WHERE ulid = ?`).get(eOld) as { id: number }).id, officeId, 'and its laptop reverts');
     assert.ok(!fetchAll(store, 'carol', top).changes.some((w) => ownerOf(store, w) === eOld), 'another non-member gets nothing of it');
     assert.ok(fetchAll(store, 'owner', top).changes.some((w) => ownerOf(store, w) === eOld), 'E members still get the write-back');
+  } finally { setAllocator(null); lo.cleanup(); la.cleanup(); cleanup(); }
+});
+
+test('fix round 2: a forged change to a note the sender never received gets no rows back (TT and E)', async () => {
+  const { store, cleanup } = tempStore();
+  const lo = laptop(), lc = laptop(), ld = laptop();
+  try {
+    for (const d of ['owner', 'carol']) member(store, d);
+    const TT = registerProject(store, { ulid: newUlid(), name: 'Project TT', code: 'TT' }, 'owner').ulid;
+    initModule(lo.db, { slug: 'm', name: 'M' });
+    const eOld = await note(lo.db, 'e-old');
+    const tt = await note(lo.db, 'tt-secret', { store, ulid: TT, code: 'TT' });
+    const all = readOwnChanges(lo.db, 0);
+    acceptChanges(store, 'owner', all);
+    adoptE(store, { name: 'emp1st', ownerDevice: 'owner' });
+    member(store, 'dave'); // joined after adoption: never received E
+    // Both forgers get the cells out of band (the worst case: they know more than the ULID).
+    for (const l of [lc, ld]) applyChanges(l.db, all.map(decodeChange));
+    const top = lastSeq(store);
+
+    // carol (not in TT) edits the TT note: refused (note.edit.any in TT).
+    let v = version(lc.db);
+    lc.db.prepare(`UPDATE entries SET title = 'forged' WHERE ulid = ?`).run(tt);
+    assert.ok(acceptChanges(store, 'carol', readOwnChanges(lc.db, v)).refused.length > 0);
+    // dave (not in E, never received it) renumbers the E note: refused (NUMBER).
+    v = version(ld.db);
+    ld.db.prepare(`UPDATE entries SET id = 99999 WHERE ulid = ?`).run(eOld);
+    assert.ok(acceptChanges(store, 'dave', readOwnChanges(ld.db, v)).refused.length > 0);
+
+    assert.equal(count(store, `origin LIKE 'post-office>%'`), 0, 'no write-back is addressed to an unproven sender');
+    assert.ok(!fetchAll(store, 'carol', top).changes.some((w) => ownerOf(store, w) === tt), 'carol gets nothing of the TT note');
+    assert.ok(!fetchAll(store, 'dave', top).changes.some((w) => ownerOf(store, w) === eOld), 'dave gets nothing of the E note');
+    assert.ok(fetchAll(store, 'owner', top).changes.some((w) => ownerOf(store, w) === tt), 'members still get the write-back');
+  } finally { setAllocator(null); lo.cleanup(); lc.cleanup(); ld.cleanup(); cleanup(); }
+});
+
+test('fix round 2: a refused delete/re-insert by a proven holder is never answered with the whole row', async () => {
+  const { store, cleanup } = tempStore();
+  const lo = laptop(), la = laptop();
+  try {
+    for (const d of ['owner', 'abhishek']) member(store, d);
+    initModule(lo.db, { slug: 'm', name: 'M' });
+    const eOld = await note(lo.db, 'e-old');
+    acceptChanges(store, 'owner', readOwnChanges(lo.db, 0));
+    const got = fetchAll(store, 'abhishek');
+    applyChanges(la.db, got.changes.map(decodeChange));
+    fetchAll(store, 'abhishek', got.lastSeq);
+    adoptE(store, { name: 'emp1st', ownerDevice: 'owner' });
+    // An E member edits the note after adoption: abhishek must not learn the new value.
+    const vo = version(lo.db);
+    updateEntry(lo.db, { ulid: eOld, summary: 'post-adoption secret' });
+    acceptChanges(store, 'owner', readOwnChanges(lo.db, vo));
+    const top = lastSeq(store);
+    const v = version(la.db);
+    la.db.pragma('foreign_keys = OFF');
+    la.db.prepare(`DELETE FROM entries WHERE ulid = ?`).run(eOld); // a hard delete: refused
+    const r = acceptChanges(store, 'abhishek', readOwnChanges(la.db, v));
+    assert.ok(r.refused.length > 0, 'notes are never hard-deleted');
+    const a = fetchAll(store, 'abhishek', top);
+    assert.ok(!a.changes.some((w) => ownerOf(store, w) === eOld), 'no row of the note: the whole-row rewrite follows its stamp (E)');
+    assert.ok(!a.changes.some((w) => String(decodeChange(w).val ?? '').includes('post-adoption secret')));
   } finally { setAllocator(null); lo.cleanup(); la.cleanup(); cleanup(); }
 });
 

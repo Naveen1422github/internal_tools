@@ -4,12 +4,16 @@
 // E_PROJECT_ULID, so they reach E's members only (and a new member by replay).
 // Before adoption nothing changes. The E counter stays po_meta.counter.
 import { E_PROJECT_ULID } from "@collab-mcp/core";
-import { StoreError, setMeta, type Store } from "./store.js";
+import { StoreError, getMeta, setMeta, type Store } from "./store.js";
 import { seedNewProject } from "./access.js";
-import { prep, resolveStamps, type DeliveryRow } from "./deliveries.js";
+import { lastSeq, prep, resolveStamps, type DeliveryRow } from "./deliveries.js";
 
 /** po_meta: "1" once this office has adopted E. */
 export const E_ADOPTED_META = "e_adopted";
+/** po_meta: the last delivery seq at adoption (every E row at or below it was a NULL row, sent to every member). */
+export const E_ADOPTED_SEQ_META = "e_adopted_seq";
+/** po_meta: JSON {device: receive_bookmark} of the live members at adoption (what each had acknowledged applying). */
+export const E_ADOPTED_BOOKMARKS_META = "e_adopted_bookmarks";
 /** The tables whose rows belong to a note; a NULL stamp there means E once adopted. `modules` is not one. */
 export const NOTE_TABLES: ReadonlySet<string> = new Set(["entries", "refs", "entry_modules", "entry_revisions"]);
 
@@ -53,7 +57,39 @@ export function adoptE(db: Store, o: { name: string; ownerDevice: string }): { r
       .all() as DeliveryRow[];
     const seqs = resolveStamps(db, rows).filter((r) => r.stamp === null || r.stamp === "?").map((r) => r.seq);
     if (seqs.length) prep(db, `UPDATE po_deliveries SET project_ulid = ? WHERE seq IN (SELECT value FROM json_each(?))`).run(E_PROJECT_ULID, JSON.stringify(seqs));
+    setMeta(db, E_ADOPTED_SEQ_META, String(lastSeq(db)));
+    const marks = db.prepare(`SELECT device_id, receive_bookmark FROM po_members WHERE revoked_at IS NULL`).all() as Array<{ device_id: string; receive_bookmark: number }>;
+    setMeta(db, E_ADOPTED_BOOKMARKS_META, JSON.stringify(Object.fromEntries(marks.map((m) => [m.device_id, m.receive_bookmark]))));
     setMeta(db, E_ADOPTED_META, "1");
     return { restamped: seqs.length };
   }).immediate();
+}
+
+/** A cr-sqlite packed pk of one text cell (the layout firstTextCell reads): an entries pk. */
+export function packTextPk(s: string): Buffer {
+  const b = Buffer.from(s, "utf8");
+  const len: number[] = [];
+  for (let n = b.length; n > 0; n = Math.floor(n / 256)) len.unshift(n % 256);
+  if (!len.length) len.push(0);
+  return Buffer.concat([Buffer.from([1, (len.length << 3) | 3, ...len]), b]);
+}
+
+/**
+ * Fix round 2: may the office address a write-back of `ulid` to `device` (it can't view
+ * the note's stamp)? Only with proof the device already holds the note:
+ * (a) it is the note's recorded owner (po_note_owners), or
+ * (b) the note's entries row was a NULL (no-project, pre-E-adoption) delivery, which went
+ *     to every member, at or below the bookmark `device` had acknowledged at adoption.
+ * Otherwise no: the write-back follows its stamp like any office row.
+ */
+export function holdsNote(db: Store, device: string, ulid: string): boolean {
+  if (prep(db, `SELECT 1 FROM po_note_owners WHERE ulid = ? AND device_id = ?`).get(ulid, device)) return true;
+  if (!isEAdoptedOffice(db)) return false;
+  let marks: Record<string, unknown> = {};
+  try { marks = JSON.parse(getMeta(db, E_ADOPTED_BOOKMARKS_META) ?? "{}"); } catch { return false; }
+  const mark = marks[device], upto = Number(getMeta(db, E_ADOPTED_SEQ_META) ?? 0);
+  if (typeof mark !== "number" || mark <= 0) return false;
+  return !!prep(db,
+    `SELECT 1 FROM po_deliveries WHERE tbl = 'entries' AND pk = ? AND project_ulid = ? AND seq <= ? AND seq <= ? LIMIT 1`,
+  ).get(packTextPk(ulid), E_PROJECT_ULID, upto, mark);
 }

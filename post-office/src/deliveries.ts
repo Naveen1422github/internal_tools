@@ -489,8 +489,10 @@ export function fetchDeliveries(db: Store, deviceId: string, after: number, limi
     const forMe = WRITEBACK_TO + deviceId;
     const changes = rows
       .filter((r) => {
-        if (r.origin === forMe) return true; // the undo of this device's own refused change (ruling a)
-        if (r.origin === deviceId || (r.project_ulid !== null && !mine.has(r.project_ulid))) return false;
+        // The undo of this device's own refused change (ruling a): past the project filter,
+        // but never past the R14 barrier (an owed project's rows wait for the replay, which serves by stamp).
+        const mineOrForMe = r.origin === forMe || r.project_ulid === null || mine.has(r.project_ulid);
+        if (r.origin === deviceId || !mineOrForMe) return false;
         if (r.project_ulid !== null && owed.has(r.project_ulid)) { withheld.add(r.project_ulid); return false; }
         return true;
       })

@@ -3,7 +3,7 @@ import { rootRevId, type RawChange } from "@collab-mcp/core";
 import type { Store } from "./store.js";
 import { memberProjects } from "./access.js";
 import { OFFICE_ORIGIN, WRITEBACK_TO, RECORD_STAMPED, firstTextCell, textCells, prep, revisionEntries, type DeliveryRow } from "./deliveries.js";
-import { eStamp, isEAdoptedOffice } from "./e-adopt.js";
+import { eStamp, holdsNote, isEAdoptedOffice } from "./e-adopt.js";
 
 // RnR S2, R6: the office's undo of a refused group. Mechanism (b) of the spike
 // (docs/superpowers/plans/2026-10-18-collab-rnr-s2-spike.md §1, §2): insert into
@@ -34,7 +34,8 @@ SELECT j.value AS ulid, e.ulid IS NOT NULL AS held, e.project_ulid, r.ulid IS NO
 interface Row { table: string; pk: Buffer; key: string | null; cl: number; cells: Map<string, number>; ulid: string | null }
 /** The office's copy of a row: causal length, each cell's clock, the values (alive rows). */
 interface Held { cl: number; cv: Map<string, { cv: number; dbv: number }>; values: Record<string, unknown> | null }
-interface Cell { table: string; pk: Buffer; cid: string; val: unknown; cv: number; cl: number; stamp: string | null }
+/** `ulid` + `touched`: a cell the refused change named (or a tombstone of a row the sender made): it may be addressed to the sender. */
+interface Cell { table: string; pk: Buffer; cid: string; val: unknown; cv: number; cl: number; stamp: string | null; ulid?: string | null; touched?: boolean }
 
 /**
  * R6: for each refused (table, pk, cid) on a row the office holds, the office's
@@ -98,7 +99,7 @@ export function writeBack(db: Store, refused: RawChange[], projects?: Map<string
       // A child row the office never had: tombstone it (spike §2), unless its pk is deterministic.
       if (x.table === "entries" || x.table === "modules" || x.cl % 2 === 0) continue;
       if (x.table === "entry_revisions" && x.key === rootRevId(x.ulid!)) continue;
-      out.push({ table: x.table, pk: x.pk, cid: "-1", val: null, cv: x.cl + 1, cl: x.cl + 1, stamp });
+      out.push({ table: x.table, pk: x.pk, cid: "-1", val: null, cv: x.cl + 1, cl: x.cl + 1, stamp, ulid: x.ulid, touched: true });
       continue;
     }
     const officeCl = h.cl;
@@ -112,7 +113,7 @@ export function writeBack(db: Store, refused: RawChange[], projects?: Map<string
       for (const [cid, max] of x.cells) {
         const c = h.cv.get(cid);
         if (!c || c.cv > max) continue; // the office's value already wins (or a resend: it holds max + 1)
-        out.push({ table: x.table, pk: x.pk, cid, val: h.values[cid], cv: max + 1, cl: officeCl, stamp });
+        out.push({ table: x.table, pk: x.pk, cid, val: h.values[cid], cv: max + 1, cl: officeCl, stamp, ulid: x.ulid, touched: true });
       }
     } // x.cl < officeCl: the sender's row is behind; the office's row is already on its way to it
   }
@@ -132,16 +133,22 @@ export function writeBack(db: Store, refused: RawChange[], projects?: Map<string
   // never had, and would hold it as '?' forever).
   const rec = prep(db, RECORD_STAMPED);
   const done: DeliveryRow[] = [];
-  // Ruling a: a row the sender can't view by its stamp is addressed to the sender too
-  // (it already holds the note: nothing leaks). Stamp NULL reaches everyone anyway.
+  // Ruling a + fix round 2: a write-back the sender can't view by its stamp is addressed
+  // to the sender too, but only (1) a cell its refused change named, or the tombstone of a
+  // row it made (never the whole-row rewrite of a refused delete/re-insert), and (2) when
+  // the office can prove the sender holds the note (holdsNote). Else it follows its stamp.
   let viewable: Set<string> | null = null;
-  const originOf = (stamp: string | null): string => {
-    if (sender === undefined || stamp === null) return OFFICE_ORIGIN;
+  const proven = new Map<string, boolean>();
+  const originOf = (c: Cell): string => {
+    if (sender === undefined || c.stamp === null || !c.touched || !c.ulid) return OFFICE_ORIGIN;
     viewable ??= new Set(memberProjects(db, sender));
-    return viewable.has(stamp) ? OFFICE_ORIGIN : WRITEBACK_TO + sender;
+    if (viewable.has(c.stamp)) return OFFICE_ORIGIN;
+    let ok = proven.get(c.ulid);
+    if (ok === undefined) proven.set(c.ulid, (ok = holdsNote(db, sender, c.ulid)));
+    return ok ? WRITEBACK_TO + sender : OFFICE_ORIGIN;
   };
   out.forEach((c, i) => {
-    const origin = originOf(c.stamp);
+    const origin = originOf(c);
     const x = rec.run(origin, c.table, c.pk, c.cid, c.val, c.cv, stored, site, c.cl, i, c.stamp);
     if (x.changes === 1) done.push({ seq: Number(x.lastInsertRowid), tbl: c.table, pk: c.pk, origin, held: 0, stamp: c.stamp });
   });
