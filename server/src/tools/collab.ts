@@ -4,7 +4,7 @@ import {
   addEntry, addEntryAsync, deleteEntry, supersede, doctor,
   editEntry, EntryNotFoundError, reassignModule, upsertModule, deleteModule,
   liveEntry, ftsJoin, readSyncOverview, NeedsMergeError, formatEntryRef, ReadOnlyNoteError,
-  AccessDeniedError, getEntryByUlid, isUlid, getEntryByRef, parseNoteRef, hasSeries, listBindings, noteDestination, ProjectNotFoundError, findProject, forTheWeb, type NoteRef,
+  AccessDeniedError, getEntryByUlid, isUlid, getEntryByRef, parseNoteRef, hasSeries, listBindings, isEAdopted, noteDestination, ProjectNotFoundError, findProject, forTheWeb, type NoteRef,
 } from '@collab-mcp/core';
 
 const db = getDb();
@@ -409,12 +409,14 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
     try {
       // UI parity Task 7c: the project a module is bound to, if any (its notes follow that project).
       const bound = new Map(listBindings(db).map((b) => [b.module, b.project_code]));
+      // Local-first Task 8: once E is adopted a module follows its project, so each row says which (null: none).
+      const eAdopted = isEAdopted(db);
       const rows = (db.prepare('SELECT * FROM modules ORDER BY slug').all() as any[])
-        .map((r) => (bound.has(r.slug) ? { ...r, bound_project: bound.get(r.slug) } : r));
+        .map((r) => ({ ...r, ...(bound.has(r.slug) ? { bound_project: bound.get(r.slug) } : {}), ...(eAdopted ? { project: bound.get(r.slug) ?? null } : {}) }));
       // Sharing on: each module says whether it goes to the team (absent when off).
       const overview = readSyncOverview(db);
       const shared = overview.enabled ? new Set(overview.sharedModules) : null;
-      send(200, { results: shared ? rows.map((r: any) => ({ ...r, shared: shared.has(r.slug) })) : rows });
+      send(200, { ...(eAdopted ? { eAdopted } : {}), results: shared && !eAdopted ? rows.map((r: any) => ({ ...r, shared: shared.has(r.slug) })) : rows });
     } catch (err: any) {
       send(errStatus(err), { error: err.message });
     }

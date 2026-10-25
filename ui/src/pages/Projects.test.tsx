@@ -58,6 +58,15 @@ describe('Projects page', () => {
     (await rowOf('OL')).getByText('Team (left)');
   });
 
+  it('lists E as emp1st (E) shared with its members', async () => {
+    page(() => api.projectsList.mockResolvedValue({
+      ...LIST(), projects: [row({ ulid: 'u-e', name: 'emp1st', code: 'E', mode: 'team', team: 'fp', notes: 40 }), ...LIST().projects],
+    }));
+    const e = await rowOf('E');
+    e.getByText('emp1st (E) · shared with its members');
+    expect(e.queryByText('Solo')).toBeNull();
+  });
+
   it('creates a solo project and shows core\'s sentence', async () => {
     page(() => api.projectCreate.mockResolvedValue({ project: {}, lines: ['Created project SC (Scratch), solo: …', 'Use it…'] }));
     fireEvent.click(await screen.findByRole('button', { name: 'New project' }));

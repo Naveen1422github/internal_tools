@@ -27,7 +27,9 @@ export default function SyncBar() {
   return (
     <div role="status" className={`px-4 py-1.5 text-xs flex justify-between gap-4 ${TONE[v.tone]}`}>
       <span>{v.text}{v.fix ? <> · <code>{v.fix}</code></> : null} · <Link to="/health" className="underline">check setup</Link></span>
-      {o?.enabled && <span className="opacity-70">shared: {o.sharedModules.join(', ') || 'none'}</span>}
+      {o?.enabled && (o.eAdopted
+        ? (o.privateKept ?? 0) > 0 && <span className="opacity-70">{o.privateKept} private E note{o.privateKept === 1 ? '' : 's'} kept on this laptop</span>
+        : <span className="opacity-70">shared: {o.sharedModules.join(', ') || 'none'}</span>)}
     </div>
   );
 }

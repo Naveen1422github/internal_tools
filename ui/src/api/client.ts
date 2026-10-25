@@ -181,7 +181,7 @@ export const notebooksList = () => sendJson<NotebooksView>('GET', '/api/notebook
 export const tasks = () => getJson<{ results: any[] }>(`/api/collab/tasks`);
 
 // --- Modules ---
-export const modules = () => getJson<{ results: any[] }>(`/api/collab/modules`);
+export const modules = () => getJson<{ results: any[]; eAdopted?: boolean }>(`/api/collab/modules`);
 export const moduleCard = (slug: string) =>
   getJson<any>(`/api/collab/module-card${qs({ slug })}`);
 
@@ -208,6 +208,8 @@ export type SyncOverview =
   | { enabled: false }
   | {
       enabled: true; postOffice: string; deviceId: string; sharedModules: string[]; unsent: number;
+      /** Live notes this laptop keeps private; eAdopted: E is a shared project here, so modules no longer decide sharing. */
+      privateKept?: number; eAdopted?: boolean;
       courier: { running: boolean; state: string; lastError: string | null; lastPushAt: string | null; lastPullAt: string | null };
       lastContactAt: string | null;
       health: 'ok' | 'behind' | 'not-syncing' | 'needs-update' | 'revoked' | 'unknown';

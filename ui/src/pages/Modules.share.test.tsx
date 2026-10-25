@@ -83,4 +83,26 @@ describe('Modules page: share with the team', () => {
     fireEvent.click(stop);
     expect((await screen.findByRole('alert')).textContent).toContain(no);
   });
+
+  it('not adopted: the old toggle still renders and there is no Project line', async () => {
+    page(() => api.modules.mockResolvedValue({ eAdopted: false, results: [{ slug: 'ledger', name: 'Ledger', status: 'active', shared: false }] }));
+    await open();
+    await screen.findByRole('button', { name: 'Share with the team' });
+    expect(screen.queryByText(/^Project:/)).toBeNull();
+  });
+
+  it('adopted: no share toggle or shared badge; each module shows its project code or a dash', async () => {
+    page(() => api.modules.mockResolvedValue({ eAdopted: true, results: [
+      { slug: 'ledger', name: 'Ledger', status: 'active', shared: true, project: 'SH' },
+      { slug: 'other', name: 'Other', status: 'active', project: null },
+    ] }));
+    await open();
+    await screen.findByText('g');
+    expect(screen.queryByRole('button', { name: 'Share with the team' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Stop sharing' })).toBeNull();
+    expect(screen.queryByText('⇄ Shared with team')).toBeNull();
+    expect(screen.getByText('Project: SH')).toBeTruthy();
+    expect(screen.getByText('Project: –')).toBeTruthy();
+    expect(api.teamOverview).not.toHaveBeenCalled();
+  });
 });

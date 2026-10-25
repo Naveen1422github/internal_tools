@@ -1,10 +1,13 @@
 // file: server/src/tools/team.ts
 import http from 'node:http';
 import {
-  getDb, postOfficeTargetFromDb, requestJson, listProjects, isUlid, formatJoinCode, rememberSharedModules, E_PROJECT_ULID,
+  getDb, postOfficeTargetFromDb, requestJson, listProjects, isUlid, formatJoinCode, rememberSharedModules, E_PROJECT_ULID, isEAdopted,
   AccessRevokedError, SchemaMismatchError, PinMismatchError,
 } from '@collab-mcp/core';
 import { NOT_CONNECTED, REVOKED, UNREACHABLE } from './office-errors.js';
+
+// The same sentence `collab sync share|unshare` prints, and the office's 410 answer, once E is adopted.
+const MODULES_FOLLOW_PROJECT = 'modules follow their project now: collab project bind <module> <CODE>';
 
 // RnR S3 (team admin): the web UI asks the post office as this laptop's device;
 // the office decides. Its status and wording pass through unchanged (Review
@@ -144,6 +147,8 @@ export const routes: Record<string, (req: http.IncomingMessage, res: http.Server
 
   // UI parity Task 7c: `collab sync share|unshare <module>` on the web. The office checks office.module.share.
   'POST /api/sync/share': guarded(async (_req, send, b) => {
+    // Once E is adopted a module follows its project; the office says the same (410).
+    if (isEAdopted(db)) return send(410, { error: MODULES_FOLLOW_PROJECT });
     if (!isText(b.slug)) bad('Choose a module.');
     if (typeof b.shared !== 'boolean') bad('"shared" must be true or false.');
     const r = await ask('POST', '/v1/modules', { slug: b.slug, shared: b.shared });

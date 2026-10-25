@@ -2,7 +2,7 @@
 import http from 'node:http';
 import {
   getDb, readSyncOverview, getMergeView, resolveWithText, resolveNeedsMerge,
-  VersionsChangedError, liveEntry, hasSeries,
+  VersionsChangedError, liveEntry, hasSeries, isEAdopted,
 } from '@collab-mcp/core';
 import { parseRefParam, REF_FORMS } from './collab.js';
 import { callGroq } from './ai.js';
@@ -11,10 +11,12 @@ import { callGroq } from './ai.js';
 const db = getDb();
 
 type Send = (status: number, body: any) => void;
+/** The status the bar shows, plus whether this laptop adopted E (then modules no longer decide sharing). Off stays { enabled: false }. */
+const withAdoption = (o: ReturnType<typeof readSyncOverview>) => (o.enabled ? { ...o, eAdopted: isEAdopted(db) } : o);
 const idParam = (req: http.IncomingMessage) => new URL(req.url!, 'http://x').searchParams.get('id');
 
 export const routes: Record<string, (req: http.IncomingMessage, res: http.ServerResponse, send: Send, body: any) => Promise<any>> = {
-  'GET /api/sync/status': async (_req, _res, send) => send(200, readSyncOverview(db)),
+  'GET /api/sync/status': async (_req, _res, send) => send(200, withAdoption(readSyncOverview(db))),
 
   'GET /api/sync/needs-merge': async (_req, _res, send) => {
     const has = db.prepare(`SELECT 1 FROM pragma_table_info('entries') WHERE name = 'needs_merge'`).get();

@@ -165,7 +165,7 @@ function Row({ row, modules, renameWhy, promoteWhy, onRename, onPromote, onCopy,
     <tr className="align-top">
       <td className="px-3 py-2">
         <div className="font-mono text-xs text-gray-500">{row.code}</div>
-        <div className="font-medium">{row.name}</div>
+        <div className="font-medium">{row.code === 'E' ? `${row.name} (E) · shared with its members` : row.name}</div>
       </td>
       <td className="px-3 py-2">{modeLabel(row)}</td>
       <td className="px-3 py-2 whitespace-nowrap">

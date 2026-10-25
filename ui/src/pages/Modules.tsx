@@ -8,6 +8,8 @@ import ShareToggle from '../sync/ShareToggle';
 export default function Modules() {
   const { openDrawer } = useUi();
   const [moduleList, setModuleList] = useState<any[]>([]);
+  // Once this laptop adopted E, a module follows its project: no share switch, a Project line instead.
+  const [eAdopted, setEAdopted] = useState(false);
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [card, setCard] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
@@ -15,7 +17,7 @@ export default function Modules() {
 
   useEffect(() => {
     modules()
-      .then(res => setModuleList(res.results))
+      .then(res => { setModuleList(res.results); setEAdopted(!!res.eAdopted); })
       .catch(console.error)
       .finally(() => setLoading(false));
   }, []);
@@ -59,7 +61,10 @@ export default function Modules() {
                 </span>
                 <span className="text-[10px] font-mono text-gray-400">{m.slug}</span>
               </div>
-              {m.shared !== undefined && (
+              {eAdopted && (
+                <div className="mt-2 text-[10px] font-medium text-gray-600 dark:text-gray-400">Project: {m.project ?? '–'}</div>
+              )}
+              {!eAdopted && m.shared !== undefined && (
                 <div className="mt-2">
                   <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
                     m.shared ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
@@ -88,7 +93,7 @@ export default function Modules() {
                 {(() => {
                   // Only on a notebook that shares (the list then says shared or private for each module).
                   const m = moduleList.find((x) => x.slug === card.module.slug);
-                  if (m?.shared === undefined) return null;
+                  if (eAdopted || m?.shared === undefined) return null;
                   return (
                     <div className="mt-4">
                       <ShareToggle

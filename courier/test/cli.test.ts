@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import { migrateTo, addEntry, isSyncEnabled, hasCrrTables, getSyncValue, setSyncValue, SYNC_KEYS, E_ADOPTED_KEY } from '@collab-mcp/core';
+import { migrateTo, addEntry, isSyncEnabled, hasCrrTables, getSyncValue, setSyncValue, SYNC_KEYS, E_ADOPTED_KEY, NEVER_SEND_KEY, addEntryAsync } from '@collab-mcp/core';
 import { tempDir, startOffice, openWriter, closeWriter, until } from './world.js';
 import { runCli } from '../src/cli.js';
 import type { Command } from '../src/autostart.js';
@@ -214,5 +214,25 @@ test('once E is adopted here, sync share|unshare say modules follow their projec
     }
     const m = io();
     assert.equal((await runCli(['sync', 'modules'], m.io, e.deps())).code, 0);
+  } finally { await e.done(); }
+});
+
+test('sync status says how many private E notes stay on this laptop, only when there are some', async () => {
+  const e = await env();
+  try {
+    await runCli(['sync', 'setup', e.office.code('b').code, '--db', e.db, '--no-autostart', '--include-staged'], io().io, e.deps());
+    const none = io();
+    await runCli(['sync', 'status'], none.io, e.deps());
+    assert.doesNotMatch(none.text(), /private E notes/);
+    const w = openWriter(e.db);
+    try {
+      const a = await addEntryAsync(w, { type: 'decision', title: 'mine', summary: 's' } as any);
+      const b = await addEntryAsync(w, { type: 'decision', title: 'also mine', summary: 's' } as any);
+      setSyncValue(w, E_ADOPTED_KEY, '1');
+      setSyncValue(w, NEVER_SEND_KEY, JSON.stringify([a.ulid, b.ulid]));
+    } finally { closeWriter(w); }
+    const some = io();
+    await runCli(['sync', 'status'], some.io, e.deps());
+    assert.match(some.text(), /2 private E notes kept on this laptop/);
   } finally { await e.done(); }
 });

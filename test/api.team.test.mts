@@ -324,6 +324,31 @@ test('module share: the office decides (office.module.share); its answer lists t
   assert.deepEqual([bad.status, bad.body], [400, { error: '"shared" must be true or false.' }]);
 });
 
+// Local-first Task 8: once this laptop adopted E, modules follow their project.
+test('module share after E adoption: 410 with the bind sentence; the module list says each module project', async () => {
+  const had = syncValue(core.E_ADOPTED_KEY);
+  core.upsertModule(srv.db, { slug: 'ledger2' });
+  core.upsertModule(srv.db, { slug: 'ledger3' });
+  try {
+    core.setSyncValue(srv.db, core.E_ADOPTED_KEY, '1');
+    const r = await srv.api('/api/sync/share', { slug: 'ledger', shared: true });
+    assert.deepEqual([r.status, r.body], [410, { error: 'modules follow their project now: collab project bind <module> <CODE>' }]);
+    core.bindModule(srv.db, 'ledger2', 'TM');
+    const list = (await srv.api('/api/collab/modules')).body;
+    assert.equal(list.eAdopted, true);
+    assert.equal(list.results.find((m: any) => m.slug === 'ledger2').project, 'TM');
+    assert.equal(list.results.find((m: any) => m.slug === 'ledger3').project, null);
+    assert.equal((await srv.api('/api/sync/status')).body.eAdopted, true);
+  } finally {
+    core.unbindModule(srv.db, 'ledger2');
+    if (had === undefined) srv.db.prepare(`DELETE FROM sync_state WHERE key = ?`).run(core.E_ADOPTED_KEY);
+    else core.setSyncValue(srv.db, core.E_ADOPTED_KEY, had);
+  }
+  const list = (await srv.api('/api/collab/modules')).body;
+  assert.ok(!list.eAdopted, 'not adopted: nothing changes');
+  assert.ok(!('project' in list.results[0]));
+});
+
 // Last: the office stays down.
 test('office down -> 503 plain message', async () => {
   await srv.office.down();

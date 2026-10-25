@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import {
   resolveDbPath, loadCrsqlite, getSyncValue, isEAdopted,
-  postOfficeTargetFromDb, unsentSharedCount, requestJson, type PostOfficeTarget,
+  postOfficeTargetFromDb, unsentSharedCount, privateKeptCount, requestJson, type PostOfficeTarget,
   describeMemberState, TEAM_STATUS_NOTE,
   startupProblem, startHeartbeat, runtimeDirFor, readBuildInfo, nameForPath,
 } from "@collab-mcp/core";
@@ -244,11 +244,12 @@ export async function runCli(argv: string[], io: Io, deps: CliDeps = {}): Promis
         const running = pid !== null && isAlive(pid);
         const st = existsSync(files.status) ? (JSON.parse(readFileSync(files.status, "utf8")) as CourierStatus) : null;
         const db = openReadable(cfg.dbPath);
-        let sent = 0, recv = 0, unsent = 0;
+        let sent = 0, recv = 0, unsent = 0, privateKept = 0;
         try {
           sent = Number(getSyncValue(db, COURIER_KEYS.sent) ?? 0);
           recv = Number(getSyncValue(db, COURIER_KEYS.recv) ?? 0);
           unsent = unsentSharedCount(db);
+          privateKept = privateKeptCount(db);
         } finally { closeReadable(db); }
         io.out(`notes DB:     ${cfg.dbPath}`);
         io.out(`post office:  ${cfg.postOffice} (this machine: ${cfg.device})`);
@@ -257,6 +258,7 @@ export async function runCli(argv: string[], io: Io, deps: CliDeps = {}): Promis
         if (st?.lastError) io.out(`last error:   ${st.lastError}`);
         io.out(`bookmarks:    sent up to local version ${sent}; received up to delivery #${recv}`);
         io.out(`not yet sent: ${unsent} change(s) in shared modules`);
+        if (privateKept > 0) io.out(`${privateKept} private E note${privateKept === 1 ? "" : "s"} kept on this laptop`);
         io.out(`start at login: ${cfg.autostart ? "yes" : "no"}`);
         if (opt.team === true) {
           const r = await requestJson(target(), "GET", "/v1/status");
