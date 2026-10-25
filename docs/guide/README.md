@@ -6,7 +6,7 @@
 - **Who reads it:** you. Claude does not use this guide to make decisions. Collab notes (the `COLLAB-…` entries) stay the working record. Where this guide and collab disagree, collab wins, and the guide is out of date.
 - **References:** `COLLAB-123` is a note in your collab notebook. Ask Claude "show me COLLAB-123" to read the full note behind any line here.
 
-Last updated: **2026-10-18** (after RnR stage S1 went live).
+Last updated: **2026-10-25** (office on the Oracle VM, backups, do-it-yourself runbook in file 7).
 
 ## Read in this order
 
@@ -18,7 +18,7 @@ Last updated: **2026-10-18** (after RnR stage S1 went live).
 | 4 | [Team sync](04-team-sync.md) | How two laptops share notes: courier + post office |
 | 5 | [Roles & permissions (RnR)](05-roles-and-permissions.md) | Who may do what, and how the AI is limited |
 | 6 | [Decision log](06-decision-log.md) | Every big decision: what, why, what was rejected |
-| 7 | [Running it](07-running-it.md) | Commands, upgrades, backups, known traps |
+| 7 | [Running it](07-running-it.md) | **Do-it-yourself runbook:** people, sharing, onboarding, the VM, backups + restore, upgrades, troubleshooting |
 | 8 | [Open items](08-open-items.md) | What's not done yet, what's parked, what's next |
 
 ## How to learn your own system from this
