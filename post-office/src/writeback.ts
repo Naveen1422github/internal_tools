@@ -1,9 +1,9 @@
 // file: post-office/src/writeback.ts
-import { rootRevId, type RawChange } from "@collab-mcp/core";
+import { E_PROJECT_ULID, rootRevId, type RawChange } from "@collab-mcp/core";
 import type { Store } from "./store.js";
 import { memberProjects } from "./access.js";
 import { OFFICE_ORIGIN, WRITEBACK_TO, RECORD_STAMPED, firstTextCell, textCells, prep, revisionEntries, type DeliveryRow } from "./deliveries.js";
-import { eStamp, holdsNote, isEAdoptedOffice } from "./e-adopt.js";
+import { cellSeenBy, eStamp, noteProof, isEAdoptedOffice } from "./e-adopt.js";
 
 // RnR S2, R6: the office's undo of a refused group. Mechanism (b) of the spike
 // (docs/superpowers/plans/2026-10-18-collab-rnr-s2-spike.md §1, §2): insert into
@@ -138,14 +138,17 @@ export function writeBack(db: Store, refused: RawChange[], projects?: Map<string
   // row it made (never the whole-row rewrite of a refused delete/re-insert), and (2) when
   // the office can prove the sender holds the note (holdsNote). Else it follows its stamp.
   let viewable: Set<string> | null = null;
-  const proven = new Map<string, boolean>();
+  const proven = new Map<string, "owner" | number | null>();
   const originOf = (c: Cell): string => {
     if (sender === undefined || c.stamp === null || !c.touched || !c.ulid) return OFFICE_ORIGIN;
     viewable ??= new Set(memberProjects(db, sender));
     if (viewable.has(c.stamp)) return OFFICE_ORIGIN;
-    let ok = proven.get(c.ulid);
-    if (ok === undefined) proven.set(c.ulid, (ok = holdsNote(db, sender, c.ulid)));
-    return ok ? WRITEBACK_TO + sender : OFFICE_ORIGIN;
+    let proof = proven.get(c.ulid);
+    if (proof === undefined) proven.set(c.ulid, (proof = noteProof(db, sender, c.ulid)));
+    if (proof === "owner") return WRITEBACK_TO + sender;
+    // Proof b (fix round 3): only a value the sender could already see; a tombstone (cid -1) carries none.
+    if (typeof proof === "number" && c.stamp === E_PROJECT_ULID && (c.cid === "-1" || cellSeenBy(db, proof, c.table, c.pk, c.cid))) return WRITEBACK_TO + sender;
+    return OFFICE_ORIGIN;
   };
   out.forEach((c, i) => {
     const origin = originOf(c);

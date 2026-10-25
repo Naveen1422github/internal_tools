@@ -75,21 +75,31 @@ export function packTextPk(s: string): Buffer {
 }
 
 /**
- * Fix round 2: may the office address a write-back of `ulid` to `device` (it can't view
+ * Fix rounds 2-3: may the office address a write-back of `ulid` to `device` (it can't view
  * the note's stamp)? Only with proof the device already holds the note:
- * (a) it is the note's recorded owner (po_note_owners), or
- * (b) the note's entries row was a NULL (no-project, pre-E-adoption) delivery, which went
- *     to every member, at or below the bookmark `device` had acknowledged at adoption.
- * Otherwise no: the write-back follows its stamp like any office row.
+ * - "owner": it is the note's recorded owner (po_note_owners): any named cell may go back;
+ * - a number (proof b): the note's entries row was a NULL (no-project, pre-E-adoption)
+ *   delivery, which went to every member, at or below the bookmark `device` had acknowledged
+ *   at adoption. The number is min(e_adopted_seq, that bookmark): a cell may go back only
+ *   when its latest delivery is at or below it (cellSeenBy), so a value an E member wrote
+ *   after adoption never reaches a non-member through a forged high col_version.
+ * - null: no proof; the write-back follows its stamp like any office row.
  */
-export function holdsNote(db: Store, device: string, ulid: string): boolean {
-  if (prep(db, `SELECT 1 FROM po_note_owners WHERE ulid = ? AND device_id = ?`).get(ulid, device)) return true;
-  if (!isEAdoptedOffice(db)) return false;
+export function noteProof(db: Store, device: string, ulid: string): "owner" | number | null {
+  if (prep(db, `SELECT 1 FROM po_note_owners WHERE ulid = ? AND device_id = ?`).get(ulid, device)) return "owner";
+  if (!isEAdoptedOffice(db)) return null;
   let marks: Record<string, unknown> = {};
-  try { marks = JSON.parse(getMeta(db, E_ADOPTED_BOOKMARKS_META) ?? "{}"); } catch { return false; }
-  const mark = marks[device], upto = Number(getMeta(db, E_ADOPTED_SEQ_META) ?? 0);
-  if (typeof mark !== "number" || mark <= 0) return false;
-  return !!prep(db,
-    `SELECT 1 FROM po_deliveries WHERE tbl = 'entries' AND pk = ? AND project_ulid = ? AND seq <= ? AND seq <= ? LIMIT 1`,
-  ).get(packTextPk(ulid), E_PROJECT_ULID, upto, mark);
+  try { marks = JSON.parse(getMeta(db, E_ADOPTED_BOOKMARKS_META) ?? "{}"); } catch { return null; }
+  const mark = marks[device], limit = Math.min(Number(getMeta(db, E_ADOPTED_SEQ_META) ?? 0), typeof mark === "number" ? mark : 0);
+  if (!(limit > 0)) return null;
+  // E rows only (idx_po_deliveries_project): every E row at or below e_adopted_seq was a NULL row.
+  return prep(db, `SELECT 1 FROM po_deliveries WHERE project_ulid = ? AND seq <= ? AND tbl = 'entries' AND pk = ? LIMIT 1`)
+    .get(E_PROJECT_ULID, limit, packTextPk(ulid)) ? limit : null;
+}
+
+/** Proof b, per cell: every delivery of this E cell is at or below `limit` (the sender could already see its value). */
+export function cellSeenBy(db: Store, limit: number, tbl: string, pk: Buffer, cid: string): boolean {
+  const r = prep(db, `SELECT MAX(seq) s FROM po_deliveries WHERE project_ulid = ? AND tbl = ? AND pk = ? AND cid = ?`)
+    .get(E_PROJECT_ULID, tbl, pk, cid) as { s: number | null };
+  return r.s !== null && r.s <= limit;
 }

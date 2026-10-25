@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import { addEntryAsync, updateEntry, initModule, setAllocator, readOwnChanges, applyChanges, decodeChange, newUlid, requestJson, E_PROJECT_ULID, type WireChange } from '@collab-mcp/core';
+import { addEntryAsync, updateEntry, initModule, setAllocator, readOwnChanges, applyChanges, decodeChange, encodeChange, newUlid, requestJson, E_PROJECT_ULID, type WireChange } from '@collab-mcp/core';
 import { tempStore, tempDir, laptop } from './helpers.js';
 import { office } from './office.js';
 import { acceptChanges, fetchDeliveries, fetchReplay, lastSeq } from '../src/deliveries.js';
@@ -213,6 +213,40 @@ test('fix round 2: a refused delete/re-insert by a proven holder is never answer
     const a = fetchAll(store, 'abhishek', top);
     assert.ok(!a.changes.some((w) => ownerOf(store, w) === eOld), 'no row of the note: the whole-row rewrite follows its stamp (E)');
     assert.ok(!a.changes.some((w) => String(decodeChange(w).val ?? '').includes('post-adoption secret')));
+  } finally { setAllocator(null); lo.cleanup(); la.cleanup(); cleanup(); }
+});
+
+test('fix round 3: a forged high col_version never returns a value an E member wrote after adoption', async () => {
+  const { store, cleanup } = tempStore();
+  const lo = laptop(), la = laptop();
+  try {
+    for (const d of ['owner', 'abhishek']) member(store, d);
+    initModule(lo.db, { slug: 'm', name: 'M' });
+    const N = await note(lo.db, 'old title');
+    acceptChanges(store, 'owner', readOwnChanges(lo.db, 0));
+    const got = fetchAll(store, 'abhishek');
+    applyChanges(la.db, got.changes.map(decodeChange));
+    fetchAll(store, 'abhishek', got.lastSeq); // acknowledged before adoption
+    const oldId = (la.db.prepare(`SELECT id FROM entries WHERE ulid = ?`).get(N) as { id: number }).id;
+    adoptE(store, { name: 'emp1st', ownerDevice: 'owner' });
+    const vo = version(lo.db);
+    updateEntry(lo.db, { ulid: N, title: 'new title after adoption' });
+    acceptChanges(store, 'owner', readOwnChanges(lo.db, vo));
+    const top = lastSeq(store);
+
+    // One group: a forged title at a huge col_version + a renumbering (refused: NUMBER refuses the group).
+    const v = version(la.db);
+    la.db.transaction(() => {
+      la.db.prepare(`UPDATE entries SET title = 'forged', id = 99999 WHERE ulid = ?`).run(N);
+    })();
+    const forged = readOwnChanges(la.db, v).map(decodeChange).map((c) => (c.table === 'entries' && c.cid === 'title' ? { ...c, col_version: 1_000_000 } : c)).map(encodeChange);
+    assert.ok(acceptChanges(store, 'abhishek', forged).refused.length > 0);
+
+    const a = fetchAll(store, 'abhishek', top).changes.map(decodeChange).filter((c) => c.table === 'entries');
+    assert.ok(!a.some((c) => String(c.val ?? '').includes('new title after adoption')), 'no row carries the E member’s new title');
+    assert.ok(!a.some((c) => c.cid === 'title'), 'the title undo follows its stamp (E)');
+    assert.ok(a.some((c) => c.cid === 'id' && c.val === oldId), 'the untouched id cell still undoes for him');
+    assert.ok(fetchAll(store, 'owner', top).changes.map(decodeChange).some((c) => c.cid === 'title'), 'E members get the title undo');
   } finally { setAllocator(null); lo.cleanup(); la.cleanup(); cleanup(); }
 });
 
