@@ -128,7 +128,7 @@ export async function runProject(args: string[], io: Io): Promise<CliResult> {
       case "default": {
         const [code] = words(rest);
         const db = getDb();
-        io.out(defaultProjectLine(code ? setDefaultProject(db, code) : getDefaultProject(db), !!code));
+        io.out(defaultProjectLine(db, code ? setDefaultProject(db, code) : getDefaultProject(db), !!code));
         return { code: 0 };
       }
       default:

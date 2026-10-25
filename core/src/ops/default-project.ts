@@ -3,7 +3,7 @@
 // Applies only once E is adopted: before that a no-project note is E, as today.
 import type { DB } from "../db.js";
 import { createProject, findProject, notFound, type Project } from "../projects.js";
-import { DEFAULT_PROJECT_KEY, isEProject } from "../e-project.js";
+import { DEFAULT_PROJECT_KEY, isEAdopted, isEProject } from "../e-project.js";
 import { getSyncValue, setSyncValue } from "../sync/state.js";
 
 export const FALLBACK_CODE = "PS";
@@ -56,7 +56,12 @@ export function ensureDefaultProject(db: DB): Project {
 }
 
 /** One line for `collab project default` and collab_project_default. */
-export function defaultProjectLine(p: Project | null, justSet: boolean): string {
+export function defaultProjectLine(db: DB, p: Project | null, justSet: boolean): string {
   if (!p) return `No default project is set yet. Until E is shared, notes with no project are numbered E-…; after that they go to ${FALLBACK_CODE} (${FALLBACK_NAME}), a private project made for you. Pick one with \`collab project default <CODE>\`.`;
+  if (!isEAdopted(db)) {
+    return justSet
+      ? `${p.code} (${p.name}) is saved as your default. Until emp1st (E) is shared, notes with no project still go to E.`
+      : `${p.code} (${p.name}) is your default. Until emp1st (E) is shared, notes with no project still go to E.`;
+  }
   return justSet ? `New notes with no project now go to ${p.code} (${p.name}).` : `New notes with no project go to ${p.code} (${p.name}).`;
 }

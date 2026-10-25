@@ -106,3 +106,17 @@ test('default: noteDestination before adoption is unchanged (none)', () => {
   assert.equal(noteDestination(db, {}, { folder: false }).why, 'none');
   cleanup();
 });
+
+test('default: defaultProjectLine is honest before and after adoption', async () => {
+  const { defaultProjectLine } = await import('../src/ops/default-project.js');
+  const a = world(false);
+  const mn = createProject(a.db, { name: 'Mine', code: 'MN' });
+  assert.match(defaultProjectLine(a.db, mn, true), /MN \(Mine\) is saved as your default\. Until emp1st \(E\) is shared, notes with no project still go to E\./);
+  assert.doesNotMatch(defaultProjectLine(a.db, mn, true), /now go to/);
+  a.cleanup();
+  const b = world(true);
+  const m2 = createProject(b.db, { name: 'Mine', code: 'MN' });
+  assert.equal(defaultProjectLine(b.db, m2, true), 'New notes with no project now go to MN (Mine).');
+  assert.equal(defaultProjectLine(b.db, m2, false), 'New notes with no project go to MN (Mine).');
+  b.cleanup();
+});

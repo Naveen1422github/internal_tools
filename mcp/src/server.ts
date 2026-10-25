@@ -1611,7 +1611,7 @@ server.registerTool(
   async (args) => {
     try {
       const p = args.project ? setDefaultProject(db, args.project) : getDefaultProject(db);
-      return { content: [{ type: "text", text: defaultProjectLine(p, !!args.project) }], structuredContent: structured({ project: p }) };
+      return { content: [{ type: "text", text: defaultProjectLine(db, p, !!args.project) }], structuredContent: structured({ project: p }) };
     } catch (e) {
       return toolError(e);
     }
