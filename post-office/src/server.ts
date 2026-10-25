@@ -12,7 +12,7 @@ import {
   createProjectRole, updateProjectRole, deleteProjectRole, isOwnerRole, projectRoleHolders,
   createOfficeRole, updateOfficeRole, deleteOfficeRole, listOfficeMembers,
 } from "./access.js";
-import { sanitizeKeys, E_PROJECT_ULID, type AccessPayload } from "@collab-mcp/core";
+import { sanitizeKeys, E_PROJECT_ULID, schemaCompatible, type AccessPayload } from "@collab-mcp/core";
 import { acceptChanges, fetchDeliveries, fetchReplay, lastSeq } from "./deliveries.js";
 import { isEAdoptedOffice } from "./e-adopt.js";
 
@@ -196,7 +196,7 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
     // Schema guard (spec V7): a laptop on another migration would receive or send
     // columns the other side does not have. Refuse; its courier pauses.
     const deviceSchema = String(req.headers["x-collab-schema"] ?? "unknown");
-    if (deviceSchema !== officeSchemaValue) {
+    if (!schemaCompatible(officeSchemaValue, deviceSchema)) {
       req.resume();
       log(`${me.name}: refused, schema ${deviceSchema} (office ${officeSchemaValue})`);
       return send(res, 409, { error: "schema", office: officeSchemaValue, device: deviceSchema });

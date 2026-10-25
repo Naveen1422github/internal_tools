@@ -31,3 +31,11 @@ test('a request without the schema header is refused (an older courier)', async 
       (e: any) => e instanceof SchemaMismatchError && e.device === 'unknown');
   } finally { await o.stop(); }
 });
+
+test('the 409 decision is exactly !schemaCompatible (listed peer passes, unlisted refused)', async () => {
+  const { schemaCompatible } = await import('@collab-mcp/core');
+  const table = { '0014_x': ['0013_access_cache'] };
+  assert.equal(schemaCompatible('0014_x', '0013_access_cache', table), true);
+  assert.equal(schemaCompatible('0014_x', '0012_y', table), false);
+  assert.equal(schemaCompatible('0013_access_cache', '0014_x', table), false);
+});
