@@ -167,9 +167,15 @@ function resolve(db: Store, rows: DeliveryRow[], hints?: Hints): Resolved[] {
   if (hints) for (const [u, p] of hints.project) project.set(u, p);
   // Task 4: once the office adopted E, a note with no project is delivered as E (modules rows stay NULL).
   const adopted = isEAdoptedOffice(db);
+  // Task 9 (fix round 3): a carried module's row keeps its project on every delivery; others NULL.
+  let mods: Map<string, string> | null = null;
+  const moduleStamp = (pk: Buffer): string | null => {
+    mods ??= moduleStamps(db);
+    return mods.size ? mods.get(firstTextCell(pk) ?? "") ?? null : null;
+  };
   return rows.map((r, i) => {
     const u = ulids[i];
-    const stamp = r.final ? r.stamp ?? null : r.tbl === "modules" ? null : u === null || !project.has(u) ? "?" : (project.get(u) as string | null);
+    const stamp = r.final ? r.stamp ?? null : r.tbl === "modules" ? moduleStamp(r.pk) : u === null || !project.has(u) ? "?" : (project.get(u) as string | null);
     return { seq: r.seq, tbl: r.tbl, origin: r.origin, held: r.held, key: keys[i], ulid: u, stamp: eStamp(adopted, r.tbl, stamp) };
   });
 }
@@ -293,6 +299,26 @@ export function stampProjects(db: Store, seqs: number[], inHand?: DeliveryRow[])
   }
 }
 
+/**
+ * Task 9 (I2, fix round 3): po_meta JSON {slug: project ulid} of the modules rows a
+ * member's note carried in (classify's moduleStamps). Every delivery of that row, now
+ * and later (an admin's edit or delete, an office write-back or merge), gets that
+ * stamp; a slug not listed stays NULL (everyone). No new table: a handful of slugs.
+ */
+const MODULE_STAMPS = "carried_module_stamps";
+export function moduleStamps(db: Store): Map<string, string> {
+  const r = prep(db, `SELECT value FROM po_meta WHERE key = '${MODULE_STAMPS}'`).get() as { value: string } | undefined;
+  try { return new Map(Object.entries(r ? (JSON.parse(r.value) as Record<string, string>) : {})); } catch { return new Map(); }
+}
+/** The first project a slug was carried in wins. */
+function rememberModuleStamps(db: Store, add: Map<string, string>): void {
+  const m = moduleStamps(db);
+  let grew = false;
+  for (const [slug, p] of add) if (!m.has(slug)) { m.set(slug, p); grew = true; }
+  if (grew) prep(db, `INSERT INTO po_meta (key, value) VALUES ('${MODULE_STAMPS}', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+    .run(JSON.stringify(Object.fromEntries(m)));
+}
+
 /** R3: every delivery up to this seq was stamped by an RnR office (acceptChanges moves it). */
 const STAMPED_UPTO = "deliveries_stamped_upto";
 const SET_STAMPED_UPTO = `INSERT INTO po_meta (key, value) VALUES ('${STAMPED_UPTO}', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
@@ -410,7 +436,7 @@ export function acceptChanges(
     const rec = prep(db, RECORD_STAMPED);
     const fresh: RawChange[] = [];
     const stamped: DeliveryRow[] = [];
-    const carriedModules = new Map<string, number[]>(); // Task 9 (I2): project -> seqs of modules rows its note carried
+    const carriedModules = new Map<string, string>(); // Task 9 (I2): slug -> project, for modules rows a note carried (recorded fresh)
     raws.forEach((r, i) => {
       const p = guess ? guess[i].stamp : null;
       const x = rec.run(origin, r.table, r.pk, r.cid, r.val, r.col_version, r.db_version, r.site_id, r.cl, r.seq, p);
@@ -418,7 +444,7 @@ export function acceptChanges(
         fresh.push(r);
         if (r.table === "modules" && verdict.moduleStamps.size) {
           const to = verdict.moduleStamps.get(firstTextCell(r.pk) ?? "");
-          if (to !== undefined) { const l = carriedModules.get(to); if (l) l.push(Number(x.lastInsertRowid)); else carriedModules.set(to, [Number(x.lastInsertRowid)]); }
+          if (to !== undefined) carriedModules.set(firstTextCell(r.pk)!, to);
         }
         const gi = guess?.[i];
         stamped.push(gi && !opts.oldStampPath
@@ -426,6 +452,9 @@ export function acceptChanges(
           : { seq: Number(x.lastInsertRowid), tbl: r.table, pk: r.pk, origin, held: 0, stamp: p, key: gi?.key });
       }
     });
+    // Task 9 (I2, fix round 3): remembered before the apply, so R3 (stampProjects) stamps
+    // these rows, and write-backs and every later delivery of the same row keep the stamp.
+    if (carriedModules.size) rememberModuleStamps(db, carriedModules);
     const diverged = new Set<string>();
     let applied: ReturnType<typeof applyChanges>;
     try {
@@ -452,7 +481,6 @@ export function acceptChanges(
     if (stamp) stampProjects(db, mine.map((r) => r.seq), mine);
     // Task 9 (I2): a new modules row accepted beside a member's note goes to that note's project only
     // (modules rows are otherwise NULL: everyone). After R3, which never re-resolves an old row.
-    for (const [p, seqs] of carriedModules) prep(db, `UPDATE po_deliveries SET project_ulid = ? WHERE seq IN (SELECT value FROM json_each(?))`).run(p, JSON.stringify(seqs));
     const seq = lastSeq(db);
     if (stamp && (mine.length || wb.length)) prep(db, SET_STAMPED_UPTO).run(String(seq)); // R3 watermark: stamped up to here
     stampMs += performance.now() - t0;

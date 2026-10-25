@@ -2,7 +2,7 @@
 import { E_PROJECT_ULID, rootRevId, type RawChange } from "@collab-mcp/core";
 import type { Store } from "./store.js";
 import { memberProjects } from "./access.js";
-import { OFFICE_ORIGIN, WRITEBACK_TO, RECORD_STAMPED, firstTextCell, textCells, prep, revisionEntries, type DeliveryRow } from "./deliveries.js";
+import { OFFICE_ORIGIN, WRITEBACK_TO, RECORD_STAMPED, firstTextCell, textCells, prep, revisionEntries, moduleStamps, type DeliveryRow } from "./deliveries.js";
 import { cellSeenBy, eStamp, noteProof, isEAdoptedOffice } from "./e-adopt.js";
 
 // RnR S2, R6: the office's undo of a refused group. Mechanism (b) of the spike
@@ -81,6 +81,7 @@ export function writeBack(db: Store, refused: RawChange[], projects?: Map<string
   const out: Cell[] = [];
   const todo: Array<{ x: Row; stamp: string | null }> = [];
   const adopted = isEAdoptedOffice(db); // Task 4: no project = E once adopted
+  let mods: Map<string, string> | null = null;
   for (const x of rows.values()) {
     let stamp: string | null = null;
     if (x.table !== "modules") {
@@ -90,6 +91,7 @@ export function writeBack(db: Store, refused: RawChange[], projects?: Map<string
       // project classify judged it in, else held. Neither cell: before 0009, no project.
       stamp = eStamp(adopted, x.table, n.hp ? n.project_ulid : !n.hs ? null : projects?.get(x.ulid!) ?? "?");
     } else if (!x.key) continue;
+    else stamp = (mods ??= moduleStamps(db)).get(x.key) ?? null; // Task 9 (fix round 3): a carried module keeps its project
     todo.push({ x, stamp });
   }
   const held = officeRows(db, todo.map((t) => t.x));

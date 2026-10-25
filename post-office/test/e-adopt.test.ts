@@ -451,3 +451,59 @@ test('Task 9 fix round 2 (M4): a new module tagged on a note the sender may edit
     assert.equal(store.prepare(`SELECT 1 FROM modules WHERE slug = 'nope'`).get(), undefined);
   } finally { setAllocator(null); lo.cleanup(); lm.cleanup(); cleanup(); }
 });
+
+test('Task 9 fix round 3: a TT-carried module keeps its TT stamp on an admin edit, a delete and a refused edit\'s write-back', async () => {
+  const { store, cleanup } = tempStore();
+  const lo = laptop(), lm = laptop();
+  try {
+    for (const d of ['owner', 'mem', 'carl']) member(store, d); // owner = Office admin; mem, carl = Office members
+    const TT = registerProject(store, { ulid: newUlid(), name: 'Tools', code: 'TT' }, 'owner').ulid;
+    setProjectMember(store, null, TT, 'mem', 'Editor');
+    store.prepare(`DELETE FROM po_replays`).run(); // stamping, not replay: mem counts as replayed
+    setAllocator({ allocate: async () => ++n });
+    initModule(lm.db, { slug: 'ttmod', name: 'TT module' });
+    const t = (await addEntryAsync(lm.db, { type: 'decision', title: 'tt note', summary: 's', module: 'ttmod' })).ulid;
+    lm.db.prepare(`UPDATE entries SET series = 'TT', id = ? WHERE ulid = ?`).run(allocate(store, t, null, 'TT'), t);
+    lm.db.prepare(`UPDATE entries SET project_ulid = ? WHERE ulid = ?`).run(TT, t);
+    assert.deepEqual(acceptChanges(store, 'mem', readOwnChanges(lm.db, 0)).refused, []);
+    applyChanges(lo.db, readOwnChanges(lm.db, 0).map(decodeChange)); // the admin holds the row
+
+    // The admin edits it: TT members get the new value, carl (not in TT) never.
+    let top = lastSeq(store);
+    let v = version(lo.db);
+    upsertModule(lo.db, { slug: 'ttmod', summary: 'admin secret summary' });
+    assert.deepEqual(acceptChanges(store, 'owner', readOwnChanges(lo.db, v)).refused, []);
+    const vals = (d: string) => fetchAll(store, d, top).changes.map(decodeChange).filter((c) => c.table === 'modules').map((c) => String(c.val ?? ''));
+    assert.ok(vals('mem').includes('admin secret summary'), 'a TT member gets the edit');
+    assert.ok(!vals('carl').includes('admin secret summary') && vals('carl').length === 0, 'carl gets nothing of it');
+    assert.equal(count(store, `tbl = 'modules' AND project_ulid IS NULL`), 0, 'no modules delivery of the row is NULL');
+
+    // A refused edit (mem lacks module.edit): the write-back follows the TT stamp.
+    top = lastSeq(store);
+    applyChanges(lm.db, fetchAll(store, 'mem', 0).changes.map(decodeChange));
+    v = version(lm.db);
+    upsertModule(lm.db, { slug: 'ttmod', summary: 'mem tries' });
+    assert.deepEqual(acceptChanges(store, 'mem', readOwnChanges(lm.db, v)).refused.map((x) => x.key), ['module.edit']);
+    const wb = store.prepare(`SELECT project_ulid p FROM po_deliveries WHERE tbl = 'modules' AND seq > ? AND origin LIKE 'post-office%'`).all(top) as Array<{ p: string | null }>;
+    assert.ok(wb.length > 0, 'the office wrote its value back');
+    assert.ok(wb.every((r) => r.p === TT), 'stamped TT');
+    assert.equal(vals('carl').length, 0, 'carl never gets the write-back');
+    assert.ok(fetchAll(store, 'mem', top).changes.some((w) => decodeChange(w).table === 'modules'), 'mem (TT) gets its undo');
+
+    // The admin deletes the row: the tombstone is TT too.
+    top = lastSeq(store);
+    applyChanges(lo.db, fetchAll(store, 'owner', 0).changes.map(decodeChange));
+    v = version(lo.db);
+    lo.db.prepare(`DELETE FROM modules WHERE slug = 'ttmod'`).run();
+    acceptChanges(store, 'owner', readOwnChanges(lo.db, v));
+    assert.ok(count(store, `tbl = 'modules' AND seq > ${top}`) > 0);
+    assert.equal(count(store, `tbl = 'modules' AND seq > ${top} AND (project_ulid IS NULL OR project_ulid <> '${TT}')`), 0);
+    assert.equal(vals('carl').length, 0);
+
+    // An unrelated admin module stays NULL (everyone).
+    v = version(lo.db);
+    initModule(lo.db, { slug: 'plain', name: 'Plain' });
+    acceptChanges(store, 'owner', readOwnChanges(lo.db, v));
+    assert.ok(slugsOf(store, fetchAll(store, 'carl', 0).changes).has('plain'));
+  } finally { setAllocator(null); lo.cleanup(); lm.cleanup(); cleanup(); }
+});
