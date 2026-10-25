@@ -38,7 +38,7 @@ Not "Naveen superseded note 41", but **cells**: "table `entries`, row X, column 
 - **Schema guard:** a laptop and the office must be on the *same* migration (today 0013), or the office refuses (409) and the courier shows **needs-update**. That's why Rinku must update after every migration.
 - **Certificate pin:** the join code contains the office's certificate fingerprint, so a laptop can't be tricked into talking to a fake office.
 - **Pending notes:** if the office is down, team notes are saved and wait. Nothing is lost.
-- **Solo never leaves:** solo-project notes and new `E` notes are never sent, whatever they're tagged with (rule 5 of the projects spec).
+- **Private stays private:** notes in a private project are never sent, whatever they're tagged with.
 
 ## Status
 
@@ -48,6 +48,6 @@ Not "Naveen superseded note 41", but **cells**: "table `entries`, row X, column 
   - It kept its certificate, so your laptop only ran `collab sync set-address`.
   - The old laptop office was renamed `post-office.MOVED-TO-ORACLE-2026-10-23` and must never run again: two offices would hand out the same numbers.
   - Moving it again (e.g. to the company server, COLLAB-113): `bundle` on the stopped office, copy it over, then `set-address` on each laptop (post-office/DEPLOY.md).
-- Shared with the team: the emp1st modules + supporthub. Collab, tooling and personal notes are not shared.
+- Sharing is by project now: a note reaches only the members of its project. E is the emp1st project and has its own members. The switch from shared modules to E is a one-time runbook in file 7 (section 10).
 - First real use found a bug: one old summary note (E-261) made the office refuse the whole upload (COLLAB-205). It was fixed the same day.
 - Not built yet: `collab join` / leave / web welcome page (stage D).

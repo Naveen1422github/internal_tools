@@ -1,6 +1,6 @@
 # 7. Running it: your do-it-yourself runbook
 
-Everything here you can do yourself, without Claude. Updated 2026-10-25.
+Everything here you can do yourself, without Claude. Updated 2026-10-26.
 
 ## 0. The `collab` command
 
@@ -21,7 +21,7 @@ Everything here you can do yourself, without Claude. Updated 2026-10-25.
 | Is sync working? | `collab sync status`. Want **last state: connected** |
 | Is everything set up right? (explains each problem + the fix) | `collab doctor` |
 | Who is in a team project | `collab team list <CODE>` (e.g. `collab team list TT`) |
-| What's shared office-wide | `collab sync modules` |
+| Which modules are linked to which project | `collab project list` |
 | Changes the office refused | `collab refused list` |
 | Web UI (Team, Projects, Settings, Health pages) | `collab web`, then open `http://127.0.0.1:7473` |
 
@@ -45,26 +45,23 @@ Everything here you can do yourself, without Claude. Updated 2026-10-25.
 
 The web Team page does the same things with buttons.
 
-## 3. Sharing: two ways, and they are NOT the same
+## 3. Sharing: by project
 
-**A. Team projects (the right way: only the project's members get it)**
+Every note is in a project. A project is shared with chosen people, or it is private. Modules are tags inside a project. **E** is the emp1st project; old E numbers stay.
 
 | What | Command |
 |---|---|
-| New team project | `collab project create "Custom Reports" --code CR --team` |
-| Turn a solo project into a team project (notes keep their numbers) | `collab project promote CR` |
+| New shared project | `collab project create "Custom Reports" --code CR --team` |
+| Make a private project shared (notes keep their numbers) | `collab project promote CR` |
 | Make a module's new notes land in a project | `collab project bind custom-reports CR` |
 | Give someone access | `collab team set "<member>" CR Editor` |
+| Change where a note goes when nothing says | `collab project default <CODE>` |
 
-**B. Office-wide modules (old way: today's E notes travel like this)**
+Where a new note goes, in order: the project you named, the module's linked project, the folder's project, then PS (your private project). The AI tells you where each note went.
 
-| What | Command |
-|---|---|
-| See / share / stop sharing | `collab sync modules` · `collab sync share <module>` · `collab sync unshare <module>` |
+Sharing a module on its own is gone after the switch (section 10). `collab sync share` now says: "modules follow their project now: collab project bind <module> <CODE>". Before the switch it still works, and the switch steps use it once.
 
-⚠️ A shared module goes to **every member of the office**, whatever projects they're in. Abhishek, for example, got all 579 emp1st and SupportHub notes. Unsharing stops *new* changes; copies already sent stay on their laptops.
-
-⚠️ **After sharing a module, restart the courier** on every connected laptop, or they won't notice until they reconnect: `collab sync stop` then `collab sync start` (bug COLLAB-205, fix planned).
+A teammate who tags a note with a new module can create it. Only that project's members see it. Someone who is taken out of a project stops receiving it and keeps the copies they already have.
 
 ## 4. Bringing a new person in
 
@@ -76,7 +73,7 @@ The web Team page does the same things with buttons.
    > `collab notebook new <your-name>`
    > `claude mcp add --scope user collab -- collab mcp` (then /mcp → Reconnect)
    > `collab sync setup <join code> --autostart` (starts sync at every login), then `collab sync start`, then `collab sync status` (should say connected).
-   > Work notes: put them in the team project you were given (e.g. `project: "CR"`) or tag the existing module. Never in your own solo project: those never leave your laptop.
+   > Work notes: put them in E or in the team project you were given (e.g. `project: "E"`). Notes in your private projects never leave your laptop.
    > If `collab` doesn't run in PowerShell, use `collab.cmd`.
 4. Check: `collab team list <CODE>` shows them with a "last seen" time.
 
@@ -147,12 +144,36 @@ Full steps: `post-office/DEPLOY.md`. Short version:
 |---|---|
 | `collab sync status` → **offline** | Is the office up? (section 5, or your UptimeRobot alert). Then `collab sync stop` + `collab sync start`. |
 | **needs-update** | That laptop is on older code than the office: update it (section 8). |
-| "N change(s) refused by the post office" | `collab refused list`, then keep one in a solo project (`collab refused copy <id> --to <CODE>`) or drop it (`collab refused delete <id>`). |
-| A teammate doesn't get a newly shared module | Their courier must reconnect: `collab sync stop` + `collab sync start` on their laptop. |
+| "N change(s) refused by the post office" | `collab refused list`, then keep one in a private project (`collab refused copy <id> --to <CODE>`) or drop it (`collab refused delete <id>`). |
+| A teammate doesn't get a project's notes | Check `collab team list <CODE>`, then their courier: `collab sync stop` + `collab sync start` on their laptop. |
 | A teammate's sync dies after a reboot | `collab sync autostart on` on their laptop. |
 | Install tries to compile / needs Visual Studio | Wrong Node version: use Node 22 LTS. |
 | `EBUSY` / file locked on Windows | Close extra Claude/IDE windows using collab, then retry. |
 | Notes stuck as "pending" | The office was unreachable. They're safe; they get numbers once `collab sync status` says connected. |
+
+## 10. The E switch
+
+One-time move from "modules shared with everyone" to "E is a project". Do it with Claude, in this order. Do not skip ahead: old numbers can only reach the office before the switch.
+
+| # | Where | Do |
+|---|---|---|
+| 1 | laptop | Run the backup job (section 6). |
+| 2 | laptop | Delete the junk notes: E-13, E-14, E-178, E-179, E-191, E-192, E-193, E-209, E-824. |
+| 3 | laptop | Retag: E-26 to `custom-reports`; E-532 to `timesheet`; E-377, 378, 379, 380, 407, 408, 409, 508 to a new module `infra`; the `supportHub` note to `supporthub`. Then `collab sync share infra` so these old notes reach the office now. |
+| 4 | laptop | Copy the never-shared tooling modules (workspace-redesign, internal-tools, workspace-mvp, dependency-audit, collab, collab-infra) into COLLAB. Copy `qa-system` into a new private project `QA`. |
+| 5 | laptop | `collab sync status` must say **connected** with nothing waiting. |
+| 6 | the VM | `sudo -u collab collab office adopt-e --owner personal-laptop --data /var/lib/collab/office` |
+| 7 | laptop | It switches by itself on the next sync. To watch it: `collab project adopt-e --default PS`. |
+| 8 | laptop | `collab team list E`. Read who is in it. When Gaurav joins: `collab team set "Gaurav" E Editor`. |
+| 9 | laptop | `collab sync status`: connected, and a line "N private E notes kept on this laptop". |
+
+**What you will see**
+- After step 6, E reaches only E's members, and you are E's Owner.
+- A laptop with notes not yet sent says "sync first" and tries again by itself.
+- Notes that never reached the office stay private on that laptop (the line in step 9).
+- Modules that used to be shared are linked to E.
+- Teammates' laptops switch by themselves on their next sync. Nothing for them to do.
+- E cannot be renamed, made private, or left like other projects.
 
 ## Known traps (the ones that actually bit)
 

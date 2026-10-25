@@ -152,6 +152,13 @@ It prints `collab web: http://127.0.0.1:7473/`. Open that address in a browser. 
 
 Never run an old collab against a notebook a newer version has upgraded. Always update, then restart everything.
 
-## Joining a team later
+## Joining a team
 
-Not needed for solo use. When the person joins a team, they get a join code from the team's post office admin. Their solo projects stay private and unchanged. A solo project can later be turned into a team project and its notes keep their numbers.
+Not needed for single-person use. When the person joins a team, they get a join code from the team's post office admin. Their private projects stay private and unchanged.
+
+1. `collab sync setup <join code> --autostart` (starts sync at every login).
+2. `collab sync start`
+3. `collab sync status` (should say connected).
+4. Reconnect the collab MCP in the agent (for Claude Code: `/mcp`, then Reconnect).
+
+Work notes go in the team project you were given (for emp1st work, E). Notes in private projects never leave the laptop.

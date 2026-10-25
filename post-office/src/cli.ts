@@ -145,7 +145,7 @@ export async function runCli(argv: string[], io: Io, env: NodeJS.ProcessEnv = pr
         io.out(`  config.json  address ${url}`);
         io.out(`certificate fingerprint: ${cert.fingerprint}`);
         io.out(`the next new note will be ${formatEntryRef(seed + 1)}`);
-        io.out(`next: collab-post-office serve, then collab-post-office add-member "<machine name>" for each machine`);
+        io.out(`next: collab office serve, then collab office add-member "<machine name>" for each machine`);
         io.out(`to remove it: stop serve and delete ${dir}`);
         return { code: 0 };
       }

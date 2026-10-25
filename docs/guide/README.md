@@ -6,7 +6,7 @@
 - **Who reads it:** you. Claude does not use this guide to make decisions. Collab notes (the `COLLAB-…` entries) stay the working record. Where this guide and collab disagree, collab wins, and the guide is out of date.
 - **References:** `COLLAB-123` is a note in your collab notebook. Ask Claude "show me COLLAB-123" to read the full note behind any line here.
 
-Last updated: **2026-10-25** (office on the Oracle VM, backups, do-it-yourself runbook in file 7).
+Last updated: **2026-10-26** (sharing is by project; the E switch runbook in file 7).
 
 ## Read in this order
 
