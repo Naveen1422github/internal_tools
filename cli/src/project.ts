@@ -3,7 +3,7 @@ import { join } from "node:path";
 import {
   closeDb, collabStartDir, createProjectOp, currentProject, findCollabFile, findProject, getDb,
   notFound, promoteProject, renameProject, resolveDbPath, promotedLines, renamedLine, type Project,
-  projectCreatedLines, projectListLines, projectListRows, bindModule, unbindModule, bindChangeLine,
+  projectCreatedLines, projectListLines, getDefaultProject, setDefaultProject, defaultProjectLine, projectListRows, bindModule, unbindModule, bindChangeLine,
 } from "@collab-mcp/core";
 import { failPlain, type CliResult, type Io } from "./io.js";
 
@@ -11,7 +11,7 @@ import { failPlain, type CliResult, type Io } from "./io.js";
 
 const fail = (io: Io, msg: string): CliResult => { io.err(`collab: ${msg.replace(/^\[collab(-mcp)?\] /, "")}`); return { code: 1 }; };
 
-const USAGE = "usage: collab project create <name> --code <CODE> [--team] | promote <code> | rename <code> <new name> | list | use <code> | bind <module> <code> | unbind <module>";
+const USAGE = "usage: collab project create <name> --code <CODE> [--team] | promote <code> | rename <code> <new name> | list | use <code> | bind <module> <code> | unbind <module> | default [<code>]";
 
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -124,6 +124,12 @@ export async function runProject(args: string[], io: Io): Promise<CliResult> {
         const p = findProject(db, code);
         if (!p) throw notFound(db, code);
         return useProject(p, io);
+      }
+      case "default": {
+        const [code] = words(rest);
+        const db = getDb();
+        io.out(defaultProjectLine(code ? setDefaultProject(db, code) : getDefaultProject(db), !!code));
+        return { code: 0 };
       }
       default:
         io.err(USAGE);

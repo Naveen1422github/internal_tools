@@ -34,6 +34,7 @@ const USAGE = `usage: collab [--notebook <name>] <command>
                                           (beats this folder's .collab; an explicit project beats it; local to this laptop)
   collab project unbind <module>          remove that binding
   collab project use <code>               make it this folder's project (writes .collab)
+  collab project default [<code>]         show or set the private project notes go to when none is named
   collab team list <CODE>                 who is in a team project, and their roles
   collab team set <member> <CODE> <role>  give a member a role in a team project
   collab team remove <member> <CODE>      take a member out of a team project

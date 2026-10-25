@@ -146,7 +146,7 @@ test('e-project: listed only once adopted, as E / emp1st (never "solo"), with it
   const e = listProjects(db).find((p) => p.code === 'E')!;
   assert.equal(e.name, 'emp1st');
   assert.notEqual(e.mode, 'solo');
-  const r = addEntry(db, { type: 'decision', title: 'p', summary: 's', pendingUlid: '01HZZZZZZZZZZZZZZZZZZZZZZZ' });
+  const r = addEntry(db, { type: 'decision', title: 'p', summary: 's', project: 'E', pendingUlid: '01HZZZZZZZZZZZZZZZZZZZZZZZ' });
   assert.equal(r.pending, true);
   assert.equal(projectListRows(db, null).find((x) => x.code === 'E')!.pending, 1);
   cleanup();

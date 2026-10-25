@@ -19,7 +19,8 @@ import {
   KIND_BY_TYPE,
   CATEGORY_BY_TYPE,
 } from "../constants.js";
-import { isEProject, writeProjectUlid } from "../e-project.js";
+import { isEAdopted, isEProject, writeProjectUlid } from "../e-project.js";
+import { ensureDefaultProject, peekDefaultProject } from "./default-project.js";
 import { ensureCrsqlite } from "../sync/extension.js";
 import { assertCan, AccessDeniedError, refusalText } from "../access/can.js";
 
@@ -149,8 +150,8 @@ export function validateAddEntryArgs(args: AddEntryArgs): void {
 }
 
 /** The project `args.project` names, or null; an unknown one throws ProjectNotFoundError listing the known codes. */
-function resolveProjectArg(db: DB, args: AddEntryArgs, withFolder = false): Project | null {
-  if (args.project === undefined) return defaultProject(db, args, withFolder);
+function resolveProjectArg(db: DB, args: AddEntryArgs, withFolder = false, peek = false): Project | null {
+  if (args.project === undefined) return defaultProject(db, args, withFolder, peek);
   if (args.project === null || args.project === "") return null;
   if (args.project.trim().toLowerCase() === "none") return null;
   const p = findProject(db, args.project);
@@ -162,9 +163,10 @@ function resolveProjectArg(db: DB, args: AddEntryArgs, withFolder = false): Proj
 /**
  * The project of a note that names none: the bound project of its PRIMARY
  * module, then (withFolder: addEntryAsync only) the folder's .collab project,
+ * then, once E is adopted, the private default project (never E by accident),
  * else none (E). The binding beats the folder; a bound left team fails loudly.
  */
-function defaultProject(db: DB, args: AddEntryArgs, withFolder: boolean): Project | null {
+function defaultProject(db: DB, args: AddEntryArgs, withFolder: boolean, peek = false): Project | null {
   const bound = boundProjectFor(db, args.module);
   if (bound) {
     if (isLeftProject(bound)) throw leftProjectError(bound);
@@ -173,14 +175,16 @@ function defaultProject(db: DB, args: AddEntryArgs, withFolder: boolean): Projec
   const folder = withFolder ? currentProject(db) : null;
   // A folder naming a team you left fails here, as a bound one does (the save would refuse it anyway).
   if (folder && isLeftProject(folder)) throw leftProjectError(folder);
-  return folder;
+  if (folder) return folder;
+  // Before adoption the order is today's: none -> E. After it, E is shared, so a stray note goes private.
+  return isEAdopted(db) && !peek ? ensureDefaultProject(db) : null;
 }
 
 /** Where a new note would land, and why (UI parity Task 9: the New note form says it before saving). */
 export interface NoteDestination {
   project: { code: string; name: string; mode: string } | null;
-  /** named: the caller chose it; bound: its primary module is bound to it; folder: the .collab of the folder; none: E series. */
-  why: "named" | "bound" | "folder" | "none";
+  /** named: the caller chose it; bound: its primary module is bound to it; folder: the .collab of the folder; none: E series; default: the private default project. */
+  why: "named" | "bound" | "folder" | "default" | "none";
   line: string;
 }
 
@@ -191,7 +195,12 @@ export interface NoteDestination {
  */
 export function noteDestination(db: DB, args: { module?: string; project?: string }, opts: { folder?: boolean } = {}): NoteDestination {
   // `folder: false`: a caller with no folder of its own (the web server) skips the .collab step.
-  const p = resolveProjectArg(db, { type: "decision", title: "", summary: "", module: args.module, project: args.project }, opts.folder !== false);
+  // peek: describing the destination must not create the default project.
+  const p = resolveProjectArg(db, { type: "decision", title: "", summary: "", module: args.module, project: args.project }, opts.folder !== false, true);
+  if (!p && args.project === undefined && isEAdopted(db)) {
+    const d = peekDefaultProject(db);
+    return { project: { code: d.code, name: d.name, mode: d.mode }, why: "default", line: `It goes into ${d.code} (${d.name}): no project was named for it, and ${d.code} is private.` };
+  }
   const why: NoteDestination["why"] = !p ? "none"
     : args.project !== undefined ? "named"
     : boundProjectFor(db, args.module)?.ulid === p.ulid ? "bound" : "folder";

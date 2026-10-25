@@ -78,7 +78,7 @@ test('adopted: never-send skips every row of the note; the rest sends', () => {
 test('adopted: a pending E note holds', () => {
   const t = world(true);
   try {
-    const p = addEntry(t.db, note('pending E', { module: 'custom-reports' })).ulid;
+    const p = addEntry(t.db, note('pending E', { module: 'custom-reports', project: 'E' })).ulid;
     assert.deepEqual(one(verdicts(t.db).byUlid, p), ['hold']);
   } finally { t.cleanup(); }
 });

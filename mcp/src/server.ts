@@ -59,6 +59,9 @@ import {
   readSyncOverview,
   currentProject,
   findProject,
+  getDefaultProject,
+  setDefaultProject,
+  defaultProjectLine,
   hasProjectLeft,
   planCopy,
   applyCopy,
@@ -450,7 +453,7 @@ server.registerTool(
       project: z
         .string()
         .optional()
-        .describe("Project code (SH) or ULID to write into; 'none' = no project (E series). Explicit beats everything. Omitted = the project the PRIMARY module is bound to (collab_project_bind), else this folder's .collab project, else none."),
+        .describe("Project code (SH) or ULID to write into; 'none' = no project (E series). Explicit beats everything. Omitted = the project the PRIMARY module is bound to (collab_project_bind), else this folder's .collab project, else the default private project (collab_project_default), else none."),
     },
     annotations: {
       readOnlyHint: false,
@@ -1587,6 +1590,28 @@ server.registerTool(
     try {
       const p = await renameProject(db, args.project, args.name);
       return { content: [{ type: "text", text: renamedLine(p) }], structuredContent: structured({ project: p }) };
+    } catch (e) {
+      return toolError(e);
+    }
+  }
+);
+
+server.registerTool(
+  "collab_project_default",
+  {
+    title: "Show or set the default project",
+    description: [
+      "Same as `collab project default [<CODE>]`: the private project a new note goes to when no project is named,",
+      "no module binding and no folder .collab apply (once E is shared). Without `project` it shows the default;",
+      "with one it sets it. E and shared (team) projects are refused.",
+    ].join("\n"),
+    inputSchema: { project: z.string().min(1).optional().describe("Private project code (PS) or ULID to make the default. Omit to show it.") },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async (args) => {
+    try {
+      const p = args.project ? setDefaultProject(db, args.project) : getDefaultProject(db);
+      return { content: [{ type: "text", text: defaultProjectLine(p, !!args.project) }], structuredContent: structured({ project: p }) };
     } catch (e) {
       return toolError(e);
     }
