@@ -149,6 +149,22 @@ test('GET /v1/access reports eProject {adopted, member} per device', async () =>
   } finally { await o.stop(); }
 });
 
+test('GET /v1/projects never lists E, before or after adoption (older laptops would crash on code E)', async () => {
+  const o = await office();
+  try {
+    const own = await o.join('Owner');
+    const tt = { ulid: newUlid(), name: 'Project TT', code: 'TT' };
+    assert.equal((await requestJson(o.target(own), 'POST', '/v1/projects', tt)).status, 200);
+    const codes = async () => ((await requestJson(o.target(own), 'GET', '/v1/projects')).body.projects as Array<{ code: string; ulid: string }>);
+    assert.deepEqual((await codes()).map((p) => p.code), ['TT']);
+    adoptE(o.store, { name: 'emp1st', ownerDevice: own.device });
+    const after = await codes();
+    assert.deepEqual(after.map((p) => p.code), ['TT'], 'still TT, never E');
+    assert.ok(!after.some((p) => p.ulid === E_PROJECT_ULID));
+    assert.deepEqual((await requestJson(o.target(own), 'GET', '/v1/access')).body.eProject, { adopted: true, member: true }, 'E is learned through /v1/access');
+  } finally { await o.stop(); }
+});
+
 test('CLI adopt-e --owner <member> prints the count and how to add members', async () => {
   const t = tempDir();
   try {

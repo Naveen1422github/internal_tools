@@ -219,7 +219,9 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
       case "GET /v1/projects": {
         // R7a: a project you are not in does not exist for you.
         const mine = new Set((o.store.prepare(`SELECT project_ulid FROM po_project_members WHERE device_id = ?`).all(me.device_id) as Array<{ project_ulid: string }>).map((r) => r.project_ulid));
-        const all = o.store.prepare(`SELECT ulid, name, code, created_at FROM po_projects ORDER BY code`).all() as Array<{ ulid: string }>;
+        // Never E: laptops know E only through /v1/access eProject. A laptop on older code would
+        // insert code 'E' into its projects table (CHECK code <> 'E', 0009) and its whole sync would stop.
+        const all = o.store.prepare(`SELECT ulid, name, code, created_at FROM po_projects WHERE ulid <> ? AND code <> 'E' ORDER BY code`).all(E_PROJECT_ULID) as Array<{ ulid: string }>;
         return send(res, 200, { projects: all.filter((p) => mine.has(p.ulid)) });
       }
       case "POST /v1/projects": {
