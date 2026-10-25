@@ -21,6 +21,8 @@ import { isEAdoptedOffice } from "./e-adopt.js";
 // store on every request, so a revoke is effective immediately.
 
 export interface PostOfficeOptions {
+  /** Extra schema peers the office tolerates (default: core's WIRE_COMPAT). */
+  schemaTable?: Readonly<Record<string, readonly string[]>>;
   store: Store;
   certPem: string;
   keyPem: string;
@@ -196,7 +198,7 @@ export async function startPostOffice(o: PostOfficeOptions): Promise<PostOffice>
     // Schema guard (spec V7): a laptop on another migration would receive or send
     // columns the other side does not have. Refuse; its courier pauses.
     const deviceSchema = String(req.headers["x-collab-schema"] ?? "unknown");
-    if (!schemaCompatible(officeSchemaValue, deviceSchema)) {
+    if (!schemaCompatible(officeSchemaValue, deviceSchema, o.schemaTable)) {
       req.resume();
       log(`${me.name}: refused, schema ${deviceSchema} (office ${officeSchemaValue})`);
       return send(res, 409, { error: "schema", office: officeSchemaValue, device: deviceSchema });

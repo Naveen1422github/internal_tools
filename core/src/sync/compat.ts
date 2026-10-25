@@ -8,5 +8,5 @@ export function schemaCompatible(
   device: string,
   table: Readonly<Record<string, readonly string[]>> = WIRE_COMPAT,
 ): boolean {
-  return office === device || table[office]?.includes(device) === true;
+  return office === device || (Object.hasOwn(table, office) && table[office].includes(device));
 }

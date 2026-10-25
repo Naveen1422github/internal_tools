@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { requestJson, SchemaMismatchError, latestMigration } from '@collab-mcp/core';
 import { office } from './office.js';
+import { tempStore } from './helpers.js';
 
 test('/v1/join is not schema-checked; a request with the office schema is served', async () => {
   const o = await office();
@@ -32,10 +33,16 @@ test('a request without the schema header is refused (an older courier)', async 
   } finally { await o.stop(); }
 });
 
-test('the 409 decision is exactly !schemaCompatible (listed peer passes, unlisted refused)', async () => {
-  const { schemaCompatible } = await import('@collab-mcp/core');
-  const table = { '0014_x': ['0013_access_cache'] };
-  assert.equal(schemaCompatible('0014_x', '0013_access_cache', table), true);
-  assert.equal(schemaCompatible('0014_x', '0012_y', table), false);
-  assert.equal(schemaCompatible('0013_access_cache', '0014_x', table), false);
+test('a schema the office lists is served; an unlisted one is refused (real server)', async () => {
+  const probe = tempStore();
+  const current = latestMigration(probe.store)!;
+  probe.cleanup();
+  const o = await office(0, { schemaTable: { [current]: ['0012_older'] } });
+  try {
+    const m = await o.join('a');
+    const ok = await requestJson({ ...o.target(m), schema: '0012_older' }, 'GET', '/v1/modules');
+    assert.equal(ok.status, 200);
+    await assert.rejects(requestJson({ ...o.target(m), schema: '0011_other' }, 'GET', '/v1/modules'),
+      (e: any) => e instanceof SchemaMismatchError && e.device === '0011_other' && e.office === current);
+  } finally { await o.stop(); }
 });
