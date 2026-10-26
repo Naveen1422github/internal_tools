@@ -25,6 +25,8 @@ export interface RollupGroup {
   type_counts: Partial<Record<EntryType, number>>;
   window_start: string;                   // earliest created_at in the group
   window_end: string;                     // latest created_at in the group
+  /** Project carried by the new rollup; null denotes E. */
+  project_ulid: string | null;
   entries: Array<{
     id: number;
     type: EntryType;
@@ -72,6 +74,7 @@ interface RawEntryRow {
   module: string | null;
   task_id: string | null;
   created_at: string;
+  project_ulid: string | null;
 }
 
 function selectEntries(db: DB, args: RollupArgs): RawEntryRow[] {
@@ -79,7 +82,7 @@ function selectEntries(db: DB, args: RollupArgs): RawEntryRow[] {
   if (args.task_id) {
     return db
       .prepare(
-        `SELECT id, type, title, summary, agent, module, task_id, created_at
+        `SELECT id, type, title, summary, agent, module, task_id, created_at${hasSeries(db) ? ", project_ulid" : ", NULL AS project_ulid"}
          FROM entries
          WHERE task_id = ?
            AND deprecated = 0
@@ -92,7 +95,7 @@ function selectEntries(db: DB, args: RollupArgs): RawEntryRow[] {
   const sinceIso = parseSince(args.since ?? "7d");
   return db
     .prepare(
-      `SELECT id, type, title, summary, agent, module, task_id, created_at
+      `SELECT id, type, title, summary, agent, module, task_id, created_at${hasSeries(db) ? ", project_ulid" : ", NULL AS project_ulid"}
        FROM entries
        WHERE created_at >= ?
          AND deprecated = 0
@@ -116,13 +119,17 @@ function groupEntries(
     else if (mode === "task") key = r.task_id;
     else key = r.module;
     if (!key) continue; // skip entries missing the group key (e.g. no module set)
-    if (!buckets.has(key)) buckets.set(key, []);
-    buckets.get(key)!.push(r);
+    // A rollup description embeds every source title and summary, so sources
+    // from different projects must never share a delivery-bearing rollup row.
+    const bucketKey = `${r.project_ulid ?? "E"}\u0000${key}`;
+    if (!buckets.has(bucketKey)) buckets.set(bucketKey, []);
+    buckets.get(bucketKey)!.push(r);
   }
 
   const kind: "module" | "task" = mode === "module" ? "module" : "task";
   const groups: RollupGroup[] = [];
-  for (const [key, entries] of buckets) {
+  for (const entries of buckets.values()) {
+    const key = mode === "single-task" ? explicitTaskId! : mode === "task" ? entries[0].task_id! : entries[0].module!;
     const type_counts: Partial<Record<EntryType, number>> = {};
     for (const e of entries) type_counts[e.type] = (type_counts[e.type] ?? 0) + 1;
     groups.push({
@@ -132,6 +139,7 @@ function groupEntries(
       type_counts,
       window_start: entries[0].created_at,
       window_end: entries[entries.length - 1].created_at,
+      project_ulid: entries[0].project_ulid,
       entries,
     });
   }
@@ -280,6 +288,10 @@ export function rollup(db: DB, args: RollupArgs): RollupResult {
       task_id: group.kind === "task" ? group.key : null,
       rollup_of_task: group.kind === "task" ? group.key : moduleRollupSentinel(group.key),
       tokens_estimate: estimateTokens(description),
+      project_ulid: group.project_ulid,
+      series: group.project_ulid
+        ? (db.prepare(`SELECT code FROM projects WHERE ulid = ?`).get(group.project_ulid) as { code: string } | undefined)?.code
+        : undefined,
     };
     // rollup.ts owns its own insert path because addEntry() rejects type='rollup'
     // (that guard exists to prevent callers creating rollups via the public API).

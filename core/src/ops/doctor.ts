@@ -11,6 +11,7 @@ import { getSyncValue } from "../sync/state.js";
 import { hasCrrTables, isCrsqliteLoaded } from "../sync/extension.js";
 import { guardedTriggers, SYNCED_TABLES } from "../sync/enable.js";
 import { formatEntryRef } from "../entry-ref.js";
+import { E_ACCESS_KEY, E_ADOPTED_KEY, NEVER_SEND_KEY, neverSendState } from "../e-project.js";
 
 export interface DoctorCheck {
   name: string; // short id, e.g. "schema.tables"
@@ -170,6 +171,25 @@ export function doctor(db: DB, opts: { cwd?: string; env?: NodeJS.ProcessEnv } =
   };
   const has0005 = applied("0005_ulid_expand");
   const has0006 = applied("0006_ulid_contract");
+
+  // A corrupt never-send list must be visible: the send rule blocks all E rows
+  // until it is repaired, rather than risk leaking a note that should stay local.
+  const neverRaw = getSyncValue(db, NEVER_SEND_KEY);
+  const neverState = neverSendState(db);
+  if (neverRaw !== null) checks.push({
+    name: "sync.never_send",
+    severity: neverState.valid ? "ok" : "error",
+    detail: neverState.valid ? `${neverState.ulids.size} never-send note(s) recorded` : "never_send is corrupt; E sends are blocked until it is repaired",
+  });
+  if (getSyncValue(db, E_ADOPTED_KEY) === "1") {
+    let officeAdopted = false;
+    try { officeAdopted = JSON.parse(getSyncValue(db, E_ACCESS_KEY) ?? "{}").adopted === true; } catch { /* reported as held */ }
+    checks.push({
+      name: "sync.e_office_adoption",
+      severity: officeAdopted ? "ok" : "error",
+      detail: officeAdopted ? "post office has adopted E" : "post office has not adopted E; E sends are held locally",
+    });
+  }
 
   // Copied: the 0007 line below adds to it, and the constants are shared.
   const expectedTables = new Set(has0006 ? EXPECTED_TABLES_0006

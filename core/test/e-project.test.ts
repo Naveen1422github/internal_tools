@@ -7,12 +7,15 @@ import { migrate } from '../src/db.js';
 import { initModule } from '../src/ops/module.js';
 import { bindModule, boundProjectFor } from '../src/ops/bind.js';
 import { addEntry, addEntryAsync } from '../src/ops/add.js';
+import { rollup } from '../src/ops/rollup.js';
+import { doctor } from '../src/ops/doctor.js';
+import { adoptELocal } from '../src/ops/adopt-e.js';
 import { planCopy } from '../src/ops/copy.js';
 import { setAllocator } from '../src/sync/allocator.js';
 import { projectListRows } from '../src/ops/project.js';
 import { findProject, listProjects, createProject, promoteProject, markProjectLeft, renameProject } from '../src/projects.js';
 import { setSyncValue } from '../src/sync/state.js';
-import { E_PROJECT_ULID, eProject, writeProjectUlid, neverSend, NEVER_SEND_KEY } from '../src/e-project.js';
+import { E_PROJECT_ULID, eProject, writeProjectUlid, neverSend, NEVER_SEND_KEY, neverSendState } from '../src/e-project.js';
 
 function world() {
   const t = freshDb();
@@ -84,6 +87,37 @@ test('e-project: neverSend reads the list and survives junk', () => {
   setSyncValue(db, NEVER_SEND_KEY, 'not json');
   assert.equal(neverSend(db).size, 0);
   cleanup();
+});
+
+test('e-project: corrupt never_send fails closed instead of treating private notes as sendable', () => {
+  const { db, cleanup } = world();
+  try {
+    setSyncValue(db, NEVER_SEND_KEY, 'not json');
+    assert.equal(neverSendState(db).valid, false);
+    assert.equal(neverSend(db).size, 0, 'the list itself remains unavailable');
+    const c = doctor(db).checks.find((x) => x.name === 'sync.never_send');
+    assert.equal(c?.severity, 'error');
+    setSyncValue(db, 'enabled', '1');
+    setSyncValue(db, 'e_access', JSON.stringify({ adopted: true, member: false }));
+    assert.throws(() => adoptELocal(db), /never_send is corrupt/);
+    assert.equal((db.prepare(`SELECT value FROM sync_state WHERE key = ?`).get(NEVER_SEND_KEY) as { value: string }).value, 'not json', 'adopt-e never overwrites corrupt state');
+  } finally { cleanup(); }
+});
+
+test('e-project: rollup keeps E and private task notes in separate projects', () => {
+  const { db, cleanup } = world();
+  try {
+    createProject(db, { name: 'Personal', code: 'PS' });
+    db.prepare(`INSERT INTO tasks (id, title) VALUES ('T-rollup', 'rollup')`).run();
+    addEntry(db, { type: 'handoff', title: 'E source', summary: 'team-only text', task_id: 'T-rollup', project: 'E' });
+    addEntry(db, { type: 'handoff', title: 'private source', summary: 'private-only text', task_id: 'T-rollup', project: 'PS' });
+    const out = rollup(db, { task_id: 'T-rollup' });
+    assert.equal(out.created_entries.length, 2);
+    const rows = db.prepare(`SELECT series, project_ulid, description FROM entries WHERE type = 'rollup' ORDER BY series`).all() as Array<{ series: string; project_ulid: string | null; description: string }>;
+    assert.equal(rows.length, 2);
+    assert.ok(rows.some((r) => r.series === 'E' && r.project_ulid === null && r.description.includes('team-only text') && !r.description.includes('private-only text')));
+    assert.ok(rows.some((r) => r.series === 'PS' && r.project_ulid !== null && r.description.includes('private-only text') && !r.description.includes('team-only text')));
+  } finally { cleanup(); }
 });
 
 const rowOf = (db: any, ulid: string) => db.prepare(`SELECT series, id, project_ulid FROM entries WHERE ulid = ?`).get(ulid) as { series: string; id: number | null; project_ulid: string | null };

@@ -5,7 +5,7 @@
 // the SAME transaction that sets e_project, so no push can ever see one without
 // the other. E notes keep project_ulid NULL; nothing here touches entries.
 import type { DB } from "../db.js";
-import { cachedEAccess, isEAdopted, neverSend, E_ADOPTED_KEY, E_PROJECT_ULID, NEVER_SEND_KEY } from "../e-project.js";
+import { cachedEAccess, isEAdopted, neverSend, neverSendState, E_ADOPTED_KEY, E_PROJECT_ULID, NEVER_SEND_KEY } from "../e-project.js";
 import { getSyncValue, isSyncEnabled, setSyncValue } from "../sync/state.js";
 import { SHARED_KEY } from "../sync/send-filter.js";
 import { unsentSharedCount } from "../sync/overview.js";
@@ -59,6 +59,7 @@ export interface AdoptOptions {
 export function adoptELocal(db: DB, o: AdoptOptions = {}): AdoptReport {
   if (!isSyncEnabled(db)) throw new Error("[collab] this notebook is not sharing with a post office (collab sync setup <join code>)");
   if (isEAdopted(db)) throw new Error("[collab] E is already adopted on this laptop");
+  if (!neverSendState(db).valid) throw new Error("[collab] never_send is corrupt; fix it before adopting E so private notes cannot be exposed");
   const access = cachedEAccess(db);
   if (!access.adopted) throw new Error(`[collab] ${NOT_ADOPTED_AT_OFFICE}`);
   if (access.member && !o.heldByOffice) throw new Error("[collab] adopting E as a member needs the post office's list of the E notes it holds");

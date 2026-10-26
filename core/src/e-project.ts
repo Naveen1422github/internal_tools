@@ -45,16 +45,22 @@ export function writeProjectUlid(p: Project | null): string | null {
   return !p || isEProject(p) ? null : p.ulid;
 }
 
-/** Ulids that must never be sent (a JSON array in sync_state; a bad value reads as empty). */
-export function neverSend(db: DB): Set<string> {
+/** Parsed never-send state. A malformed value is unsafe: callers must fail closed. */
+export function neverSendState(db: DB): { ulids: Set<string>; valid: boolean } {
   const raw = getSyncValue(db, NEVER_SEND_KEY);
-  if (!raw) return new Set();
+  if (!raw) return { ulids: new Set(), valid: true };
   try {
     const v = JSON.parse(raw);
-    return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+    if (!Array.isArray(v)) return { ulids: new Set(), valid: false };
+    return { ulids: new Set(v.filter((x): x is string => typeof x === "string")), valid: true };
   } catch {
-    return new Set();
+    return { ulids: new Set(), valid: false };
   }
+}
+
+/** Ulids that must never be sent. Prefer neverSendState when deciding whether to send. */
+export function neverSend(db: DB): Set<string> {
+  return neverSendState(db).ulids;
 }
 
 /** What the office last said about E (its /v1/access eProject); an older office, or none yet, reads as not adopted. */

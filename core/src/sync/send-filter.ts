@@ -9,7 +9,7 @@ import { getSyncValue } from "./state.js";
 import { entryUlidOf, type WireChange } from "./changes.js";
 import { SYNC_KEYS } from "./http-allocator.js";
 import { isCopiedToValue } from "../entry-write.js";
-import { isEAdopted, neverSend } from "../e-project.js";
+import { cachedEAccess, isEAdopted, neverSendState } from "../e-project.js";
 
 // The courier's own sync_state keys (courier/src/keys.ts COURIER_KEYS; core cannot import the courier).
 export const SHARED_KEY = "shared_modules";
@@ -36,6 +36,10 @@ export interface SendContext {
   eAdopted: boolean;
   /** Ulids that never leave this laptop, whatever else is true of them. */
   neverSend: Set<string>;
+  /** A corrupt never_send value blocks E sends rather than exposing private notes. */
+  neverSendValid: boolean;
+  /** The cached office capability; an adopted laptop holds E rows until true. */
+  eOfficeAdopted: boolean;
   /**
    * Slugs referenced by a note sent in THIS push (filled by the caller, see
    * moduleSlugsOf). Once E is adopted a modules row goes only with them.
@@ -78,8 +82,10 @@ export function sendContext(db: DB): SendContext {
     }
   }
   const eAdopted = isEAdopted(db);
+  const never = neverSendState(db);
+  const eOfficeAdopted = cachedEAccess(db).adopted;
   return {
-    shared, teamProjects, fingerprint, eAdopted, neverSend: neverSend(db), sentModules: new Set(),
+    shared, teamProjects, fingerprint, eAdopted, neverSend: never.ulids, neverSendValid: never.valid, eOfficeAdopted, sentModules: new Set(),
     // A slug shared the legacy way was sent (rule 1) before adoption: the office holds it too.
     officeModules: eAdopted ? new Set([...officeModules(db), ...shared]) : new Set(), moduleEdit: eAdopted ? holdsModuleEdit(db) : true,
   };
@@ -161,6 +167,7 @@ export function sendVerdictOf(
     const place: NotePlace = { ...GONE, module };
     // Adopted: a modules row goes only with a sent note that references it (never-send notes are never sent).
     // A slug the office holds is an edit (module.edit, Office admin): without the key it stays local.
+    if (ctx.eAdopted && (!ctx.eOfficeAdopted || !ctx.neverSendValid)) return { ulid: null, verdict: "hold", place };
     const ok = ctx.eAdopted
       ? !!module && ctx.sentModules.has(module) && (ctx.moduleEdit || !ctx.officeModules.has(module))
       : !!module && ctx.shared.has(module);
@@ -172,6 +179,11 @@ export function sendVerdictOf(
   if (w.table === "refs" && isCopiedToRef(db, pk)) return { ulid, verdict: "skip", place: GONE };
   let place = memo.get(ulid);
   if (!place) { place = notePlace(db, ulid); memo.set(ulid, place); }
+  // Never-send wins (skip, below). Any other E row waits while the list is corrupt or the
+  // office has not adopted E: hold keeps it owed, so it goes once that is repaired.
+  if (ctx.eAdopted && place.project === null && !ctx.neverSend.has(ulid) && (!ctx.neverSendValid || !ctx.eOfficeAdopted)) {
+    return { ulid, verdict: "hold", place };
+  }
   return { ulid, verdict: verdictOf(place, ctx), place };
 }
 

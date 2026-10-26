@@ -399,13 +399,13 @@ test('Task 9 fix round 2 (I2): a carried modules row is stamped with its note\'s
     setProjectMember(store, null, TT, 'carl', 'Reader');
     assert.ok(slugsOf(store, fetchReplay(store, 'carl', TT, 0, 5000).changes).has('ttmod'));
 
-    // An admin's row keeps the NULL stamp (everyone), even beside an E note.
+    // An admin's module row follows its carried E note, so non-members never see it.
     setProjectMember(store, null, E_PROJECT_ULID, 'carl', null);
     const vo = version(lo.db);
     initModule(lo.db, { slug: 'adminmod', name: 'A' });
     await addEntryAsync(lo.db, { type: 'decision', title: 'admin e note', summary: 's', module: 'adminmod' });
     assert.deepEqual(acceptChanges(store, 'owner', readOwnChanges(lo.db, vo)).refused, []);
-    assert.ok(slugsOf(store, fetchAll(store, 'carl', top).changes).has('adminmod'));
+    assert.ok(!slugsOf(store, fetchAll(store, 'carl', top).changes).has('adminmod'));
   } finally { setAllocator(null); lo.cleanup(); lm.cleanup(); cleanup(); }
 });
 

@@ -230,6 +230,9 @@ export class Courier {
       // Adoption refused earlier for unsent changes: the push just sent them, so try again now.
       if (await this.maybeAdoptE()) await this.push();
       if (this.clashes().length > 0) this.holdForClash();
+      else if (isEAdopted(this.db) && !cachedEAccess(this.db).adopted) {
+        this.set({ state: "needs-update", lastError: "the post office has not adopted E; E changes are held locally until it does" });
+      }
       else if (numbering === "ok") this.set({ state: "connected", lastError: this.notice() });
     });
   }
@@ -422,6 +425,11 @@ export class Courier {
         }
       }
     })();
+    if (isEAdopted(this.db) && !cachedEAccess(this.db).adopted) {
+      const msg = "the post office has not adopted E; E changes are held locally until it does";
+      this.log(msg);
+      this.set({ lastError: msg });
+    }
     await this.maybeAdoptE();
     await this.runReplays(p.replays);
   }
@@ -586,6 +594,7 @@ export class Courier {
     const out = new Map<string, WireChange>();
     const noteOf = new Map<string, string>(); // changeKey -> note, entries cells only
     const moved = new Set<string>();
+    let held = false;
     const sentNotes = new Set<string>(); // every note with a row sent in this push, whatever the table
     const tagCells: Array<[string, string]> = []; // entry_modules cells sent: [changeKey, note]
     const createdNow = new Set<string>();
@@ -594,6 +603,7 @@ export class Courier {
     for (const w of readOwnChanges(this.db, since)) {
       top = Math.max(top, w.db_version);
       const { ulid, verdict } = sendVerdictOf(this.db, w, ctx, memo);
+      if (verdict === "hold") held = true;
       if (verdict !== "send") continue; // hold = waiting (status only); the bookmark still passes it
       out.set(changeKey(w), w);
       if (ulid) sentNotes.add(ulid);
@@ -610,6 +620,7 @@ export class Courier {
       for (const w of readOwnChanges(this.db, 0)) {
         if (w.db_version > top) continue; // newer than this push: the next push takes it
         const { ulid, verdict, place } = sendVerdictOf(this.db, w, ctx, memo);
+        if (verdict === "hold") held = true;
         if (verdict !== "send") continue;
         // Module backfill is the E path only: notes with no project. Team notes
         // are backfilled per project (promoted, or learned after an early edit).
@@ -653,7 +664,9 @@ export class Courier {
     const sharedJson = JSON.stringify([...shared].sort());
     const projectsJson = JSON.stringify([...projectsNow].sort());
     // R5: pages never split a laptop transaction; the office judges each one whole.
-    const box: Outbox = { top, shared: sharedJson, projects: projectsJson, pages: pagesOf(batch, (w) => noteOf.get(changeKey(w)) ?? null, this.opt.batchSize) };
+    // Never advance the sent bookmark across a held E change. The office can
+    // safely de-duplicate any other page resent while waiting for adoption.
+    const box: Outbox = { top: held ? since : top, shared: sharedJson, projects: projectsJson, pages: pagesOf(batch, (w) => noteOf.get(changeKey(w)) ?? null, this.opt.batchSize) };
     // R-22: kept before the first POST, so a lost answer or a failed page is
     // resent exactly as sent, even after a pull wrote the office's value over it.
     if (batch.length > 0) setSyncValue(this.db, K.inflight, JSON.stringify(box));

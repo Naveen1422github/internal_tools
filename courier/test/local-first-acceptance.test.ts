@@ -126,6 +126,9 @@ test('never-send E note never reaches the office, even after a rebind', async ()
   try {
     const kept = row(s.member.w, 'member secret before adoption')!;
     assert.ok(neverSend(s.member.w).has(kept.ulid), 'adoption kept it on this laptop');
+    for (const db of [s.office.store, s.outsider.w]) {
+      assert.equal(db.prepare(`SELECT 1 FROM modules WHERE slug = 'secret'`).get(), undefined, 'the private note did not carry its module row');
+    }
     initModule(s.member.w, { slug: 'secret' });
     bindModule(s.member.w, 'secret', 'E');
     updateEntry(s.member.w, { ulid: kept.ulid, description: 'edited after the rebind' });
@@ -135,6 +138,11 @@ test('never-send E note never reaches the office, even after a rebind', async ()
     assert.equal(has(s.office.store, 'new in secret after rebind'), true, `the rebind is live\n${s.logs.join('\n')}`);
     assert.equal(has(s.office.store, 'member secret before adoption'), false, 'the never-send note never left');
     assert.equal(s.office.store.prepare(`SELECT 1 FROM entries WHERE ulid = ?`).get(kept.ulid), undefined);
+    for (const db of [s.office.store, s.outsider.w]) {
+      assert.equal(db.prepare(`SELECT 1 FROM refs WHERE entry_ulid = ?`).get(kept.ulid), undefined, 'private refs never leave');
+      assert.equal(db.prepare(`SELECT 1 FROM entry_modules WHERE entry_ulid = ?`).get(kept.ulid), undefined, 'private module links never leave');
+      assert.equal(db.prepare(`SELECT 1 FROM entry_revisions WHERE entry_ulid = ?`).get(kept.ulid), undefined, 'private revisions never leave');
+    }
     assert.equal(unsentSharedCount(s.member.w), 0, 'and is not counted as waiting');
     await s.owner.c.syncNow();
     assert.equal(has(s.owner.w, 'member secret before adoption'), false);
@@ -152,12 +160,38 @@ test('outsider added to E later gets the full E history by replay', async () => 
     assert.equal(has(s.outsider.w, 'E history 1'), false, 'not yet a member');
     setProjectMember(s.office.store, null, E_PROJECT_ULID, s.outsider.device, 'Reader');
     await s.outsider.c.syncNow(); await s.outsider.c.syncNow();
-    for (const t of ['legacy shared 1', 'legacy shared 2', 'E history 1', 'E history 2']) {
+    for (const t of ['E history 1', 'E history 2']) {
       assert.equal(has(s.outsider.w, t), true, `replayed: ${t}\n${s.logs.join('\n')}`);
     }
     assert.equal(row(s.outsider.w, 'E history 2')?.id, row(s.owner.w, 'E history 2')?.id, 'same number');
     assert.equal((s.outsider.w.prepare(`SELECT COUNT(*) n FROM entries WHERE id IS NULL`).get() as { n: number }).n, 0, 'no ghost rows');
     assert.equal(refused(s.outsider.w), 0);
+  } finally { await s.done(); }
+});
+
+test('rollup of private notes never reaches an E member', async () => {
+  const s = await world();
+  try {
+    const ps = getSyncValue(s.member.w, DEFAULT_PROJECT_KEY)!;
+    s.member.w.prepare(`INSERT INTO tasks (id, title) VALUES ('T-private-rollup', 'private')`).run();
+    await addEntryAsync(s.member.w, note('private rollup source 1', { project: ps, task_id: 'T-private-rollup' }));
+    await addEntryAsync(s.member.w, note('private rollup source 2', { project: ps, task_id: 'T-private-rollup' }));
+    const out = rollup(s.member.w, { task_id: 'T-private-rollup' });
+    assert.equal(out.created_entries.length, 1);
+    await s.member.c.syncNow(); await s.owner.c.syncNow();
+    assert.equal(has(s.office.store, 'Rollup: task=T-private-rollup (2 entries)'), false);
+    assert.equal(has(s.owner.w, 'Rollup: task=T-private-rollup (2 entries)'), false);
+  } finally { await s.done(); }
+});
+
+test("admin's new E module is not delivered to the outsider", async () => {
+  const s = await world();
+  try {
+    initModule(s.owner.w, { slug: 'admin-e-only', name: 'Admin E only' });
+    bindModule(s.owner.w, 'admin-e-only', 'E');
+    await addEntryAsync(s.owner.w, note('admin module carrier', { module: 'admin-e-only' }));
+    await s.owner.c.syncNow(); await s.outsider.c.syncNow();
+    assert.equal(s.outsider.w.prepare(`SELECT 1 FROM modules WHERE slug = 'admin-e-only'`).get(), undefined);
   } finally { await s.done(); }
 });
 

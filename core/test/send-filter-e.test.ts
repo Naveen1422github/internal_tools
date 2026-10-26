@@ -12,7 +12,7 @@ import { SYNC_KEYS } from '../src/sync/http-allocator.js';
 import { readOwnChanges } from '../src/sync/changes.js';
 import { sendContext, sendVerdictOf, SHARED_KEY, type NotePlace, type SendVerdict } from '../src/sync/send-filter.js';
 import { unsentSharedCount, readSyncOverview } from '../src/sync/overview.js';
-import { E_ADOPTED_KEY, NEVER_SEND_KEY } from '../src/e-project.js';
+import { E_ACCESS_KEY, E_ADOPTED_KEY, NEVER_SEND_KEY } from '../src/e-project.js';
 
 const note = (title: string, extra: Record<string, unknown> = {}) =>
   ({ type: 'decision' as const, title, summary: 's', ...extra });
@@ -33,6 +33,7 @@ function world(adopted: boolean) {
   t.db.prepare(`INSERT INTO refs (entry_ulid, entry_id, ref_type, ref_value, target_ulid) VALUES (?, (SELECT id FROM entries WHERE ulid = ?), 'entry', 'copied_to:COLLAB-1', ?)`).run(a, a, copy);
   if (adopted) {
     setSyncValue(t.db, E_ADOPTED_KEY, '1');
+    setSyncValue(t.db, E_ACCESS_KEY, JSON.stringify({ adopted: true, member: true }));
     setSyncValue(t.db, NEVER_SEND_KEY, JSON.stringify([b, c]));
   } else {
     setSyncValue(t.db, SHARED_KEY, JSON.stringify(['custom-reports']));
@@ -80,6 +81,28 @@ test('adopted: a pending E note holds', () => {
   try {
     const p = addEntry(t.db, note('pending E', { module: 'custom-reports', project: 'E' })).ulid;
     assert.deepEqual(one(verdicts(t.db).byUlid, p), ['hold']);
+  } finally { t.cleanup(); }
+});
+
+test('adopted: an office that has not adopted E holds E rows; never-send still skips', () => {
+  const t = world(true);
+  try {
+    setSyncValue(t.db, E_ACCESS_KEY, JSON.stringify({ adopted: false, member: false }));
+    const v = verdicts(t.db, new Set(['custom-reports']));
+    assert.deepEqual(one(v.byUlid, t.u.a), ['hold'], 'E note waits, never sent to an old office');
+    assert.deepEqual(one(v.byUlid, t.u.b), ['skip']);
+    assert.deepEqual(one(v.byModule, 'custom-reports'), ['hold']);
+  } finally { t.cleanup(); }
+});
+
+test('adopted: a corrupt never_send list holds every E row (fails closed, nothing skipped for good)', () => {
+  const t = world(true);
+  try {
+    setSyncValue(t.db, NEVER_SEND_KEY, 'not json');
+    const v = verdicts(t.db, new Set(['custom-reports', 'qa-system']));
+    for (const u of [t.u.a, t.u.b, t.u.c]) assert.deepEqual(one(v.byUlid, u), ['hold'], 'no E note sends while the list is unreadable');
+    assert.deepEqual(one(v.byModule, 'qa-system'), ['hold']);
+    assert.deepEqual(one(v.byUlid, t.u.copy), ['skip'], 'a private-project note is unaffected');
   } finally { t.cleanup(); }
 });
 

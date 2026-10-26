@@ -401,8 +401,10 @@ export function classify(db: Store, origin: string, raws: RawChange[]): Verdict 
     if (twice.size && twice.has(i)) { why[i] = TWICE; return; }
     if (r.table === "modules") {
       const k = moduleKey(keys[i]!);
-      // Only when the sender lacks module.create: an admin's (or legacy) row keeps the NULL stamp (everyone).
-      const by = k === "module.create" && answer(k, null) !== "" ? carried().get(keys[i]!) : undefined;
+      // A NEW module row is stamped with its carried note's project, admin or not:
+      // admin authority must never turn an E module into an office-wide delivery.
+      // Editing a held row stays module.edit (judged below).
+      const by = k === "module.create" ? carried().get(keys[i]!) : undefined;
       if (by !== undefined) { moduleStamps.set(keys[i]!, by); return; } // a new module travels with a note it may write
       judge(i, k, null); return;
     }

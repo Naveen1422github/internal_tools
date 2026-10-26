@@ -61,6 +61,23 @@ test('after adoption one backfill sends the E notes not in never-send, and none 
   } finally { await s.done(); }
 });
 
+test('an adopted laptop holds E changes when the cached office access says E is not adopted', async () => {
+  const s = await setting();
+  try {
+    const a = await s.machine('a', { autoAdoptE: false });
+    const n = await addEntryAsync(a.w, note('held until office adoption', 'private'));
+    setSyncValue(a.w, E_ADOPTED_KEY, '1');
+    setSyncValue(a.w, 'e_access', JSON.stringify({ adopted: false, member: false }));
+    const before = getSyncValue(a.w, COURIER_KEYS.sent);
+    await a.c.syncNow();
+    assert.equal(inStore(s.office, 'held until office adoption'), false, 'E note is not sent to an unadopted office');
+    assert.equal(getSyncValue(a.w, COURIER_KEYS.sent), before, 'the held change is not dropped behind the sent bookmark');
+    assert.equal(a.c.status.state, 'needs-update');
+    assert.match(a.c.status.lastError ?? '', /E changes are held locally/);
+    void n;
+  } finally { await s.done(); }
+});
+
 test('the courier adopts E by itself once the office has; unsent changes wait for the push first', async () => {
   const s = await setting();
   try {
