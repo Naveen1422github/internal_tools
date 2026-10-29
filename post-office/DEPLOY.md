@@ -101,7 +101,7 @@ Build the image on the same CPU type as the server (x64 or arm64): it fetches
 the cr-sqlite add-on for the CPU it is built on. From an x64 machine for an
 arm64 server: `docker buildx build --platform linux/arm64 -f post-office/Dockerfile -t collab-post-office .`
 
-Without Docker (Node 20.9 or newer, plus `unzip`: the cr-sqlite fetch uses it):
+Without Docker (Node 22 or newer, plus `unzip`: the cr-sqlite fetch uses it):
 
 ```
 git clone <repo> /opt/collab && cd /opt/collab

@@ -12,7 +12,7 @@ You need one of them, not all of them.
 
 ## Install
 
-Needs Node 20.9 or newer (Node 22 LTS recommended).
+Needs Node 22 or newer (22 or 24 LTS).
 
     npm install -g <package or release URL>
     collab notebook new my-team        # or: collab notebook adopt path/to/collab.db --name my-team

@@ -5,7 +5,7 @@
   "type": "module",
   "bin": { "collab": "./cli/dist/bin.js" },
   "scripts": { "postinstall": "node cli/dist/postinstall.js" },
-  "engines": { "node": ">=20.9.0" },
+  "engines": { "node": ">=22.0.0" },
   "dependencies": {},
   "bundleDependencies": ["@collab-mcp/core", "@collab-mcp/courier", "@collab-mcp/post-office", "@collab-mcp/server", "collab-mcp"],
   "files": ["addon-manifest.json", "build-info.json", "cli/dist", "ui/dist", "mcp/migrations", "vendor", "node_modules", "README.md", "INSTALL.md"]

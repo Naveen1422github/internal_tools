@@ -10,7 +10,7 @@ Follow the steps in order. Each step says what to run and what success looks lik
 node --version
 ```
 
-Success: `v20.9.0` or newer. If Node is missing or older, **Person**: install Node 20 LTS or newer from https://nodejs.org, then open a new terminal.
+Success: `v22` or newer. If Node is missing or older, **Person**: install Node 22 or 24 LTS from https://nodejs.org, then open a new terminal.
 
 ## 1. Get the package (Person gives it, you install it)
 
@@ -30,7 +30,7 @@ The person gives you one of these:
   npm install -g ./dist-package/collab-mcp-collab-<version>.tgz
   ```
   - `npm ci` takes a few minutes. On macOS or Linux it fails with `EBADPLATFORM` (one UI dependency is Windows-only); there, run `npm ci --force` instead.
-  - Building needs Node 20.19+ or 22.13+ (a build tool warns `EBADENGINE` on older versions). Running the installed package only needs 20.9+.
+  - Building needs Node 20.19+ or 22.13+ (a build tool warns `EBADENGINE` on older versions). Running the installed package needs Node 22+ (the database driver ships no Node 20 build).
   - Use the exact file name `npm run package` printed (`<version>` is a number such as `0.1.0`), and keep the leading `./`: without it npm treats the path as a GitHub repository and fails with `Permission denied (publickey)`.
 
 Success: `collab --version` prints `collab <version> (build ...)`.

@@ -68,7 +68,7 @@ A teammate who tags a note with a new module can create it. Only that project's 
 1. `collab team invite "<name>"` gives you the join code. Then `collab team set "<name>" <CODE> Editor` for each project they need.
 2. Make the package: in `internal-tools`, run `npm run build`, then `npm run package`. That gives `internal-tools\dist-package\collab-mcp-collab-0.1.0.tgz`.
 3. Send them the `.tgz`, the join code, and this message for their AI:
-   > Install collab and join my team. Use **Node.js 22 or 24** (20.9+ works too).
+   > Install collab and join my team. Use **Node.js 22 or 24**.
    > `npm install -g <full path to collab-mcp-collab-0.1.0.tgz>`
    > `collab notebook new <your-name>`
    > `claude mcp add --scope user collab -- collab mcp` (then /mcp → Reconnect)
