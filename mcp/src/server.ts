@@ -118,10 +118,19 @@ if (problem) {
   }
 }
 
+// Sent to every connected client: the habits a teammate's Claude needs, with no per-person setup.
+const INSTRUCTIONS = [
+  "collab is this team's shared notebook: notes (handoffs, decisions, gotchas, changelogs) in projects. Team projects are shared with their members; every other project is private to this laptop.",
+  "- Before working on a module, run collab_module_get <module> and read the recent notes, especially other people's on the same files or area; tell the user about any overlap before editing.",
+  "- If a module named `team` exists, read its hub note first: it holds how this team works together.",
+  "- After meaningful work, write a note (changelog with commit hash, branch and files; decision; gotcha; handoff) so teammates and their AIs see it.",
+  "- To share a note, tag a module bound to a team project (collab_project_list shows them). A note with no module or a new module goes to a private project and never leaves this laptop.",
+].join("\n");
+
 const server = new McpServer({
   name: "collab",
   version: "0.2.0",
-});
+}, { instructions: INSTRUCTIONS });
 
 if (degradedText) {
   console.error(`[collab-mcp] DEGRADED: ${degradedText}`);
@@ -227,7 +236,8 @@ function statusFor(p: { code: string; name: string; mode: string; left_at?: stri
     const n = pending.filter((r) => r.series === p.code).reduce((a, r) => a + r.n, 0);
     return `project: ${p.code} ${p.name} (team, ${officeState()}, ${n} pending)`;
   }
-  if (p) return `project: ${p.code} ${p.name} (${p.mode})`;
+  // COLLAB-237: a teammate's note landed here silently; say it never leaves this laptop.
+  if (p) return `project: ${p.code} ${p.name} (${p.mode === "solo" ? "private: stays on this laptop, never shared; to share, tag a module of a team project (collab_project_list) or pass project" : p.mode})`;
   const e = pending.filter((r) => r.series === "E").reduce((a, r) => a + r.n, 0);
   return e > 0 ? `project: none (E series, ${e} pending)` : "project: none (E series)";
 }

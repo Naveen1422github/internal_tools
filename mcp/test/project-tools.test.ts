@@ -114,7 +114,7 @@ test('search defaults to the current project; scope all returns both; answers st
     assert.equal(none.structured.results.length, 2, 'no current project: everything, as today');
     setProject(sh);
     const p = await call('collab_search', { query: '' });
-    assert.match(p.text, /^project: SH supporthub \(solo\)/);
+    assert.match(p.text, /^project: SH supporthub \(private: stays on this laptop/);
     assert.deepEqual(p.structured.results.map((r: any) => `${r.series}-${r.id}`), ['SH-1']);
     assert.match(p.text, /\[SH-1\]/);
     const all = await call('collab_search', { query: '', scope: 'all' });
@@ -136,7 +136,7 @@ test('collab_add writes into the current project and says so; project "none" wri
     setProject(sh);
     const a = await call('collab_add', { type: 'gotcha', title: 'g2', summary: 's' });
     assert.equal(a.isError, false, a.text);
-    assert.match(a.text, /^project: SH supporthub \(solo\)/);
+    assert.match(a.text, /^project: SH supporthub \(private: stays on this laptop/);
     assert.match(a.text, /Added SH-2/);
     const e = await call('collab_add', { type: 'gotcha', title: 'g3', summary: 's', project: 'none' });
     assert.match(e.text, /Added E-00003/);
@@ -251,7 +251,7 @@ test('collab_copy: dry run (the default) lists exactly the CLI lines and writes 
     const dry = await call('collab_copy', { from: 'demo', to: 'NV' });
     assert.equal(dry.isError, false, dry.text);
     const lines = dry.text.split('\n');
-    assert.equal(lines[0], 'project: NV Navi (solo)', 'status line of the target');
+    assert.equal(lines[0], 'project: NV Navi (private: stays on this laptop, never shared; to share, tag a module of a team project (collab_project_list) or pass project)', 'status line of the target');
     assert.deepEqual(lines.slice(1, 1 + expected.length), expected, 'the same lines as `collab copy`');
     assert.equal(lines.at(-1), 'Nothing copied yet: call collab_copy again with dry_run: false to copy these notes.');
     assert.equal(dry.structured.dry_run, true);
@@ -260,7 +260,7 @@ test('collab_copy: dry run (the default) lists exactly the CLI lines and writes 
 
     const done = await call('collab_copy', { from: 'demo', to: 'NV', dry_run: false });
     assert.equal(done.isError, false, done.text);
-    assert.match(done.text, /^project: NV Navi \(solo\)\nCopied 1 note from module demo \(E notes\) into NV \(Navi, solo\):\n {2}E-00001 -> NV-1\n/);
+    assert.match(done.text, /^project: NV Navi \(private: stays on this laptop[^\n]*\)\nCopied 1 note from module demo \(E notes\) into NV \(Navi, solo\):\n {2}E-00001 -> NV-1\n/);
     assert.equal(done.structured.result.copied[0].to, 'NV-1');
     assert.equal(count(), before + 1);
     const orig = await call('collab_get', { id: 1 });
