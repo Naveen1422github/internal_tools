@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@collab-mcp/core": "*",
-    "better-sqlite3": "^11.3.0"
+    "better-sqlite3": "^12.9.0"
   },
   "devDependencies": {
     "@collab-mcp/post-office": "*",

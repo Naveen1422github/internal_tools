@@ -77,7 +77,9 @@ test('adoptE: a non-E member gets no E rows (old or new) but keeps TT; members a
     assert.equal(restamped, eRows, 'every E row of the 4 tables is restamped');
     assert.equal(isEAdoptedOffice(store), true);
     assert.equal(count(store, `project_ulid = '${E_PROJECT_ULID}'`), eRows);
-    assert.equal(count(store, `tbl = 'modules' AND project_ulid IS NULL`), modulesRows, 'modules rows stay NULL');
+    // 'm' is carried by the TT note (an admin's row is stamped like anyone's): adoptE leaves it as it was
+    assert.equal(count(store, `tbl = 'modules' AND project_ulid = '${E_PROJECT_ULID}'`), 0, 'adoptE never restamps modules rows');
+    assert.equal(count(store, `tbl = 'modules'`), modulesRows);
     assert.equal(count(store, `project_ulid = '?'`), held, "'?' rows untouched");
     assert.equal(count(store, `project_ulid = '${TT}'`), ttRows, 'TT rows untouched');
     assert.equal((store.prepare(`SELECT project_ulid FROM entries WHERE ulid = ?`).get(eOld) as { project_ulid: string | null }).project_ulid, null, 'the note itself keeps project_ulid NULL');

@@ -68,7 +68,7 @@ A teammate who tags a note with a new module can create it. Only that project's 
 1. `collab team invite "<name>"` gives you the join code. Then `collab team set "<name>" <CODE> Editor` for each project they need.
 2. Make the package: in `internal-tools`, run `npm run build`, then `npm run package`. That gives `internal-tools\dist-package\collab-mcp-collab-0.1.0.tgz`.
 3. Send them the `.tgz`, the join code, and this message for their AI:
-   > Install collab and join my team. Use **Node.js 22 LTS** (Node 24 makes it compile, which needs admin tools).
+   > Install collab and join my team. Use **Node.js 22 or 24** (20.9+ works too).
    > `npm install -g <full path to collab-mcp-collab-0.1.0.tgz>`
    > `collab notebook new <your-name>`
    > `claude mcp add --scope user collab -- collab mcp` (then /mcp → Reconnect)
@@ -147,7 +147,7 @@ Full steps: `post-office/DEPLOY.md`. Short version:
 | "N change(s) refused by the post office" | `collab refused list`, then keep one in a private project (`collab refused copy <id> --to <CODE>`) or drop it (`collab refused delete <id>`). |
 | A teammate doesn't get a project's notes | Check `collab team list <CODE>`, then their courier: `collab sync stop` + `collab sync start` on their laptop. |
 | A teammate's sync dies after a reboot | `collab sync autostart on` on their laptop. |
-| Install tries to compile / needs Visual Studio | Wrong Node version: use Node 22 LTS. |
+| Install tries to compile / needs Visual Studio | No prebuilt database driver for that Node (odd-numbered or brand-new Node): use Node 22 or 24. |
 | `EBUSY` / file locked on Windows | Close extra Claude/IDE windows using collab, then retry. |
 | Notes stuck as "pending" | The office was unreachable. They're safe; they get numbers once `collab sync status` says connected. |
 

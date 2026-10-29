@@ -71,7 +71,7 @@ test('an adopted laptop holds E changes when the cached office access says E is 
     const before = getSyncValue(a.w, COURIER_KEYS.sent);
     await a.c.syncNow();
     assert.equal(inStore(s.office, 'held until office adoption'), false, 'E note is not sent to an unadopted office');
-    assert.equal(getSyncValue(a.w, COURIER_KEYS.sent), before, 'the held change is not dropped behind the sent bookmark');
+    assert.equal(Number(getSyncValue(a.w, COURIER_KEYS.sent) ?? 0), Number(before ?? 0), 'the held change is not dropped behind the sent bookmark');
     assert.equal(a.c.status.state, 'needs-update');
     assert.match(a.c.status.lastError ?? '', /E changes are held locally/);
     void n;

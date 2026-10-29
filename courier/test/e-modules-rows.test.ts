@@ -17,8 +17,10 @@ test('adopted: modules rows travel with sent notes only (new note, never-send no
   let c: Courier | null = null;
   try {
     const j = await joinedDb(office, t.dir, 'a');
+    adoptE(office.store, { name: 'emp1st', ownerDevice: j.device }); // an unadopted office holds every E send
     w = openWriter(j.path);
     c = new Courier({ dbPath: j.path, watch: false, retryMs: 60_000 });
+    setSyncValue(w, 'e_access', JSON.stringify({ adopted: true, member: true }));
     for (const slug of ['modx', 'mody', 'modz']) initModule(w, { slug });
     const x = await addEntryAsync(w, note('in X', { module: 'modx' }));
     const y = await addEntryAsync(w, note('in Y, private', { module: 'mody' }));

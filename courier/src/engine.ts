@@ -4,7 +4,7 @@ import { createSocket, type Socket } from "node:dgram";
 import {
   loadCrsqlite, isCrsqliteLoaded, isSyncEnabled, getSyncValue, setSyncValue, postOfficeTargetFromDb,
   readOwnChanges, decodeChange, applyChanges, reindexFts, requestJson, openEventStream, hasSeries, hasProjectLeft,
-  sendContext, sendVerdictOf, moduleSlugsOf, resolveAllocator, allocateWithRetry, formatEntryRef,
+  sendContext, sendVerdictOf, eSendsBlocked, moduleSlugsOf, resolveAllocator, allocateWithRetry, formatEntryRef,
   upsertTeamProjectFromOffice, localClashOf, projectClashText, assignPendingNumber, rememberSharedModules,
   writeAccessCache, markProjectLeft, clearProjectLeft, recordRefusal, entryUlidOf,
   AccessRevokedError, SchemaMismatchError, PinMismatchError, COURIER_PORT_KEY,
@@ -602,9 +602,9 @@ export class Courier {
     let top = since;
     for (const w of readOwnChanges(this.db, since)) {
       top = Math.max(top, w.db_version);
-      const { ulid, verdict } = sendVerdictOf(this.db, w, ctx, memo);
-      if (verdict === "hold") held = true;
-      if (verdict !== "send") continue; // hold = waiting (status only); the bookmark still passes it
+      const { ulid, verdict, place } = sendVerdictOf(this.db, w, ctx, memo);
+      if (verdict === "hold" && place.project === null && eSendsBlocked(ctx)) held = true;
+      if (verdict !== "send") continue; // hold = waiting (status only); the bookmark passes it unless E is blocked
       out.set(changeKey(w), w);
       if (ulid) sentNotes.add(ulid);
       if (w.table === "entries" && ulid) noteOf.set(changeKey(w), ulid);
@@ -620,7 +620,7 @@ export class Courier {
       for (const w of readOwnChanges(this.db, 0)) {
         if (w.db_version > top) continue; // newer than this push: the next push takes it
         const { ulid, verdict, place } = sendVerdictOf(this.db, w, ctx, memo);
-        if (verdict === "hold") held = true;
+        if (verdict === "hold" && place.project === null && eSendsBlocked(ctx)) held = true;
         if (verdict !== "send") continue;
         // Module backfill is the E path only: notes with no project. Team notes
         // are backfilled per project (promoted, or learned after an early edit).

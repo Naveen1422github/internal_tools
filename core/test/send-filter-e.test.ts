@@ -89,7 +89,8 @@ test('adopted: an office that has not adopted E holds E rows; never-send still s
   try {
     setSyncValue(t.db, E_ACCESS_KEY, JSON.stringify({ adopted: false, member: false }));
     const v = verdicts(t.db, new Set(['custom-reports']));
-    assert.deepEqual(one(v.byUlid, t.u.a), ['hold'], 'E note waits, never sent to an old office');
+    // byTable: A's copied_to ref is skipped (rule 0b) whatever else holds
+    assert.deepEqual(one(v.byTable, `${t.u.a}:entries`), ['hold'], 'E note waits, never sent to an old office');
     assert.deepEqual(one(v.byUlid, t.u.b), ['skip']);
     assert.deepEqual(one(v.byModule, 'custom-reports'), ['hold']);
   } finally { t.cleanup(); }
@@ -100,7 +101,7 @@ test('adopted: a corrupt never_send list holds every E row (fails closed, nothin
   try {
     setSyncValue(t.db, NEVER_SEND_KEY, 'not json');
     const v = verdicts(t.db, new Set(['custom-reports', 'qa-system']));
-    for (const u of [t.u.a, t.u.b, t.u.c]) assert.deepEqual(one(v.byUlid, u), ['hold'], 'no E note sends while the list is unreadable');
+    for (const u of [t.u.a, t.u.b, t.u.c]) assert.deepEqual(one(v.byTable, `${u}:entries`), ['hold'], 'no E note sends while the list is unreadable');
     assert.deepEqual(one(v.byModule, 'qa-system'), ['hold']);
     assert.deepEqual(one(v.byUlid, t.u.copy), ['skip'], 'a private-project note is unaffected');
   } finally { t.cleanup(); }

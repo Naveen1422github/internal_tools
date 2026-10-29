@@ -167,7 +167,7 @@ export function sendVerdictOf(
     const place: NotePlace = { ...GONE, module };
     // Adopted: a modules row goes only with a sent note that references it (never-send notes are never sent).
     // A slug the office holds is an edit (module.edit, Office admin): without the key it stays local.
-    if (ctx.eAdopted && (!ctx.eOfficeAdopted || !ctx.neverSendValid)) return { ulid: null, verdict: "hold", place };
+    if (eSendsBlocked(ctx)) return { ulid: null, verdict: "hold", place };
     const ok = ctx.eAdopted
       ? !!module && ctx.sentModules.has(module) && (ctx.moduleEdit || !ctx.officeModules.has(module))
       : !!module && ctx.shared.has(module);
@@ -181,10 +181,17 @@ export function sendVerdictOf(
   if (!place) { place = notePlace(db, ulid); memo.set(ulid, place); }
   // Never-send wins (skip, below). Any other E row waits while the list is corrupt or the
   // office has not adopted E: hold keeps it owed, so it goes once that is repaired.
-  if (ctx.eAdopted && place.project === null && !ctx.neverSend.has(ulid) && (!ctx.neverSendValid || !ctx.eOfficeAdopted)) {
-    return { ulid, verdict: "hold", place };
-  }
+  if (place.project === null && eSendsBlocked(ctx)) return { ulid, verdict: "hold", place };
   return { ulid, verdict: verdictOf(place, ctx), place };
+}
+
+/**
+ * Adopted, but E must not leave yet: the office has not adopted E, or never_send is
+ * unreadable. Only this hold pins the courier's sent bookmark; a pending or
+ * unknown-project hold does not (the bookmark passes it, a backfill sends it later).
+ */
+export function eSendsBlocked(ctx: SendContext): boolean {
+  return ctx.eAdopted && (!ctx.eOfficeAdopted || !ctx.neverSendValid);
 }
 
 /** refs pk = (entry_ulid, ref_type, ref_value): a copied_to link has the marker in ref_value. */
